@@ -42,6 +42,13 @@ Run path-law ambiguity diagnostics without training:
 .conda/fm_lab/bin/fm-lab-diagnostics --config configs/toy/two_moons_baseline.yaml --n-samples 1024 --bins 32 --output-dir runs/moons_ambiguity
 ```
 
+Run learned-field diagnostics from a checkpoint:
+
+```bash
+.conda/fm_lab/bin/fm-lab-field-diagnostics --checkpoint runs/smoke/checkpoint.pt --n-samples 128 --device cpu
+.conda/fm_lab/bin/fm-lab-solver-sensitivity --checkpoint runs/smoke/checkpoint.pt --n-samples 256 --device cpu
+```
+
 Useful toy configs:
 
 ```text

@@ -67,6 +67,43 @@ def plot_heatmap(
     plt.close(fig)
 
 
+def plot_distance_matrix(
+    rows: list[dict],
+    labels: list[str],
+    metric: str,
+    output_path: str | Path,
+    title: str,
+) -> None:
+    """Plot a pairwise solver-distance matrix from long-form rows."""
+
+    output_path = Path(output_path)
+    _configure_matplotlib_cache(output_path)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    index = {label: idx for idx, label in enumerate(labels)}
+    matrix = np.zeros((len(labels), len(labels)), dtype=float)
+    for row in rows:
+        i = index[row["solver_i"]]
+        j = index[row["solver_j"]]
+        matrix[i, j] = matrix[j, i] = float(row[metric])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axis = plt.subplots(1, 1, figsize=(5, 4))
+    image = axis.imshow(matrix, interpolation="nearest")
+    axis.set_title(title)
+    axis.set_xticks(range(len(labels)), labels=labels, rotation=30, ha="right")
+    axis.set_yticks(range(len(labels)), labels=labels)
+    fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
 def _configure_matplotlib_cache(output_path: Path) -> None:
     cache_dir = output_path.parent / ".matplotlib"
     cache_dir.mkdir(parents=True, exist_ok=True)
