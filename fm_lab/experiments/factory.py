@@ -6,10 +6,10 @@ from typing import Any
 
 import torch
 
-from fm_lab.couplings import IndependentCoupling
+from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, ReflowCouplingPlaceholder
 from fm_lab.data import Annulus, Checkerboard, ConcentricCircles, GaussianMixture2D, TwoMoons
 from fm_lab.models import MLPVelocity
-from fm_lab.paths import LinearPath
+from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import EulerSolver, HeunSolver, MidpointSolver, RK4Solver, Solver
 from fm_lab.sources import GaussianSource
 
@@ -62,6 +62,10 @@ def build_coupling(config: dict[str, Any]):
     name = coupling_config.get("name", "independent").lower()
     if name == "independent":
         return IndependentCoupling(shuffle_target=bool(coupling_config.get("shuffle_target", True)))
+    if name in {"minibatch_ot", "ot"}:
+        return MinibatchOTCoupling(max_exact_size=int(coupling_config.get("max_exact_size", 2048)))
+    if name in {"reflow", "reflow_placeholder"}:
+        return ReflowCouplingPlaceholder(checkpoint_path=coupling_config.get("checkpoint_path"))
     raise ValueError(f"Unsupported coupling: {name}")
 
 
@@ -70,6 +74,13 @@ def build_path(config: dict[str, Any]):
     name = path_config.get("name", "linear").lower()
     if name in {"linear", "rectified"}:
         return LinearPath()
+    if name == "spherical":
+        return SphericalPath(
+            eps=float(path_config.get("eps", 1e-6)),
+            interpolate_radius=bool(path_config.get("interpolate_radius", True)),
+        )
+    if name in {"tangent_normal", "polar"}:
+        return TangentNormalPath(eps=float(path_config.get("eps", 1e-6)))
     raise ValueError(f"Unsupported path: {name}")
 
 

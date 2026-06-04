@@ -1,7 +1,7 @@
 import torch
 
 from fm_lab.data import Checkerboard, GaussianMixture2D, TwoMoons
-from fm_lab.paths import LinearPath
+from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import EulerSolver, HeunSolver, MidpointSolver, RK4Solver
 
 
@@ -37,3 +37,30 @@ def test_solvers_integrate_constant_velocity() -> None:
         final = solver.solve(v_fn, x0, t_grid)
 
         assert torch.allclose(final, torch.ones_like(x0), atol=1e-6)
+
+
+def test_spherical_path_stays_on_unit_sphere_for_unit_endpoints() -> None:
+    path = SphericalPath(interpolate_radius=True)
+    x0 = torch.tensor([[1.0, 0.0]])
+    x1 = torch.tensor([[0.0, 1.0]])
+    t = torch.tensor([0.5])
+
+    xt = path.sample_xt(x0, x1, t)
+    velocity = path.target_velocity(x0, x1, t)
+
+    assert torch.allclose(xt.norm(dim=1), torch.ones(1), atol=1e-6)
+    assert torch.isfinite(velocity).all()
+
+
+def test_tangent_normal_path_takes_short_angular_route() -> None:
+    path = TangentNormalPath()
+    x0 = torch.tensor([[1.0, 0.0]])
+    x1 = torch.tensor([[0.0, 1.0]])
+    t = torch.tensor([0.5])
+
+    xt = path.sample_xt(x0, x1, t)
+    velocity = path.target_velocity(x0, x1, t)
+
+    expected = torch.tensor([[2**-0.5, 2**-0.5]])
+    assert torch.allclose(xt, expected, atol=1e-6)
+    assert torch.isfinite(velocity).all()

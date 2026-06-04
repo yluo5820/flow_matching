@@ -1,0 +1,52 @@
+experiment:
+  name: circles_tangent_normal_independent
+  seed: 0
+  output_dir: runs/circles_tangent_normal_independent
+
+data:
+  name: concentric_circles
+  radii: [0.8, 1.6]
+  noise: 0.04
+
+source:
+  name: gaussian
+  dim: 2
+  std: 1.0
+
+coupling:
+  name: independent
+
+path:
+  name: tangent_normal
+
+model:
+  name: mlp
+  hidden_dim: 256
+  depth: 4
+  activation: silu
+  time_embedding: sinusoidal
+
+training:
+  batch_size: 1024
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+
+solvers:
+  names: [euler, heun, midpoint, rk4]
+  nfes: [4, 8, 16, 32, 64]
+
+sampling:
+  n_samples: 4096
+  n_trajectories: 128
+  nfe: 64
+
+diagnostics:
+  ambiguity:
+    methods: [grid, knn]
+    t_values: [0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95]
+  curvature:
+    enabled: true
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]

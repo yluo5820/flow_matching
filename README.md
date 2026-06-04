@@ -36,6 +36,14 @@ Run a very small smoke training job:
 
 The full default config uses a longer toy training budget and saves checkpoint, metrics, generated samples, trajectories, and plots.
 
+Useful toy configs:
+
+```text
+configs/toy/two_moons_baseline.yaml       # independent coupling + linear path
+configs/toy/two_moons_ot.yaml             # minibatch OT coupling + linear path
+configs/toy/circles_tangent_normal.yaml   # polar tangent-normal path
+```
+
 ## Repository Layout
 
 ```text

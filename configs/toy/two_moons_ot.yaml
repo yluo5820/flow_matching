@@ -1,0 +1,53 @@
+experiment:
+  name: two_moons_linear_minibatch_ot
+  seed: 0
+  output_dir: runs/two_moons_linear_minibatch_ot
+
+data:
+  name: two_moons
+  n_train: 100000
+  noise: 0.05
+
+source:
+  name: gaussian
+  dim: 2
+  std: 1.0
+
+coupling:
+  name: minibatch_ot
+  max_exact_size: 512
+
+path:
+  name: linear
+
+model:
+  name: mlp
+  hidden_dim: 256
+  depth: 4
+  activation: silu
+  time_embedding: sinusoidal
+
+training:
+  batch_size: 256
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+
+solvers:
+  names: [euler, heun, midpoint, rk4]
+  nfes: [4, 8, 16, 32, 64]
+
+sampling:
+  n_samples: 4096
+  n_trajectories: 128
+  nfe: 64
+
+diagnostics:
+  ambiguity:
+    methods: [grid, knn]
+    t_values: [0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95]
+  curvature:
+    enabled: true
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]
