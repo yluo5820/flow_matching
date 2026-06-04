@@ -7,7 +7,15 @@ from typing import Any
 import torch
 
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, ReflowCouplingPlaceholder
-from fm_lab.data import Annulus, Checkerboard, ConcentricCircles, GaussianMixture2D, TwoMoons
+from fm_lab.data import (
+    Annulus,
+    Checkerboard,
+    ConcentricCircles,
+    GaussianMixture2D,
+    SphericalShell,
+    SwissRoll,
+    TwoMoons,
+)
 from fm_lab.models import MLPVelocity
 from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import (
@@ -18,7 +26,7 @@ from fm_lab.solvers import (
     ScipyDopri5Solver,
     Solver,
 )
-from fm_lab.sources import GaussianSource
+from fm_lab.sources import GaussianSource, SphericalShellSource
 
 
 def build_target(config: dict[str, Any]):
@@ -49,6 +57,17 @@ def build_target(config: dict[str, Any]):
             inner_radius=float(data_config.get("inner_radius", 0.8)),
             outer_radius=float(data_config.get("outer_radius", 1.6)),
         )
+    if name in {"spherical_shell", "sphere", "shell"}:
+        return SphericalShell(
+            dim=int(data_config.get("dim", 3)),
+            radius=float(data_config.get("radius", 1.0)),
+            noise=float(data_config.get("noise", 0.02)),
+        )
+    if name == "swiss_roll":
+        return SwissRoll(
+            noise=float(data_config.get("noise", 0.05)),
+            scale=float(data_config.get("scale", 1.0)),
+        )
     raise ValueError(f"Unsupported target distribution: {name}")
 
 
@@ -60,6 +79,12 @@ def build_source(config: dict[str, Any]):
             dim=int(source_config.get("dim", 2)),
             std=float(source_config.get("std", 1.0)),
             mean=float(source_config.get("mean", 0.0)),
+        )
+    if name in {"spherical_shell", "sphere", "shell"}:
+        return SphericalShellSource(
+            dim=int(source_config.get("dim", 2)),
+            radius=float(source_config.get("radius", 1.0)),
+            noise=float(source_config.get("noise", 0.0)),
         )
     raise ValueError(f"Unsupported source distribution: {name}")
 

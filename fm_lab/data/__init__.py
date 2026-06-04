@@ -1,6 +1,7 @@
 """Data distributions for flow matching experiments."""
 
 from fm_lab.data.base import TargetDistribution
+from fm_lab.data.manifold_toys import SphericalShell, SwissRoll
 from fm_lab.data.toy_2d import Annulus, Checkerboard, ConcentricCircles, GaussianMixture2D, TwoMoons
 
 __all__ = [
@@ -8,6 +9,8 @@ __all__ = [
     "Checkerboard",
     "ConcentricCircles",
     "GaussianMixture2D",
+    "SphericalShell",
+    "SwissRoll",
     "TargetDistribution",
     "TwoMoons",
 ]

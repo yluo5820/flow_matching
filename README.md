@@ -51,6 +51,12 @@ Run learned-field diagnostics from a checkpoint:
 
 Supported fixed-step time schedules are `uniform`, `quadratic`, `reverse_quadratic`, and `cosine`. Add `dopri5` or `rk45` to `solvers.names` to use the SciPy Dormand-Prince/RK45 wrapper for small CPU-oriented checks.
 
+Run geometry diagnostics for shell or annulus paths:
+
+```bash
+.conda/fm_lab/bin/fm-lab-geometry --config configs/toy/annulus_linear.yaml --n-samples 1024 --output-dir runs/annulus_geometry
+```
+
 Useful toy configs:
 
 ```text

@@ -31,6 +31,7 @@ dev = [
 [project.scripts]
 fm-lab-diagnostics = "fm_lab.experiments.run_diagnostics:main"
 fm-lab-field-diagnostics = "fm_lab.experiments.run_field_diagnostics:main"
+fm-lab-geometry = "fm_lab.experiments.run_geometry:main"
 fm-lab-solver-sensitivity = "fm_lab.experiments.run_solver_sensitivity:main"
 fm-lab-train = "fm_lab.experiments.run_train:main"
 

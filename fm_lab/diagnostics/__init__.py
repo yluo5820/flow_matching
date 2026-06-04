@@ -7,6 +7,7 @@ from fm_lab.diagnostics.ambiguity import (
     knn_ambiguity,
 )
 from fm_lab.diagnostics.curvature import curvature_stats, material_acceleration
+from fm_lab.diagnostics.geometry import radial_deviation, radial_tangent_velocity_2d
 from fm_lab.diagnostics.jacobian import exact_jacobian, jacobian_stats
 from fm_lab.diagnostics.metrics import sliced_wasserstein, squared_mmd
 from fm_lab.diagnostics.solver_sensitivity import (
@@ -26,6 +27,8 @@ __all__ = [
     "knn_ambiguity",
     "material_acceleration",
     "pairwise_solver_distances",
+    "radial_deviation",
+    "radial_tangent_velocity_2d",
     "sliced_wasserstein",
     "solver_sensitivity_summary",
     "squared_mmd",
