@@ -15,19 +15,26 @@ The project follows the implementation brief in `flow_matching_research_playgrou
 
 ## Quick Start
 
-Create an environment with the project dependencies, then install the package in editable mode:
+Create the project-local conda environment with the package dependencies:
 
 ```bash
-python -m pip install -e ".[dev]"
+conda create -p .conda/fm_lab python=3.11 pip -y
+.conda/fm_lab/bin/python -m pip install -e ".[dev]"
 ```
 
 Create a dry-run experiment directory from the default toy config:
 
 ```bash
-fm-lab-train --config configs/toy/two_moons_baseline.yaml --dry-run
+.conda/fm_lab/bin/fm-lab-train --config configs/toy/two_moons_baseline.yaml --dry-run
 ```
 
-Training and diagnostics are implemented incrementally by stage.
+Run a very small smoke training job:
+
+```bash
+.conda/fm_lab/bin/fm-lab-train --config configs/toy/two_moons_baseline.yaml --steps 100 --n-samples 256 --n-trajectories 32 --nfe 16 --output-dir runs/smoke --device cpu
+```
+
+The full default config uses a longer toy training budget and saves checkpoint, metrics, generated samples, trajectories, and plots.
 
 ## Repository Layout
 
