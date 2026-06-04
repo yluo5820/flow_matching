@@ -36,6 +36,12 @@ Run a very small smoke training job:
 
 The full default config uses a longer toy training budget and saves checkpoint, metrics, generated samples, trajectories, and plots.
 
+Run path-law ambiguity diagnostics without training:
+
+```bash
+.conda/fm_lab/bin/fm-lab-diagnostics --config configs/toy/two_moons_baseline.yaml --n-samples 1024 --bins 32 --output-dir runs/moons_ambiguity
+```
+
 Useful toy configs:
 
 ```text
