@@ -36,6 +36,7 @@ training:
 solvers:
   names: [euler, heun, midpoint, rk4]
   nfes: [4, 8, 16, 32, 64]
+  schedule: uniform
 
 sampling:
   n_samples: 4096

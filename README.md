@@ -49,6 +49,8 @@ Run learned-field diagnostics from a checkpoint:
 .conda/fm_lab/bin/fm-lab-solver-sensitivity --checkpoint runs/smoke/checkpoint.pt --n-samples 256 --device cpu
 ```
 
+Supported fixed-step time schedules are `uniform`, `quadratic`, `reverse_quadratic`, and `cosine`. Add `dopri5` or `rk45` to `solvers.names` to use the SciPy Dormand-Prince/RK45 wrapper for small CPU-oriented checks.
+
 Useful toy configs:
 
 ```text

@@ -11,6 +11,7 @@ import torch
 
 from fm_lab.diagnostics.metrics import sliced_wasserstein, squared_mmd
 from fm_lab.solvers.base import Solver
+from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
 
 
@@ -23,12 +24,13 @@ def generate_solver_samples(
     n_samples: int,
     nfe: int,
     device: torch.device,
+    schedule: str = "uniform",
 ) -> dict[str, torch.Tensor]:
     """Generate samples from the same source noise with each solver."""
 
     model.eval()
     x0 = source.sample(n_samples, device=device)
-    t_grid = torch.linspace(0.0, 1.0, nfe + 1, device=device)
+    t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
     def v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return model(x, t)
@@ -83,7 +85,7 @@ def save_samples(samples: dict[str, torch.Tensor], output_dir: str | Path, suffi
 def write_distance_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    keys = ["nfe", "solver_i", "solver_j", "mmd", "sliced_wasserstein"]
+    keys = ["nfe", "schedule", "solver_i", "solver_j", "mmd", "sliced_wasserstein"]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys, extrasaction="ignore")
         writer.writeheader()

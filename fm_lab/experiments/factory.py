@@ -10,7 +10,14 @@ from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, ReflowCou
 from fm_lab.data import Annulus, Checkerboard, ConcentricCircles, GaussianMixture2D, TwoMoons
 from fm_lab.models import MLPVelocity
 from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
-from fm_lab.solvers import EulerSolver, HeunSolver, MidpointSolver, RK4Solver, Solver
+from fm_lab.solvers import (
+    EulerSolver,
+    HeunSolver,
+    MidpointSolver,
+    RK4Solver,
+    ScipyDopri5Solver,
+    Solver,
+)
 from fm_lab.sources import GaussianSource
 
 
@@ -112,6 +119,13 @@ def build_solvers(config: dict[str, Any]) -> list[Solver]:
             solvers.append(MidpointSolver())
         elif normalized == "rk4":
             solvers.append(RK4Solver())
+        elif normalized in {"dopri", "dopri5", "rk45"}:
+            solvers.append(
+                ScipyDopri5Solver(
+                    rtol=float(solver_config.get("rtol", 1e-5)),
+                    atol=float(solver_config.get("atol", 1e-6)),
+                )
+            )
         else:
             raise ValueError(f"Unsupported solver: {name}")
     return solvers

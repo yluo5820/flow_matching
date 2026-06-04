@@ -16,6 +16,7 @@ from fm_lab.data.base import TargetDistribution
 from fm_lab.paths.base import FlowPath
 from fm_lab.plotting.trajectories import plot_generated_samples, plot_trajectories
 from fm_lab.solvers.base import Solver
+from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
 from fm_lab.training.losses import flow_matching_loss, sample_uniform_time
 from fm_lab.utils.checkpoints import save_checkpoint
@@ -118,9 +119,10 @@ def sample_and_plot(
     n_samples = int(sampling_config.get("n_samples", 2048))
     n_trajectories = int(sampling_config.get("n_trajectories", 128))
     nfe = int(sampling_config.get("nfe", max(solver_config.get("nfes", [32]))))
+    schedule = sampling_config.get("schedule", solver_config.get("schedule", "uniform"))
 
     model.eval()
-    t_grid = torch.linspace(0.0, 1.0, nfe + 1, device=device)
+    t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
     target_samples = target.sample(n_samples, device=device)
     x0_samples = source.sample(n_samples, device=device)
@@ -129,6 +131,7 @@ def sample_and_plot(
         "n_samples": n_samples,
         "n_trajectories": n_trajectories,
         "nfe": nfe,
+        "schedule": schedule,
     }
 
     def v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:

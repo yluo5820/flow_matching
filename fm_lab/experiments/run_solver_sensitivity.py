@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
         default=1024,
         help="Samples used by metrics.",
     )
+    parser.add_argument("--schedule", default=None, help="Optional solver time schedule override.")
     return parser.parse_args()
 
 
@@ -47,6 +48,8 @@ def main() -> None:
     args = parse_args()
     payload = load_checkpoint(args.checkpoint, map_location="cpu")
     config = load_config(args.config) if args.config else payload["config"]
+    if args.schedule is not None:
+        config = deep_update(config, {"solvers": {"schedule": args.schedule}})
     output_dir = args.output_dir or _default_solver_dir(args.checkpoint)
     config = deep_update(config, {"experiment": {"output_dir": output_dir}})
     seed_everything(int(config.get("experiment", {}).get("seed", 0)))
@@ -80,6 +83,7 @@ def run_solver_sensitivity(
     model.to(device)
     solvers = build_solvers(config)
     nfes = [int(value) for value in config.get("solvers", {}).get("nfes", [16, 32, 64])]
+    schedule = config.get("solvers", {}).get("schedule", "uniform")
     metric_names = tuple(
         config.get("diagnostics", {}).get("solver_sensitivity", {}).get("metrics", [])
     )
@@ -94,6 +98,7 @@ def run_solver_sensitivity(
             solvers=solvers,
             n_samples=n_samples,
             nfe=nfe,
+            schedule=schedule,
             device=device,
         )
         save_samples(samples, run_dir / "samples", suffix=f"nfe{nfe}")
@@ -104,6 +109,7 @@ def run_solver_sensitivity(
         )
         for row in rows:
             row["nfe"] = nfe
+            row["schedule"] = schedule
         write_distance_rows(rows, run_dir / "diagnostics" / f"solver_sensitivity_nfe{nfe}.csv")
         metric = "sliced_wasserstein" if "sliced_wasserstein" in metric_names else metric_names[0]
         plot_distance_matrix(
@@ -113,7 +119,11 @@ def run_solver_sensitivity(
             output_path=run_dir / "plots" / f"solver_sensitivity_{metric}_nfe{nfe}.png",
             title=f"{metric} nfe={nfe}",
         )
-        summary = {"nfe": float(nfe), **solver_sensitivity_summary(rows, metric=metric)}
+        summary = {
+            "nfe": float(nfe),
+            "schedule": schedule,
+            **solver_sensitivity_summary(rows, metric=metric),
+        }
         summaries.append(summary)
     return summaries
 

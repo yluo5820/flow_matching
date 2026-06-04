@@ -27,7 +27,8 @@ def squared_mmd(
         total = total + torch.exp(-gamma * xx).mean()
         total = total + torch.exp(-gamma * yy).mean()
         total = total - 2.0 * torch.exp(-gamma * xy).mean()
-    return float((total / len(sigmas)).detach().cpu())
+    value = float((total / len(sigmas)).detach().cpu())
+    return max(value, 0.0)
 
 
 def sliced_wasserstein(
