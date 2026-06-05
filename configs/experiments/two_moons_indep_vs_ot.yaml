@@ -1,0 +1,33 @@
+experiment:
+  name: two_moons_indep_vs_ot
+  seed: 0
+  output_dir: runs/comparisons/two_moons_indep_vs_ot
+
+runner:
+  device: cpu
+  stages: [train, path, field, solver]
+  path_diagnostic_samples: 4096
+  field_diagnostic_samples: 256
+  solver_samples: 1024
+  max_metric_samples: 1024
+  ambiguity_bins: 50
+  knn_k: 32
+  save_raw: false
+  overrides:
+    training:
+      steps: 5000
+    sampling:
+      n_samples: 1024
+      n_trajectories: 64
+      nfe: 32
+    solvers:
+      nfes: [4, 8, 16, 32]
+
+variants:
+  - name: independent_linear
+    config: configs/toy/two_moons_baseline.yaml
+  - name: minibatch_ot_linear
+    config: configs/toy/two_moons_ot.yaml
+    overrides:
+      training:
+        batch_size: 256

@@ -57,6 +57,12 @@ Run geometry diagnostics for shell or annulus paths:
 .conda/fm_lab/bin/fm-lab-geometry --config configs/toy/annulus_linear.yaml --n-samples 1024 --output-dir runs/annulus_geometry
 ```
 
+Run the first controlled comparison from the research brief:
+
+```bash
+.conda/fm_lab/bin/fm-lab-run-comparison --matrix configs/experiments/two_moons_indep_vs_ot.yaml
+```
+
 Useful toy configs:
 
 ```text
