@@ -28,6 +28,15 @@ Artifact subdirectories are created lazily. For example, a dry run may only cont
 `config.yaml` and `metadata.json`, while field diagnostics may contain `diagnostics/`
 without `samples/` or `trajectories/`.
 
+## 3D Toy Runs
+
+The current training, sampling, solver, and kNN path diagnostics support 3D tensors.
+Until dedicated 3D plotting is added, sample and trajectory PNGs use the first two
+coordinates as a projection. The saved `.npy` arrays still contain all three coordinates.
+
+Grid ambiguity heatmaps are only produced for 2D runs. For 3D configs, read
+`knn_ambiguity` and `bayes_gap` in `diagnostics/ambiguity_time.csv` instead.
+
 ## Training Outputs
 
 ### `plots/generated_samples_nfe*.png`
