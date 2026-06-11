@@ -1,0 +1,258 @@
+# CLI Lookup
+
+This file is the maintained lookup table for `fm_lab` command-line tools. When a new
+console script is added to `pyproject.toml`, update this file in the same commit.
+
+Run commands from the project environment:
+
+```bash
+conda activate /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.conda/fm_lab
+```
+
+Without activation, prefix commands with `.conda/fm_lab/bin/`.
+
+## Maintenance Checklist
+
+When adding or changing a CLI:
+
+1. Update the `[project.scripts]` section in `pyproject.toml`.
+2. Update the matching section in this file.
+3. Update `docs/diagnostics.md` if outputs or metric semantics changed.
+4. Add or update tests that cover the new command or artifact shape.
+5. Run:
+
+```bash
+.conda/fm_lab/bin/python -m ruff check .
+.conda/fm_lab/bin/python -m pytest
+```
+
+## Command Summary
+
+| Command | Purpose | Primary input | Main outputs |
+|---|---|---|---|
+| `fm-lab-train` | Train one flow model and sample it. | Toy YAML config | checkpoint, metrics, samples, trajectory plots |
+| `fm-lab-diagnostics` | Estimate path-law ambiguity before training. | Toy YAML config | ambiguity CSV/JSON, heatmaps, raw grids |
+| `fm-lab-field-diagnostics` | Measure learned-field curvature/Jacobian stats. | Checkpoint | field stats CSV |
+| `fm-lab-solver-sensitivity` | Compare generated samples across solvers/NFEs. | Checkpoint | pairwise distance CSVs, matrices |
+| `fm-lab-geometry` | Measure path geometry mismatch. | Geometry-capable YAML config | geometry CSV/JSON, time profile |
+| `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
+
+## `fm-lab-train`
+
+Train one model from a config and write a normal run directory.
+
+```bash
+fm-lab-train \
+  --config configs/toy/two_moons_baseline.yaml \
+  --steps 10000 \
+  --n-samples 4096 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --output-dir runs/demo_two_moons \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--config` | YAML experiment config. Required. |
+| `--output-dir` | Override `experiment.output_dir`. |
+| `--dry-run` | Create run directory and metadata without training. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--steps` | Override `training.steps`. |
+| `--n-samples` | Override `sampling.n_samples`. |
+| `--n-trajectories` | Override `sampling.n_trajectories`. |
+| `--nfe` | Override `sampling.nfe`. |
+
+Main outputs:
+
+```text
+run_dir/
+  checkpoint.pt
+  metrics.json
+  samples/
+  trajectories/
+  diagnostics/training_history.csv
+  plots/generated_samples_nfe*.png
+  plots/trajectories_*_nfe*.png
+```
+
+## `fm-lab-diagnostics`
+
+Estimate ambiguity from the chosen source/coupling/path without training a model.
+
+```bash
+fm-lab-diagnostics \
+  --config configs/toy/two_moons_baseline.yaml \
+  --n-samples 8192 \
+  --bins 64 \
+  --knn-k 32 \
+  --output-dir runs/demo_two_moons_path_diag \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--config` | YAML experiment config. Required. |
+| `--output-dir` | Diagnostics run directory. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--n-samples` | Samples per configured `t` value. |
+| `--bins` | Grid cells per axis for 2D ambiguity heatmaps. |
+| `--knn-k` | Neighbor count for kNN ambiguity/Bayes gap. |
+| `--save-raw` | Save raw sampled `x_t` and target velocities. |
+
+Main outputs:
+
+```text
+diagnostics/ambiguity_time.csv
+diagnostics/ambiguity_time.json
+diagnostics/grid_ambiguity_t*.npz
+plots/ambiguity_time.png
+plots/ambiguity_heatmap_t*.png
+```
+
+## `fm-lab-field-diagnostics`
+
+Measure curvature/material acceleration and Jacobian statistics for a trained checkpoint.
+
+```bash
+fm-lab-field-diagnostics \
+  --checkpoint runs/demo_two_moons/checkpoint.pt \
+  --n-samples 512 \
+  --output-dir runs/demo_two_moons_field_diag \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--checkpoint` | Training checkpoint. Required. |
+| `--config` | Optional config override. Defaults to checkpoint config. |
+| `--output-dir` | Diagnostics run directory. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--n-samples` | Samples per configured `t` value. |
+
+Main output:
+
+```text
+diagnostics/field_stats.csv
+```
+
+## `fm-lab-solver-sensitivity`
+
+Sample one trained model with several solvers and compare generated distributions.
+
+```bash
+fm-lab-solver-sensitivity \
+  --checkpoint runs/demo_two_moons/checkpoint.pt \
+  --n-samples 2048 \
+  --max-metric-samples 2048 \
+  --output-dir runs/demo_two_moons_solver_diag \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--checkpoint` | Training checkpoint. Required. |
+| `--config` | Optional config override. Defaults to checkpoint config. |
+| `--output-dir` | Diagnostics run directory. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--n-samples` | Generated samples per solver. |
+| `--max-metric-samples` | Maximum samples used by MMD/SW metrics. |
+| `--schedule` | Override solver schedule, e.g. `uniform`, `cosine`. |
+
+Main outputs:
+
+```text
+samples/*_nfe*.npy
+diagnostics/solver_sensitivity.json
+diagnostics/solver_sensitivity_nfe*.csv
+plots/solver_sensitivity_*_nfe*.png
+```
+
+## `fm-lab-geometry`
+
+Measure path geometry mismatch, such as radial deviation and radial/tangent velocity.
+
+```bash
+fm-lab-geometry \
+  --config configs/toy/annulus_linear.yaml \
+  --n-samples 4096 \
+  --output-dir runs/annulus_geometry \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--config` | YAML experiment config. Required. |
+| `--output-dir` | Diagnostics run directory. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--n-samples` | Samples per configured `t` value. |
+| `--save-raw` | Save sampled `x_t`, velocity, and radial deviation arrays. |
+
+Main outputs:
+
+```text
+diagnostics/geometry_time.csv
+diagnostics/geometry_time.json
+plots/geometry_time.png
+```
+
+## `fm-lab-run-comparison`
+
+Run a multi-variant matrix. This is the preferred command for the first research
+experiment in the brief: two moons, independent coupling vs minibatch OT coupling.
+
+```bash
+fm-lab-run-comparison \
+  --matrix configs/experiments/two_moons_indep_vs_ot.yaml
+```
+
+Fast smoke version:
+
+```bash
+fm-lab-run-comparison \
+  --matrix configs/experiments/two_moons_indep_vs_ot.yaml \
+  --steps 1000 \
+  --n-samples 512 \
+  --diagnostic-samples 1024 \
+  --field-samples 128 \
+  --nfe 16 \
+  --device cpu
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--matrix` | Comparison matrix YAML. Required. |
+| `--output-dir` | Override matrix `experiment.output_dir`. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--stages` | Comma-separated stages, e.g. `train,path,field,solver`. |
+| `--steps` | Override `training.steps` for every variant. |
+| `--n-samples` | Override sampling and solver metric sample counts. |
+| `--diagnostic-samples` | Override path-law diagnostic samples. |
+| `--field-samples` | Override learned-field diagnostic samples. |
+| `--nfe` | Override sampling NFE and solver-sensitivity NFE list. |
+
+Main outputs:
+
+```text
+comparison_dir/
+  matrix.yaml
+  summary.csv
+  summary.json
+  report.md
+  variants/
+    independent_linear/
+    minibatch_ot_linear/
+```
+

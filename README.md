@@ -36,6 +36,11 @@ Run a very small smoke training job:
 
 The full default config uses a longer toy training budget and saves checkpoint, metrics, generated samples, trajectories, and plots.
 
+## Documentation
+
+- [CLI lookup](docs/cli.md): maintained reference for every `fm-lab-*` command.
+- [Reading outputs and diagnostics](docs/diagnostics.md): how to interpret plots, CSVs, and summary metrics.
+
 Run path-law ambiguity diagnostics without training:
 
 ```bash
