@@ -138,6 +138,8 @@ def run_variant(
         )
         checkpoint_path = str(train_run_dir / "checkpoint.pt")
         summary["final_loss"] = metrics["final_loss"]
+        summary["trained_steps"] = metrics.get("trained_steps")
+        summary["early_stopped"] = metrics.get("early_stopping", {}).get("stopped", False)
         summary["checkpoint"] = checkpoint_path
 
     if checkpoint_path is None and any(stage in stages for stage in ("field", "solver")):
@@ -286,6 +288,8 @@ def _write_report(matrix: dict[str, Any], summaries: list[dict[str, Any]], path:
                 f"### {summary['variant']}",
                 "",
                 f"- Final loss: {_format_metric(summary.get('final_loss'))}",
+                f"- Trained steps: {_format_metric(summary.get('trained_steps'))}",
+                f"- Early stopped: {_format_metric(summary.get('early_stopped'))}",
                 f"- Mean kNN ambiguity: {_format_metric(summary.get('path_knn_ambiguity_mean'))}",
                 f"- Mean Bayes gap: {_format_metric(summary.get('path_bayes_gap_mean'))}",
                 "- Mean acceleration: "

@@ -106,6 +106,13 @@ def main() -> None:
         device=device,
     )
     print(f"Finished run: {run_dir}")
+    early_stopping = metrics.get("early_stopping", {})
+    if early_stopping.get("stopped"):
+        print(
+            "Stopped early at step "
+            f"{metrics['trained_steps']} "
+            f"(best step {early_stopping.get('best_step')})."
+        )
     print(f"Final loss: {metrics['final_loss']:.6f}")
 
 

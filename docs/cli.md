@@ -60,10 +60,28 @@ Key options:
 | `--output-dir` | Override `experiment.output_dir`. |
 | `--dry-run` | Create run directory and metadata without training. |
 | `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
-| `--steps` | Override `training.steps`. |
+| `--steps` | Override `training.steps`. When early stopping is enabled, this is the maximum step count. |
 | `--n-samples` | Override `sampling.n_samples`. |
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
+
+Early stopping is configured in YAML under `training.early_stopping`:
+
+```yaml
+training:
+  steps: 50000
+  log_every: 500
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 5000
+    min_delta: 1.0e-3
+    ema_alpha: 0.3
+```
+
+The stopper monitors the EMA-smoothed logged training loss after `warmup_steps`.
+Training stops when that monitor has not improved by at least `min_delta` for
+`patience_steps`.
 
 Main outputs:
 
@@ -255,4 +273,3 @@ comparison_dir/
     independent_linear/
     minibatch_ot_linear/
 ```
-

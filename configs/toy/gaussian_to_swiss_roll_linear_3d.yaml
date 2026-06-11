@@ -32,6 +32,12 @@ training:
   lr: 1.0e-4
   log_every: 500
   time_sampling: uniform
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 5000
+    min_delta: 1.0e-3
+    ema_alpha: 0.3
 
 solvers:
   names: [euler, heun, midpoint, rk4]

@@ -12,7 +12,7 @@ Most commands write a directory with this shape:
 run_dir/
   config.yaml
   metadata.json
-  metrics.json                 # training runs only
+  metrics.json                 # training runs only; includes trained_steps and early_stopping
   checkpoint.pt                # training runs only
   samples/                     # only when sample arrays are written
   trajectories/                # only when trajectory arrays are written
@@ -74,8 +74,12 @@ Columns:
 |---|---|
 | `step` | Training step. |
 | `loss` | Flow matching MSE on sampled training batch. |
+| `loss_ema` | EMA-smoothed loss when early stopping is enabled. |
 
 Loss is useful for optimization sanity, but it is not sufficient evidence of good generation.
+When early stopping is enabled, `training.steps` is the maximum step count. Check
+`metrics.json` for `trained_steps`, `requested_steps`, and the `early_stopping` block
+to see whether the run stopped because the logged loss plateaued.
 
 ## Path-Law Ambiguity Diagnostics
 
