@@ -84,6 +84,7 @@ All solver trajectory plots start from the same saved
 
 Read it as:
 
+- Neutral gray lines: individual trajectories; color does not encode a metric.
 - Smooth, coherent paths usually indicate a better behaved vector field.
 - Sharp turns or tangled paths can indicate high curvature or solver stress.
 - This is qualitative; pair it with field and solver diagnostics.

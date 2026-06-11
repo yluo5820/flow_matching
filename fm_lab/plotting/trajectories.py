@@ -101,7 +101,14 @@ def plot_trajectories(
         _scatter_points(axis, target_np, plot_dim, s=3, alpha=0.18, color="black")
 
     for idx in range(trajectory_np.shape[1]):
-        _plot_line(axis, trajectory_np[:, idx, :], plot_dim, linewidth=0.7, alpha=0.55)
+        _plot_line(
+            axis,
+            trajectory_np[:, idx, :],
+            plot_dim,
+            color="0.45",
+            linewidth=0.6,
+            alpha=0.45,
+        )
     _scatter_points(axis, trajectory_np[0], plot_dim, s=8, alpha=0.5, label="source")
     _scatter_points(axis, trajectory_np[-1], plot_dim, s=8, alpha=0.7, label="final")
     axis.legend(frameon=False, loc="best")
