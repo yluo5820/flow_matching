@@ -31,8 +31,8 @@ without `samples/` or `trajectories/`.
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.
-Until dedicated 3D plotting is added, sample and trajectory PNGs use the first two
-coordinates as a projection. The saved `.npy` arrays still contain all three coordinates.
+Sample and trajectory PNGs render 3D axes when the saved tensors have at least three
+coordinates. The saved `.npy` arrays contain the full coordinate data.
 
 Grid ambiguity heatmaps are only produced for 2D runs. For 3D configs, read
 `knn_ambiguity` and `bayes_gap` in `diagnostics/ambiguity_time.csv` instead.
@@ -42,6 +42,7 @@ Grid ambiguity heatmaps are only produced for 2D runs. For 3D configs, read
 ### `plots/generated_samples_nfe*.png`
 
 This plot shows target samples and generated samples from each configured solver.
+For 3D runs, each panel is a 3D scatter plot over coordinates `x0`, `x1`, and `x2`.
 
 Read it as:
 
@@ -57,6 +58,7 @@ generated samples before judging shape quality.
 ### `plots/trajectories_*_nfe*.png`
 
 This plot shows generated ODE trajectories from source to final sample.
+For 3D runs, each line is rendered in 3D over coordinates `x0`, `x1`, and `x2`.
 
 Read it as:
 
