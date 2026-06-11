@@ -133,6 +133,10 @@ def sample_and_plot(
         "nfe": nfe,
         "schedule": schedule,
     }
+    samples_dir = run_dir / "samples"
+    trajectories_dir = run_dir / "trajectories"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    trajectories_dir.mkdir(parents=True, exist_ok=True)
 
     def v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return model(x, t)
@@ -140,19 +144,19 @@ def sample_and_plot(
     for solver in solvers:
         final = solver.solve(v_fn, x0_samples.clone(), t_grid, return_trajectory=False)
         generated[solver.name] = final.detach().cpu()
-        np.save(run_dir / "samples" / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
+        np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
         trajectory_x0 = source.sample(n_trajectories, device=device)
         trajectory = solver.solve(v_fn, trajectory_x0, t_grid, return_trajectory=True)
         trajectory_cpu = trajectory.detach().cpu()
-        np.save(run_dir / "trajectories" / f"{solver.name}_nfe{nfe}.npy", trajectory_cpu.numpy())
+        np.save(trajectories_dir / f"{solver.name}_nfe{nfe}.npy", trajectory_cpu.numpy())
         plot_trajectories(
             trajectory_cpu,
             run_dir / "plots" / f"trajectories_{solver.name}_nfe{nfe}.png",
             target_samples=target_samples.detach().cpu(),
         )
 
-    np.save(run_dir / "samples" / "target_reference.npy", target_samples.detach().cpu().numpy())
+    np.save(samples_dir / "target_reference.npy", target_samples.detach().cpu().numpy())
     plot_generated_samples(
         target_samples.detach().cpu(),
         generated,

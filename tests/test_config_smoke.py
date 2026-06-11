@@ -26,4 +26,6 @@ def test_create_run_dir(tmp_path: Path) -> None:
 
     assert (run_dir / "config.yaml").exists()
     assert (run_dir / "metadata.json").exists()
-    assert (run_dir / "plots").is_dir()
+    assert not (run_dir / "plots").exists()
+    assert not (run_dir / "samples").exists()
+    assert not (run_dir / "trajectories").exists()

@@ -34,9 +34,6 @@ def create_run_dir(config: dict[str, Any], root: str | Path | None = None) -> Pa
     run_dir = Path(root)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in ("samples", "trajectories", "diagnostics", "plots"):
-        (run_dir / name).mkdir(exist_ok=True)
-
     save_config(config, run_dir / "config.yaml")
     write_json(build_metadata(), run_dir / "metadata.json")
     return run_dir

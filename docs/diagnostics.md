@@ -14,15 +14,19 @@ run_dir/
   metadata.json
   metrics.json                 # training runs only
   checkpoint.pt                # training runs only
-  samples/
-  trajectories/
-  diagnostics/
-  plots/
+  samples/                     # only when sample arrays are written
+  trajectories/                # only when trajectory arrays are written
+  diagnostics/                 # only when diagnostic tables/arrays are written
+  plots/                       # only when figures are written
 ```
 
 `config.yaml` is the effective config for that run. `metadata.json` records library
 versions and git metadata. Prefer comparing runs by their saved configs and CSVs rather
 than by memory of the command that produced them.
+
+Artifact subdirectories are created lazily. For example, a dry run may only contain
+`config.yaml` and `metadata.json`, while field diagnostics may contain `diagnostics/`
+without `samples/` or `trajectories/`.
 
 ## Training Outputs
 
