@@ -36,6 +36,38 @@ class SphericalShell:
 
 
 @dataclass
+class NestedSphericalShells:
+    radii: tuple[float, ...] = (0.7, 1.2, 1.7)
+    noise: float = 0.02
+    dim: int = 3
+    name: str = "nested_spherical_shells"
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if not self.radii:
+            raise ValueError("NestedSphericalShells requires at least one radius.")
+        device = _resolve_device(device)
+        radius_ids = torch.randint(0, len(self.radii), (n,), device=device)
+        radii = torch.tensor(self.radii, dtype=torch.float32, device=device)[radius_ids]
+        x = torch.randn(n, self.dim, device=device)
+        x = x / x.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        x = radii[:, None] * x
+        if self.noise > 0:
+            x = x + self.noise * torch.randn_like(x)
+        return x
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "radii": list(self.radii),
+            "noise": self.noise,
+        }
+
+
+@dataclass
 class SwissRoll:
     noise: float = 0.05
     scale: float = 1.0
@@ -57,3 +89,249 @@ class SwissRoll:
 
     def metadata(self) -> dict:
         return {"name": self.name, "dim": self.dim, "noise": self.noise, "scale": self.scale}
+
+
+@dataclass
+class MultiSwissRoll:
+    n_rolls: int = 3
+    noise: float = 0.04
+    scale: float = 0.75
+    separation: float = 2.0
+    name: str = "multi_swiss_roll"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.n_rolls < 1:
+            raise ValueError("MultiSwissRoll requires at least one roll.")
+        device = _resolve_device(device)
+        component_ids = torch.randint(0, self.n_rolls, (n,), device=device)
+        angles = 2 * math.pi * component_ids.float() / self.n_rolls
+
+        t = 1.5 * math.pi * (1.0 + 2.0 * torch.rand(n, device=device))
+        height = 2.0 * torch.rand(n, device=device) - 1.0
+        base = torch.stack([t * torch.cos(t), height, t * torch.sin(t)], dim=1)
+        base = self.scale * base / (4.5 * math.pi)
+
+        cos_angle = torch.cos(angles)
+        sin_angle = torch.sin(angles)
+        x = cos_angle * base[:, 0] + sin_angle * base[:, 2]
+        z = -sin_angle * base[:, 0] + cos_angle * base[:, 2]
+        rotated = torch.stack([x, base[:, 1], z], dim=1)
+        shifts = self.separation * torch.stack(
+            [torch.cos(angles), torch.zeros_like(angles), torch.sin(angles)],
+            dim=1,
+        )
+        samples = rotated + shifts
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "n_rolls": self.n_rolls,
+            "noise": self.noise,
+            "scale": self.scale,
+            "separation": self.separation,
+        }
+
+
+@dataclass
+class GaussianMixture3D:
+    n_modes: int = 12
+    radius: float = 2.0
+    std: float = 0.08
+    name: str = "gaussian_mixture_3d"
+    dim: int = 3
+
+    def centers(self, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.n_modes < 1:
+            raise ValueError("GaussianMixture3D requires at least one mode.")
+        device = _resolve_device(device)
+        indices = torch.arange(self.n_modes, dtype=torch.float32, device=device)
+        z = 1.0 - 2.0 * (indices + 0.5) / self.n_modes
+        radius_xy = torch.sqrt((1.0 - z.square()).clamp_min(0.0))
+        golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+        theta = golden_angle * indices
+        centers = torch.stack(
+            [radius_xy * torch.cos(theta), radius_xy * torch.sin(theta), z],
+            dim=1,
+        )
+        return self.radius * centers
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        device = _resolve_device(device)
+        centers = self.centers(device)
+        mode_ids = torch.randint(0, self.n_modes, (n,), device=device)
+        return centers[mode_ids] + self.std * torch.randn(n, 3, device=device)
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        centers = self.centers(x.device)
+        diff = x[:, None, :] - centers[None, :, :]
+        exponent = -0.5 * diff.square().sum(dim=-1) / (self.std**2)
+        log_norm = -1.5 * math.log(2 * math.pi) - 3.0 * math.log(self.std)
+        return torch.logsumexp(exponent + log_norm - math.log(self.n_modes), dim=1)
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "n_modes": self.n_modes,
+            "radius": self.radius,
+            "std": self.std,
+        }
+
+
+@dataclass
+class Torus:
+    major_radius: float = 1.2
+    minor_radius: float = 0.35
+    noise: float = 0.02
+    name: str = "torus"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        device = _resolve_device(device)
+        return _sample_torus(
+            n=n,
+            device=device,
+            major_radius=self.major_radius,
+            minor_radius=self.minor_radius,
+            noise=self.noise,
+        )
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "major_radius": self.major_radius,
+            "minor_radius": self.minor_radius,
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class MultiTorus:
+    n_tori: int = 3
+    major_radius: float = 0.75
+    minor_radius: float = 0.22
+    separation: float = 2.2
+    noise: float = 0.02
+    name: str = "multi_torus"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.n_tori < 1:
+            raise ValueError("MultiTorus requires at least one torus.")
+        device = _resolve_device(device)
+        component_ids = torch.randint(0, self.n_tori, (n,), device=device)
+        angles = 2 * math.pi * component_ids.float() / self.n_tori
+        samples = _sample_torus(
+            n=n,
+            device=device,
+            major_radius=self.major_radius,
+            minor_radius=self.minor_radius,
+            noise=self.noise,
+        )
+        shifts = self.separation * torch.stack(
+            [torch.cos(angles), torch.sin(angles), torch.zeros_like(angles)],
+            dim=1,
+        )
+        return samples + shifts
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "n_tori": self.n_tori,
+            "major_radius": self.major_radius,
+            "minor_radius": self.minor_radius,
+            "separation": self.separation,
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class HelixMixture:
+    n_helixes: int = 4
+    turns: float = 3.0
+    radius: float = 0.35
+    pitch: float = 1.8
+    separation: float = 1.5
+    noise: float = 0.03
+    name: str = "helix_mixture"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.n_helixes < 1:
+            raise ValueError("HelixMixture requires at least one helix.")
+        device = _resolve_device(device)
+        component_ids = torch.randint(0, self.n_helixes, (n,), device=device)
+        component_angles = 2 * math.pi * component_ids.float() / self.n_helixes
+        u = torch.rand(n, device=device)
+        theta = 2 * math.pi * self.turns * u + component_angles
+        base = torch.stack(
+            [
+                self.radius * torch.cos(theta),
+                self.radius * torch.sin(theta),
+                self.pitch * (u - 0.5),
+            ],
+            dim=1,
+        )
+        shifts = self.separation * torch.stack(
+            [torch.cos(component_angles), torch.sin(component_angles), torch.zeros_like(u)],
+            dim=1,
+        )
+        samples = base + shifts
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "n_helixes": self.n_helixes,
+            "turns": self.turns,
+            "radius": self.radius,
+            "pitch": self.pitch,
+            "separation": self.separation,
+            "noise": self.noise,
+        }
+
+
+def _sample_torus(
+    *,
+    n: int,
+    device: torch.device,
+    major_radius: float,
+    minor_radius: float,
+    noise: float,
+) -> torch.Tensor:
+    theta = 2 * math.pi * torch.rand(n, device=device)
+    phi = 2 * math.pi * torch.rand(n, device=device)
+    tube = major_radius + minor_radius * torch.cos(phi)
+    samples = torch.stack(
+        [
+            tube * torch.cos(theta),
+            tube * torch.sin(theta),
+            minor_radius * torch.sin(phi),
+        ],
+        dim=1,
+    )
+    if noise > 0:
+        samples = samples + noise * torch.randn_like(samples)
+    return samples

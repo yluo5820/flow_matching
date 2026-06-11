@@ -38,6 +38,12 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
     config_paths = (
         "configs/toy/gaussian_to_spherical_shell_linear_3d.yaml",
         "configs/toy/gaussian_to_swiss_roll_linear_3d.yaml",
+        "configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml",
+        "configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml",
+        "configs/toy/gaussian_to_torus_linear_3d.yaml",
+        "configs/toy/gaussian_to_multi_torus_linear_3d.yaml",
+        "configs/toy/gaussian_to_helix_mixture_linear_3d.yaml",
+        "configs/toy/gaussian_to_nested_spherical_shells_linear_3d.yaml",
     )
 
     for config_path in config_paths:

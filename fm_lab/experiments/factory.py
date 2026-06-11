@@ -12,8 +12,14 @@ from fm_lab.data import (
     Checkerboard,
     ConcentricCircles,
     GaussianMixture2D,
+    GaussianMixture3D,
+    HelixMixture,
+    MultiSwissRoll,
+    MultiTorus,
+    NestedSphericalShells,
     SphericalShell,
     SwissRoll,
+    Torus,
     TwoMoons,
 )
 from fm_lab.models import MLPVelocity
@@ -49,6 +55,12 @@ def build_target(config: dict[str, Any]):
             radius=float(data_config.get("radius", 2.0)),
             std=float(data_config.get("std", 0.08)),
         )
+    if name in {"gaussian_mixture_3d", "gmm_3d"}:
+        return GaussianMixture3D(
+            n_modes=int(data_config.get("n_modes", 12)),
+            radius=float(data_config.get("radius", 2.0)),
+            std=float(data_config.get("std", 0.08)),
+        )
     if name in {"concentric_circles", "circles"}:
         radii = tuple(float(value) for value in data_config.get("radii", [0.8, 1.6]))
         return ConcentricCircles(radii=radii, noise=float(data_config.get("noise", 0.04)))
@@ -63,10 +75,47 @@ def build_target(config: dict[str, Any]):
             radius=float(data_config.get("radius", 1.0)),
             noise=float(data_config.get("noise", 0.02)),
         )
+    if name in {"nested_spherical_shells", "nested_shells"}:
+        radii = tuple(float(value) for value in data_config.get("radii", [0.7, 1.2, 1.7]))
+        return NestedSphericalShells(
+            radii=radii,
+            dim=int(data_config.get("dim", 3)),
+            noise=float(data_config.get("noise", 0.02)),
+        )
     if name == "swiss_roll":
         return SwissRoll(
             noise=float(data_config.get("noise", 0.05)),
             scale=float(data_config.get("scale", 1.0)),
+        )
+    if name == "multi_swiss_roll":
+        return MultiSwissRoll(
+            n_rolls=int(data_config.get("n_rolls", 3)),
+            noise=float(data_config.get("noise", 0.04)),
+            scale=float(data_config.get("scale", 0.75)),
+            separation=float(data_config.get("separation", 2.0)),
+        )
+    if name == "torus":
+        return Torus(
+            major_radius=float(data_config.get("major_radius", 1.2)),
+            minor_radius=float(data_config.get("minor_radius", 0.35)),
+            noise=float(data_config.get("noise", 0.02)),
+        )
+    if name == "multi_torus":
+        return MultiTorus(
+            n_tori=int(data_config.get("n_tori", 3)),
+            major_radius=float(data_config.get("major_radius", 0.75)),
+            minor_radius=float(data_config.get("minor_radius", 0.22)),
+            separation=float(data_config.get("separation", 2.2)),
+            noise=float(data_config.get("noise", 0.02)),
+        )
+    if name == "helix_mixture":
+        return HelixMixture(
+            n_helixes=int(data_config.get("n_helixes", 4)),
+            turns=float(data_config.get("turns", 3.0)),
+            radius=float(data_config.get("radius", 0.35)),
+            pitch=float(data_config.get("pitch", 1.8)),
+            separation=float(data_config.get("separation", 1.5)),
+            noise=float(data_config.get("noise", 0.03)),
         )
     raise ValueError(f"Unsupported target distribution: {name}")
 

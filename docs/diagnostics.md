@@ -37,6 +37,19 @@ coordinates. The saved `.npy` arrays contain the full coordinate data.
 Grid ambiguity heatmaps are only produced for 2D runs. For 3D configs, read
 `knn_ambiguity` and `bayes_gap` in `diagnostics/ambiguity_time.csv` instead.
 
+Available 3D toy targets:
+
+| Target | Config | What it stresses |
+|---|---|---|
+| Spherical shell | `configs/toy/gaussian_to_spherical_shell_linear_3d.yaml` | Thin shell geometry. |
+| Swiss roll | `configs/toy/gaussian_to_swiss_roll_linear_3d.yaml` | Curved connected manifold. |
+| 3D Gaussian mixture | `configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml` | Mode coverage and separated clusters. |
+| Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
+| Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
+| Multi torus | `configs/toy/gaussian_to_multi_torus_linear_3d.yaml` | Multiple disconnected topological components. |
+| Helix mixture | `configs/toy/gaussian_to_helix_mixture_linear_3d.yaml` | Thin curved 1D structures in 3D. |
+| Nested spherical shells | `configs/toy/gaussian_to_nested_spherical_shells_linear_3d.yaml` | Multiple radial shells and radial ambiguity. |
+
 ## Training Outputs
 
 ### `plots/generated_samples_nfe*.png`
