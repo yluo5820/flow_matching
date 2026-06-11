@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -130,18 +132,22 @@ def sample_and_plot(
     n_trajectories = int(sampling_config.get("n_trajectories", 128))
     nfe = int(sampling_config.get("nfe", max(solver_config.get("nfes", [32]))))
     schedule = sampling_config.get("schedule", solver_config.get("schedule", "uniform"))
+    sampling_seed = _sampling_seed(config)
 
     model.eval()
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
-    target_samples = target.sample(n_samples, device=device)
-    x0_samples = source.sample(n_samples, device=device)
+    with _temporary_torch_seed(sampling_seed, device):
+        target_samples = target.sample(n_samples, device=device)
+        x0_samples = source.sample(n_samples, device=device)
+        trajectory_x0 = source.sample(n_trajectories, device=device)
     generated: dict[str, torch.Tensor] = {}
     artifact_summary: dict[str, Any] = {
         "n_samples": n_samples,
         "n_trajectories": n_trajectories,
         "nfe": nfe,
         "schedule": schedule,
+        "seed": sampling_seed,
     }
     samples_dir = run_dir / "samples"
     trajectories_dir = run_dir / "trajectories"
@@ -156,8 +162,7 @@ def sample_and_plot(
         generated[solver.name] = final.detach().cpu()
         np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
-        trajectory_x0 = source.sample(n_trajectories, device=device)
-        trajectory = solver.solve(v_fn, trajectory_x0, t_grid, return_trajectory=True)
+        trajectory = solver.solve(v_fn, trajectory_x0.clone(), t_grid, return_trajectory=True)
         trajectory_cpu = trajectory.detach().cpu()
         np.save(trajectories_dir / f"{solver.name}_nfe{nfe}.npy", trajectory_cpu.numpy())
         plot_trajectories(
@@ -166,13 +171,45 @@ def sample_and_plot(
             target_samples=target_samples.detach().cpu(),
         )
 
+    np.save(samples_dir / "source_reference.npy", x0_samples.detach().cpu().numpy())
     np.save(samples_dir / "target_reference.npy", target_samples.detach().cpu().numpy())
+    np.save(
+        trajectories_dir / f"source_reference_nfe{nfe}.npy",
+        trajectory_x0.detach().cpu().numpy(),
+    )
     plot_generated_samples(
         target_samples.detach().cpu(),
         generated,
         run_dir / "plots" / f"generated_samples_nfe{nfe}.png",
     )
     return artifact_summary
+
+
+def _sampling_seed(config: dict[str, Any]) -> int | None:
+    sampling_config = config.get("sampling", {})
+    if "seed" in sampling_config:
+        value = sampling_config["seed"]
+    else:
+        value = config.get("experiment", {}).get("seed")
+    if value is None:
+        return None
+    return int(value)
+
+
+@contextmanager
+def _temporary_torch_seed(seed: int | None, device: torch.device) -> Iterator[None]:
+    if seed is None:
+        yield
+        return
+
+    devices = []
+    if device.type == "cuda":
+        devices = [device.index if device.index is not None else torch.cuda.current_device()]
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
+        yield
 
 
 def _write_history(history: list[dict[str, float | int]], path: Path) -> None:

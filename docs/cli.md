@@ -65,6 +65,10 @@ Key options:
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
 
+Sampling artifacts use `sampling.seed` when set, otherwise `experiment.seed`. The same
+source batch is reused for every solver in generated-sample plots, and the same trajectory
+initial positions are reused for every solver trajectory plot.
+
 Early stopping is configured in YAML under `training.early_stopping`:
 
 ```yaml
@@ -90,7 +94,9 @@ run_dir/
   checkpoint.pt
   metrics.json
   samples/
+  samples/source_reference.npy
   trajectories/
+  trajectories/source_reference_nfe*.npy
   diagnostics/training_history.csv
   plots/generated_samples_nfe*.png
   plots/trajectories_*_nfe*.png

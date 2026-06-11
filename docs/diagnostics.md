@@ -28,6 +28,12 @@ Artifact subdirectories are created lazily. For example, a dry run may only cont
 `config.yaml` and `metadata.json`, while field diagnostics may contain `diagnostics/`
 without `samples/` or `trajectories/`.
 
+Training sample artifacts are drawn with `sampling.seed` when provided, otherwise
+`experiment.seed`. The same source batch is used for every solver in
+`plots/generated_samples_nfe*.png`, and the same trajectory initial positions are used
+for every solver in `plots/trajectories_*_nfe*.png`. These references are saved as
+`samples/source_reference.npy` and `trajectories/source_reference_nfe*.npy`.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.
@@ -56,6 +62,7 @@ Available 3D toy targets:
 
 This plot shows target samples and generated samples from each configured solver.
 For 3D runs, each panel is a 3D scatter plot over coordinates `x0`, `x1`, and `x2`.
+All solver panels start from the same saved `samples/source_reference.npy` source batch.
 
 Read it as:
 
@@ -72,6 +79,8 @@ generated samples before judging shape quality.
 
 This plot shows generated ODE trajectories from source to final sample.
 For 3D runs, each line is rendered in 3D over coordinates `x0`, `x1`, and `x2`.
+All solver trajectory plots start from the same saved
+`trajectories/source_reference_nfe*.npy` positions.
 
 Read it as:
 
