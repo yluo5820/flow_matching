@@ -18,6 +18,7 @@ from fm_lab.experiments.factory import (
     build_target,
     resolve_device,
 )
+from fm_lab.experiments.sampling import sample_path_batch
 from fm_lab.plotting import plot_heatmap, plot_time_profile
 from fm_lab.utils.config import deep_update, load_config
 from fm_lab.utils.logging import create_run_dir, write_json
@@ -89,12 +90,17 @@ def run_path_law_diagnostics(
 
     rows: list[dict[str, float]] = []
     for t_value in t_values:
-        x0 = source.sample(n_samples, device=device)
-        x1 = target.sample(n_samples, device=device)
-        x0, x1 = coupling.pair(x0, x1)
-        t = torch.full((n_samples,), t_value, device=device)
-        xt = path.sample_xt(x0, x1, t)
-        velocities = path.target_velocity(x0, x1, t)
+        samples = sample_path_batch(
+            source=source,
+            target=target,
+            coupling=coupling,
+            path=path,
+            n_samples=n_samples,
+            t_value=t_value,
+            device=device,
+        )
+        xt = samples["xt"]
+        velocities = samples["velocities"]
 
         row: dict[str, float] = {"t": t_value}
         if xt.shape[1] == 2:

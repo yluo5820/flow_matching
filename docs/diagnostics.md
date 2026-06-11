@@ -108,6 +108,8 @@ Important caveats:
 - The plot currently shows grid indices, not physical coordinate tick labels.
 - Color scale is per plot, so compare numeric CSV values before making cross-run claims.
 - A high value means velocity ambiguity, not necessarily literal path crossing.
+- For minibatch OT couplings, large diagnostic sample requests are estimated by concatenating
+  multiple OT minibatches capped by `coupling.max_exact_size`.
 
 The raw grid is saved as:
 
@@ -254,4 +256,3 @@ For a trained toy experiment:
 The central hypothesis is supported only if lower ambiguity tends to align with easier
 learning, lower curvature/stiffness, and lower solver sensitivity. If those quantities do
 not move together, that negative result is scientifically useful.
-
