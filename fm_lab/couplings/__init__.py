@@ -3,11 +3,12 @@
 from fm_lab.couplings.base import Coupling
 from fm_lab.couplings.independent import IndependentCoupling
 from fm_lab.couplings.minibatch_ot import MinibatchOTCoupling
-from fm_lab.couplings.reflow import ReflowCouplingPlaceholder
+from fm_lab.couplings.reflow import ModelGeneratedCoupling, ReflowCouplingPlaceholder
 
 __all__ = [
     "Coupling",
     "IndependentCoupling",
     "MinibatchOTCoupling",
+    "ModelGeneratedCoupling",
     "ReflowCouplingPlaceholder",
 ]

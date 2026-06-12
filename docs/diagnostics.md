@@ -167,6 +167,12 @@ For `direction_only_straight` runs, read direction and speed metrics separately:
 - Compare `direction_weighted` and `speed_weighted` to decide whether `--direction-weight`
   needs to be increased for the next run.
 
+For `model_generated` / teacher-coupled distillation runs, these metrics are measured
+against the frozen teacher endpoint paired with each source, not an independently sampled
+data endpoint. Low direction and speed losses mean the straight student is imitating the
+teacher transport; sample plots are still needed to judge whether the teacher and student
+match the real target distribution.
+
 `metrics.json` also includes `sampling.line_containment` for label-conditioned runs. The
 off-line values should be close to numerical zero because trajectories are constrained to
 `a + R n(a)` by construction.

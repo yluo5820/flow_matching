@@ -6,7 +6,12 @@ from typing import Any
 
 import torch
 
-from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, ReflowCouplingPlaceholder
+from fm_lab.couplings import (
+    IndependentCoupling,
+    MinibatchOTCoupling,
+    ModelGeneratedCoupling,
+    ReflowCouplingPlaceholder,
+)
 from fm_lab.data import (
     Annulus,
     Checkerboard,
@@ -33,6 +38,7 @@ from fm_lab.solvers import (
     Solver,
 )
 from fm_lab.sources import GaussianSource, SphericalShellSource
+from fm_lab.utils.checkpoints import load_checkpoint
 
 
 def build_target(config: dict[str, Any]):
@@ -145,6 +151,10 @@ def build_coupling(config: dict[str, Any]):
         return IndependentCoupling(shuffle_target=bool(coupling_config.get("shuffle_target", True)))
     if name in {"minibatch_ot", "ot"}:
         return MinibatchOTCoupling(max_exact_size=int(coupling_config.get("max_exact_size", 2048)))
+    if name in {"model_generated", "learned_flow", "teacher", "distillation"}:
+        return _build_model_generated_coupling(coupling_config)
+    if name == "reflow" and coupling_config.get("checkpoint_path"):
+        return _build_model_generated_coupling(coupling_config)
     if name in {"reflow", "reflow_placeholder"}:
         return ReflowCouplingPlaceholder(checkpoint_path=coupling_config.get("checkpoint_path"))
     raise ValueError(f"Unsupported coupling: {name}")
@@ -191,27 +201,47 @@ def build_model(config: dict[str, Any], dim: int):
 def build_solvers(config: dict[str, Any]) -> list[Solver]:
     solver_config = config.get("solvers", {})
     names = solver_config.get("names", ["euler"])
-    solvers = []
-    for name in names:
-        normalized = name.lower()
-        if normalized == "euler":
-            solvers.append(EulerSolver())
-        elif normalized == "heun":
-            solvers.append(HeunSolver())
-        elif normalized == "midpoint":
-            solvers.append(MidpointSolver())
-        elif normalized == "rk4":
-            solvers.append(RK4Solver())
-        elif normalized in {"dopri", "dopri5", "rk45"}:
-            solvers.append(
-                ScipyDopri5Solver(
-                    rtol=float(solver_config.get("rtol", 1e-5)),
-                    atol=float(solver_config.get("atol", 1e-6)),
-                )
-            )
-        else:
-            raise ValueError(f"Unsupported solver: {name}")
-    return solvers
+    return [_build_solver(name, solver_config) for name in names]
+
+
+def _build_model_generated_coupling(coupling_config: dict[str, Any]) -> ModelGeneratedCoupling:
+    checkpoint_path = coupling_config.get("checkpoint_path")
+    if not checkpoint_path:
+        raise ValueError("model_generated coupling requires coupling.checkpoint_path.")
+    checkpoint = load_checkpoint(checkpoint_path, map_location="cpu")
+    teacher_config = checkpoint.get("config")
+    if not isinstance(teacher_config, dict):
+        raise ValueError("Teacher checkpoint must contain a config dictionary.")
+
+    teacher_source = build_source(teacher_config)
+    teacher_model = build_model(teacher_config, dim=teacher_source.dim)
+    teacher_model.load_state_dict(checkpoint["model_state_dict"])
+    teacher_model.eval()
+    solver = _build_solver(str(coupling_config.get("solver", "rk4")), coupling_config)
+    return ModelGeneratedCoupling(
+        teacher_model=teacher_model,
+        solver=solver,
+        nfe=int(coupling_config.get("nfe", 64)),
+        schedule=str(coupling_config.get("schedule", "uniform")),
+    )
+
+
+def _build_solver(name: str, solver_config: dict[str, Any]) -> Solver:
+    normalized = name.lower()
+    if normalized == "euler":
+        return EulerSolver()
+    if normalized == "heun":
+        return HeunSolver()
+    if normalized == "midpoint":
+        return MidpointSolver()
+    if normalized == "rk4":
+        return RK4Solver()
+    if normalized in {"dopri", "dopri5", "rk45"}:
+        return ScipyDopri5Solver(
+            rtol=float(solver_config.get("rtol", 1e-5)),
+            atol=float(solver_config.get("atol", 1e-6)),
+        )
+    raise ValueError(f"Unsupported solver: {name}")
 
 
 def resolve_device(device_name: str | None = None) -> torch.device:

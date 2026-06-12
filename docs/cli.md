@@ -137,6 +137,32 @@ also be used as long as their own `pair(x0, x1)` logic supports the training bat
 For `minibatch_ot`, `training.batch_size` or `--batch-size` must be less than or equal
 to `coupling.max_exact_size`.
 
+To use a trained baseline model as the coupling for direction-only distillation, point a
+`model_generated` coupling at the baseline checkpoint:
+
+```yaml
+coupling:
+  name: model_generated
+  checkpoint_path: runs/gaussian_to_gaussian_mixture_linear_3d_base/checkpoint.pt
+  solver: rk4
+  nfe: 32
+  schedule: uniform
+```
+
+This ignores the sampled target batch during training. Each source batch is integrated
+through the frozen teacher model, and the generated endpoint becomes the target paired
+with that source. The included config is:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only_distill.yaml \
+  --steps 50000 \
+  --n-samples 4096 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --device auto
+```
+
 If `speed_loss` dominates the total loss, sweep `--direction-weight` without editing YAML:
 
 ```bash
