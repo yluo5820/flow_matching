@@ -159,7 +159,9 @@ A low loss does not guarantee the generated distribution has the right geometry 
 For `direction_only_straight` runs, read direction and speed metrics separately:
 
 - Low `direction_loss` / high `direction_alignment_cos2_mean`: directions align with sampled target velocities.
-- High `perpendicular_residual_mean`: independent coupling is asking one source label to point in incompatible directions.
+- High `perpendicular_residual_mean`: the coupling is asking one source label to point in
+  incompatible directions. This is expected to be worst under independent coupling and
+  should usually improve with more coherent pairings such as minibatch OT.
 - High `speed_abs_mean` or `speed_abs_p90`: the speed network may be compensating for poor directions.
 - High `direction_pairwise_abs_mean`: directions may be collapsing to similar lines.
 - Compare `direction_weighted` and `speed_weighted` to decide whether `--direction-weight`

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling
+from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, ReflowCouplingPlaceholder
 from fm_lab.data import GaussianMixture3D
 from fm_lab.paths import LinearPath, SphericalPath
 from fm_lab.solvers import EulerSolver, HeunSolver
@@ -114,20 +114,32 @@ def test_sample_and_plot_supports_source_label_conditioned_models(tmp_path) -> N
     assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
 
 
-def test_direction_only_training_guard_rejects_non_independent_coupling() -> None:
+def test_direction_only_training_guard_accepts_minibatch_ot_coupling() -> None:
+    objective = build_objective({"name": "direction_only_straight"})
+
+    _validate_training_compatibility(
+        objective,
+        MinibatchOTCoupling(),
+        LinearPath(),
+        UnitXDirectionSpeed(),
+    )
+
+
+def test_direction_only_training_guard_rejects_unsupported_coupling() -> None:
     objective = build_objective({"name": "direction_only_straight"})
 
     try:
         _validate_training_compatibility(
             objective,
-            MinibatchOTCoupling(),
+            ReflowCouplingPlaceholder(),
             LinearPath(),
             UnitXDirectionSpeed(),
         )
     except ValueError as exc:
         assert "independent" in str(exc)
+        assert "minibatch_ot" in str(exc)
     else:
-        raise AssertionError("Expected non-independent coupling to be rejected.")
+        raise AssertionError("Expected unsupported coupling to be rejected.")
 
 
 def test_direction_only_training_guard_rejects_non_linear_path() -> None:

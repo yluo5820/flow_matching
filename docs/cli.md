@@ -104,9 +104,17 @@ fm-lab-train \
   --device auto
 ```
 
-The direction-only config uses:
+When splitting commands across lines, keep `\` as the final character on the line. A
+trailing space after `\` makes the shell stop the command early.
+
+The direction-only config uses a label-conditioned model and may use either the
+independent stress-test coupling or minibatch OT pairing:
 
 ```yaml
+coupling:
+  name: minibatch_ot
+  max_exact_size: 1024
+
 model:
   name: direction_speed_mlp
 
@@ -118,7 +126,11 @@ objective:
 
 This is label-conditioned/Lagrangian flow matching. The model carries the source label
 through sampling and predicts `s(t,x,a) n(a)`, so learned-field diagnostics that assume an
-Eulerian `v(x,t)` are intentionally unsupported for this objective in v1.
+Eulerian `v(x,t)` are intentionally unsupported for this objective.
+
+Use `coupling.name: independent` to measure the cheap independent-coupling stress-test
+ceiling. Use `coupling.name: minibatch_ot` when you want more coherent source-target
+pairs for the same direction-only parameterization.
 
 If `speed_loss` dominates the total loss, sweep `--direction-weight` without editing YAML:
 

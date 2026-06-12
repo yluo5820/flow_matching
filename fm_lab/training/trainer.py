@@ -242,8 +242,10 @@ def _validate_training_compatibility(
                 "Source-label-conditioned models require the direction_only_straight objective."
             )
         return
-    if getattr(coupling, "name", None) != "independent":
-        raise ValueError("direction_only_straight requires independent coupling in v1.")
+    allowed_couplings = {"independent", "minibatch_ot"}
+    if getattr(coupling, "name", None) not in allowed_couplings:
+        allowed = ", ".join(sorted(allowed_couplings))
+        raise ValueError(f"direction_only_straight requires one of these couplings: {allowed}.")
     if getattr(path, "name", None) != "linear":
         raise ValueError("direction_only_straight requires a linear path in v1.")
     if not _requires_source_label(model):

@@ -15,7 +15,8 @@ source:
   std: 1.0
 
 coupling:
-  name: independent
+  name: minibatch_ot
+  max_exact_size: 1024
 
 path:
   name: linear
