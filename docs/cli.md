@@ -90,6 +90,34 @@ objective:
   loss: mse
 ```
 
+To test direction-only straight flow, use the dedicated YAML config:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml \
+  --steps 50000 \
+  --n-samples 4096 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --device auto
+```
+
+The direction-only config uses:
+
+```yaml
+model:
+  name: direction_speed_mlp
+
+objective:
+  name: direction_only_straight
+  direction_weight: 1.0
+  speed_weight: 1.0
+```
+
+This is label-conditioned/Lagrangian flow matching. The model carries the source label
+through sampling and predicts `s(t,x,a) n(a)`, so learned-field diagnostics that assume an
+Eulerian `v(x,t)` are intentionally unsupported for this objective in v1.
+
 To test the learned-flow straightness regularizer:
 
 ```yaml

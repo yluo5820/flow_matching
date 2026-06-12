@@ -22,7 +22,7 @@ from fm_lab.data import (
     Torus,
     TwoMoons,
 )
-from fm_lab.models import MLPVelocity
+from fm_lab.models import DirectionSpeedMLP, MLPVelocity
 from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import (
     EulerSolver,
@@ -175,6 +175,15 @@ def build_model(config: dict[str, Any], dim: int):
             depth=int(model_config.get("depth", 4)),
             activation=model_config.get("activation", "silu"),
             time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
+        )
+    if name in {"direction_speed_mlp", "direction_only"}:
+        return DirectionSpeedMLP(
+            dim=dim,
+            hidden_dim=int(model_config.get("hidden_dim", 256)),
+            depth=int(model_config.get("depth", 4)),
+            activation=model_config.get("activation", "silu"),
+            time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
+            direction_eps=float(model_config.get("direction_eps", 1e-8)),
         )
     raise ValueError(f"Unsupported model: {name}")
 

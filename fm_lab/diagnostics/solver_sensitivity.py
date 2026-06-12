@@ -31,8 +31,11 @@ def generate_solver_samples(
     model.eval()
     x0 = source.sample(n_samples, device=device)
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
+    requires_source_label = bool(getattr(model, "requires_source_label", False))
 
     def v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        if requires_source_label:
+            return model(x, t, context={"source_label": x0})
         return model(x, t)
 
     return {

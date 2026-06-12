@@ -40,6 +40,7 @@ class TrainingObjective(Protocol):
         x0: torch.Tensor,
         x1: torch.Tensor,
         t: torch.Tensor,
+        compute_diagnostics: bool = True,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute a scalar training loss and detached logging metrics."""
 
@@ -64,7 +65,9 @@ class FlowMatchingObjective:
         x0: torch.Tensor,
         x1: torch.Tensor,
         t: torch.Tensor,
+        compute_diagnostics: bool = True,
     ) -> tuple[torch.Tensor, dict[str, float]]:
+        del compute_diagnostics
         xt = path.sample_xt(x0, x1, t)
         target_velocity = path.target_velocity(x0, x1, t)
         predicted_velocity = model(xt, t)
@@ -98,6 +101,81 @@ class FlowMatchingObjective:
                 "weight": self.straightness_weight,
                 "sample_size": self.straightness_sample_size,
             },
+        }
+
+
+@dataclass
+class DirectionOnlyStraightObjective:
+    """Label-conditioned direction-only straight flow objective."""
+
+    direction_weight: float = 1.0
+    speed_weight: float = 1.0
+    eps: float = 1e-8
+    name: str = "direction_only_straight"
+
+    def __call__(
+        self,
+        *,
+        model: torch.nn.Module,
+        path: FlowPath,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+        compute_diagnostics: bool = True,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if not hasattr(model, "direction") or not hasattr(model, "speed"):
+            raise ValueError("direction_only_straight objective requires DirectionSpeedMLP.")
+
+        xt = path.sample_xt(x0, x1, t)
+        target_velocity = path.target_velocity(x0, x1, t)
+        direction = model.direction(x0)
+        speed = model.speed(xt, t, x0)
+        target_speed = (target_velocity * direction).sum(dim=1)
+        predicted_velocity = speed[:, None] * direction
+
+        target_norm_sq = target_velocity.square().sum(dim=1)
+        cos2 = (target_speed.square() / (target_norm_sq + self.eps)).clamp(0.0, 1.0)
+        direction_loss = (1.0 - cos2).mean()
+        speed_loss = F.mse_loss(speed, target_speed)
+        direction_weighted = self.direction_weight * direction_loss
+        speed_weighted = self.speed_weight * speed_loss
+        total_loss = direction_weighted + speed_weighted
+        metrics = {"loss": float(total_loss.detach().cpu())}
+
+        if compute_diagnostics:
+            perpendicular = target_velocity - target_speed[:, None] * direction
+            speed_abs = speed.detach().abs()
+            metrics.update(
+                {
+                    "direction_loss": float(direction_loss.detach().cpu()),
+                    "speed_loss": float(speed_loss.detach().cpu()),
+                    "direction_weighted": float(direction_weighted.detach().cpu()),
+                    "speed_weighted": float(speed_weighted.detach().cpu()),
+                    "direction_speed_vector_mse": float(
+                        F.mse_loss(predicted_velocity, target_velocity).detach().cpu()
+                    ),
+                    "direction_alignment_cos2_mean": _mean_stat(cos2),
+                    "direction_alignment_cos2_p10": _quantile_stat(cos2, 0.10),
+                    "direction_alignment_cos2_p50": _quantile_stat(cos2, 0.50),
+                    "direction_alignment_cos2_p90": _quantile_stat(cos2, 0.90),
+                    "perpendicular_residual_mean": float(
+                        perpendicular.square().sum(dim=1).mean().detach().cpu()
+                    ),
+                    "speed_abs_mean": _mean_stat(speed_abs),
+                    "speed_abs_p90": _quantile_stat(speed_abs, 0.90),
+                    "direction_pairwise_abs_mean": _pairwise_abs_similarity_mean(direction),
+                }
+            )
+
+        return total_loss, metrics
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "direction_weight": self.direction_weight,
+            "speed_weight": self.speed_weight,
+            "eps": self.eps,
+            "speed": "signed",
         }
 
 
@@ -143,6 +221,17 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
+    if name in {"direction_only_straight", "direction_speed", "lagrangian_direction"}:
+        direction_weight = float(config.get("direction_weight", 1.0))
+        speed_weight = float(config.get("speed_weight", 1.0))
+        if direction_weight < 0 or speed_weight < 0:
+            raise ValueError("direction_only_straight weights must be non-negative.")
+        return DirectionOnlyStraightObjective(
+            direction_weight=direction_weight,
+            speed_weight=speed_weight,
+            eps=float(config.get("eps", 1e-8)),
+            name=name,
+        )
     if name not in {"flow_matching", "conditional_flow_matching", "cfm"}:
         raise ValueError(f"Unsupported objective: {name}")
 
@@ -172,3 +261,22 @@ def _velocity_loss(
     if loss == "mse":
         return F.mse_loss(predicted_velocity, target_velocity)
     raise ValueError(f"Unsupported velocity loss: {loss}")
+
+
+def _mean_stat(values: torch.Tensor) -> float:
+    return float(values.detach().float().mean().cpu())
+
+
+def _quantile_stat(values: torch.Tensor, q: float) -> float:
+    values_cpu = values.detach().float().flatten().cpu()
+    if values_cpu.numel() == 0:
+        return float("nan")
+    return float(torch.quantile(values_cpu, q))
+
+
+def _pairwise_abs_similarity_mean(direction: torch.Tensor) -> float:
+    if direction.shape[0] < 2:
+        return float("nan")
+    similarities = direction.detach() @ direction.detach().T
+    mask = ~torch.eye(direction.shape[0], dtype=torch.bool, device=direction.device)
+    return float(similarities[mask].abs().mean().cpu())

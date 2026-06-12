@@ -20,7 +20,7 @@ from fm_lab.experiments.factory import (
 )
 from fm_lab.experiments.sampling import sample_path_batch
 from fm_lab.utils.checkpoints import load_checkpoint
-from fm_lab.utils.config import deep_update, load_config
+from fm_lab.utils.config import ConfigError, deep_update, load_config
 from fm_lab.utils.logging import create_run_dir
 from fm_lab.utils.seeding import seed_everything
 
@@ -71,6 +71,11 @@ def run_field_diagnostics(
     coupling = build_coupling(config)
     path = build_path(config)
     model = build_model(config, dim=source.dim)
+    if getattr(model, "requires_source_label", False):
+        raise ConfigError(
+            "Learned-field diagnostics currently assume an Eulerian model v(x,t); "
+            "direction-only label-conditioned models are unsupported in v1."
+        )
     model.load_state_dict(payload["model_state_dict"])
     model.to(device)
     model.eval()

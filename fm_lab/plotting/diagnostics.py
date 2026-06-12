@@ -51,6 +51,11 @@ def plot_training_history(
         "flow_matching_loss",
         "straightness_weighted",
         "straightness_loss",
+        "direction_weighted",
+        "speed_weighted",
+        "direction_loss",
+        "speed_loss",
+        "direction_speed_vector_mse",
     ),
 ) -> None:
     """Plot training loss and available objective components over steps."""

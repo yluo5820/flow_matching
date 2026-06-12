@@ -64,6 +64,7 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
         "configs/toy/gaussian_to_swiss_roll_linear_3d.yaml",
         "configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml",
+        "configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml",
         "configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml",
         "configs/toy/gaussian_to_torus_linear_3d.yaml",
         "configs/toy/gaussian_to_multi_torus_linear_3d.yaml",
@@ -83,4 +84,9 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
         assert path.name == "linear"
         assert source.sample(8).shape == (8, 3)
         assert target.sample(8).shape == (8, 3)
-        assert model(torch.zeros(8, 3), torch.zeros(8)).shape == (8, 3)
+        x = torch.zeros(8, 3)
+        t = torch.zeros(8)
+        if getattr(model, "requires_source_label", False):
+            assert model(x, t, context={"source_label": x}).shape == (8, 3)
+        else:
+            assert model(x, t).shape == (8, 3)

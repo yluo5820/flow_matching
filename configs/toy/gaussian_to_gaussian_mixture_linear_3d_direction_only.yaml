@@ -1,0 +1,67 @@
+experiment:
+  name: gaussian_to_gaussian_mixture_linear_3d_direction_only
+  seed: 0
+  output_dir: runs/gaussian_to_gaussian_mixture_linear_3d_direction_only
+
+data:
+  name: gaussian_mixture_3d
+  n_modes: 16
+  radius: 2.0
+  std: 0.08
+
+source:
+  name: gaussian
+  dim: 3
+  std: 1.0
+
+coupling:
+  name: independent
+
+path:
+  name: linear
+
+model:
+  name: direction_speed_mlp
+  hidden_dim: 256
+  depth: 4
+  activation: silu
+  time_embedding: sinusoidal
+  direction_eps: 1.0e-8
+
+objective:
+  name: direction_only_straight
+  direction_weight: 1.0
+  speed_weight: 1.0
+  eps: 1.0e-8
+
+training:
+  batch_size: 1024
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 5000
+    min_delta: 1.0e-3
+    ema_alpha: 0.3
+
+solvers:
+  names: [rk4]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 8192
+  n_trajectories: 128
+  nfe: 64
+
+diagnostics:
+  ambiguity:
+    methods: [knn]
+    t_values: [0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95]
+  curvature:
+    enabled: true
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]

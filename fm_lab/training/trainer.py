@@ -52,6 +52,7 @@ def train_flow_matching(
     log_every = int(training_config.get("log_every", max(1, min(500, steps))))
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
     objective = build_objective(config.get("objective", {}))
+    _validate_training_compatibility(objective, coupling, path, model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     history: list[dict[str, float | int]] = []
@@ -64,14 +65,22 @@ def train_flow_matching(
         x1 = target.sample(batch_size, device=device)
         x0, x1 = coupling.pair(x0, x1)
         t = sample_uniform_time(batch_size, device)
+        should_log = step == 1 or step % log_every == 0 or step == steps
 
-        loss, loss_metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+        loss, loss_metrics = objective(
+            model=model,
+            path=path,
+            x0=x0,
+            x1=x1,
+            t=t,
+            compute_diagnostics=should_log,
+        )
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
 
-        if step == 1 or step % log_every == 0 or step == steps:
+        if should_log:
             record = {"step": step, **loss_metrics}
             history.append(record)
             progress.set_postfix(loss=f"{record['loss']:.4f}")
@@ -149,6 +158,7 @@ def sample_and_plot(
         target_samples = target.sample(n_samples, device=device)
         x0_samples = source.sample(n_samples, device=device)
         trajectory_x0 = source.sample(n_trajectories, device=device)
+    requires_source_label = _requires_source_label(model)
     generated: dict[str, torch.Tensor] = {}
     artifact_summary: dict[str, Any] = {
         "n_samples": n_samples,
@@ -164,17 +174,34 @@ def sample_and_plot(
     samples_dir.mkdir(parents=True, exist_ok=True)
     trajectories_dir.mkdir(parents=True, exist_ok=True)
 
-    def v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return model(x, t)
+    def sample_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return _model_velocity(model, x, t, source_label=x0_samples)
+
+    def trajectory_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return _model_velocity(model, x, t, source_label=trajectory_x0)
 
     for solver in solvers:
-        final = solver.solve(v_fn, x0_samples.clone(), t_grid, return_trajectory=False)
+        final = solver.solve(sample_v_fn, x0_samples.clone(), t_grid, return_trajectory=False)
         generated[solver.name] = final.detach().cpu()
         np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
-        trajectory = solver.solve(v_fn, trajectory_x0.clone(), t_grid, return_trajectory=True)
+        trajectory = solver.solve(
+            trajectory_v_fn,
+            trajectory_x0.clone(),
+            t_grid,
+            return_trajectory=True,
+        )
         trajectory_cpu = trajectory.detach().cpu()
         np.save(trajectories_dir / f"{solver.name}_nfe{nfe}.npy", trajectory_cpu.numpy())
+        if requires_source_label:
+            direction_cpu = model.direction(trajectory_x0).detach().cpu()
+            artifact_summary.setdefault("line_containment", {})[solver.name] = (
+                _line_containment_stats(
+                    trajectory=trajectory_cpu,
+                    source_label=trajectory_x0.detach().cpu(),
+                    direction=direction_cpu,
+                )
+            )
         plot_trajectories(
             trajectory_cpu,
             run_dir / "plots" / f"trajectories_{solver.name}_nfe{nfe}.png",
@@ -195,6 +222,71 @@ def sample_and_plot(
         max_points=plot_max_points,
     )
     return artifact_summary
+
+
+def _validate_training_compatibility(
+    objective: Any,
+    coupling: Coupling,
+    path: FlowPath,
+    model: nn.Module,
+) -> None:
+    objective_name = getattr(objective, "name", "")
+    direction_objective_names = {
+        "direction_only_straight",
+        "direction_speed",
+        "lagrangian_direction",
+    }
+    if objective_name not in direction_objective_names:
+        if _requires_source_label(model):
+            raise ValueError(
+                "Source-label-conditioned models require the direction_only_straight objective."
+            )
+        return
+    if getattr(coupling, "name", None) != "independent":
+        raise ValueError("direction_only_straight requires independent coupling in v1.")
+    if getattr(path, "name", None) != "linear":
+        raise ValueError("direction_only_straight requires a linear path in v1.")
+    if not _requires_source_label(model):
+        raise ValueError("direction_only_straight requires a source-label-conditioned model.")
+
+
+def _requires_source_label(model: nn.Module) -> bool:
+    return bool(getattr(model, "requires_source_label", False))
+
+
+def _model_velocity(
+    model: nn.Module,
+    x: torch.Tensor,
+    t: torch.Tensor,
+    *,
+    source_label: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if _requires_source_label(model):
+        if source_label is None:
+            raise ValueError("Source-label-conditioned model requires source labels.")
+        return model(x, t, context={"source_label": source_label})
+    return model(x, t)
+
+
+def _line_containment_stats(
+    *,
+    trajectory: torch.Tensor,
+    source_label: torch.Tensor,
+    direction: torch.Tensor,
+    eps: float = 1e-8,
+) -> dict[str, float]:
+    displacement = trajectory - source_label[None, :, :]
+    projection_length = (displacement * direction[None, :, :]).sum(dim=2, keepdim=True)
+    projected = projection_length * direction[None, :, :]
+    residual_norm = (displacement - projected).norm(dim=2)
+    displacement_norm = displacement.norm(dim=2)
+    relative = residual_norm / (displacement_norm + eps)
+    return {
+        "off_line_mean": float(residual_norm.mean()),
+        "off_line_max": float(residual_norm.max()),
+        "off_line_relative_mean": float(relative.mean()),
+        "off_line_relative_max": float(relative.max()),
+    }
 
 
 def _sampling_seed(config: dict[str, Any]) -> int | None:

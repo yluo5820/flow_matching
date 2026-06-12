@@ -24,6 +24,24 @@ class TimeScaledVelocity(nn.Module):
         return t[:, None] * x
 
 
+class FixedDirectionSpeed(nn.Module):
+    requires_source_label = True
+
+    def direction(self, source_label: torch.Tensor) -> torch.Tensor:
+        direction = torch.zeros_like(source_label)
+        direction[:, 0] = 1.0
+        return direction
+
+    def speed(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        source_label: torch.Tensor,
+    ) -> torch.Tensor:
+        del x, t
+        return torch.zeros(source_label.shape[0], device=source_label.device)
+
+
 def test_default_objective_matches_flow_matching_loss() -> None:
     model = ConstantVelocity(dim=3, value=1.0)
     path = LinearPath()
@@ -84,3 +102,28 @@ def test_objective_rejects_invalid_straightness_config() -> None:
         assert "weight" in str(exc)
     else:
         raise AssertionError("Expected invalid straightness weight to raise.")
+
+
+def test_direction_only_objective_computes_decomposed_losses() -> None:
+    objective = build_objective(
+        {
+            "name": "direction_only_straight",
+            "direction_weight": 2.0,
+            "speed_weight": 3.0,
+        }
+    )
+    model = FixedDirectionSpeed()
+    path = LinearPath()
+    x0 = torch.zeros(2, 2)
+    x1 = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    t = torch.full((2,), 0.5)
+
+    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+
+    assert torch.allclose(loss, torch.tensor(2.5))
+    assert metrics["direction_loss"] == 0.5
+    assert metrics["speed_loss"] == 0.5
+    assert metrics["direction_weighted"] == 1.0
+    assert metrics["speed_weighted"] == 1.5
+    assert metrics["direction_speed_vector_mse"] == 0.5
+    assert metrics["perpendicular_residual_mean"] == 0.5

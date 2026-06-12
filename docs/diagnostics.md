@@ -64,6 +64,7 @@ Available 3D toy targets:
 | Swiss roll | `configs/toy/gaussian_to_swiss_roll_linear_3d.yaml` | Curved connected manifold. |
 | Swiss roll with straightness regularization | `configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml` | A/B test for learned-flow straightening. |
 | 3D Gaussian mixture | `configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml` | Mode coverage and separated clusters. |
+| 3D Gaussian mixture with direction-only flow | `configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml` | Label-conditioned straight-line direction stress test. |
 | Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
 | Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
 | Multi torus | `configs/toy/gaussian_to_multi_torus_linear_3d.yaml` | Multiple disconnected topological components. |
@@ -120,6 +121,16 @@ Columns:
 | `flow_matching_loss` | Conditional flow matching velocity loss. |
 | `straightness_loss` | Unweighted learned-flow straightness penalty, when enabled. |
 | `straightness_weighted` | Weighted contribution added to total loss, when enabled. |
+| `direction_loss` | Direction-only objective angle loss, when enabled. |
+| `speed_loss` | Direction-only scalar speed prediction loss, when enabled. |
+| `direction_weighted` | Weighted direction loss contribution. |
+| `speed_weighted` | Weighted speed loss contribution. |
+| `direction_speed_vector_mse` | Raw vector MSE diagnostic for `s(t,x,a)n(a)` vs target velocity. |
+| `direction_alignment_cos2_mean` | Mean squared cosine alignment between target velocity and learned direction. |
+| `direction_alignment_cos2_p10/p50/p90` | Distribution summaries for squared direction alignment. |
+| `perpendicular_residual_mean` | Mean target velocity energy orthogonal to learned direction. |
+| `speed_abs_mean`, `speed_abs_p90` | Signed-speed magnitude summaries. |
+| `direction_pairwise_abs_mean` | Mean absolute pairwise direction similarity over the logged batch. |
 | `loss_ema` | EMA-smoothed loss when early stopping is enabled. |
 
 Loss is useful for optimization sanity, but it is not sufficient evidence of good generation.
@@ -144,6 +155,17 @@ Read it as:
 
 For judging sample quality, pair the loss curve with `plots/generated_samples_nfe*.png`.
 A low loss does not guarantee the generated distribution has the right geometry or mode coverage.
+
+For `direction_only_straight` runs, read direction and speed metrics separately:
+
+- Low `direction_loss` / high `direction_alignment_cos2_mean`: directions align with sampled target velocities.
+- High `perpendicular_residual_mean`: independent coupling is asking one source label to point in incompatible directions.
+- High `speed_abs_mean` or `speed_abs_p90`: the speed network may be compensating for poor directions.
+- High `direction_pairwise_abs_mean`: directions may be collapsing to similar lines.
+
+`metrics.json` also includes `sampling.line_containment` for label-conditioned runs. The
+off-line values should be close to numerical zero because trajectories are constrained to
+`a + R n(a)` by construction.
 
 ## Path-Law Ambiguity Diagnostics
 
