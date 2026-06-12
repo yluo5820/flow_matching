@@ -46,6 +46,20 @@ def parse_args() -> argparse.Namespace:
         help="Override sampling.n_trajectories.",
     )
     parser.add_argument("--nfe", type=int, default=None, help="Override sampling.nfe.")
+    parser.add_argument("--objective", default=None, help="Override objective.name.")
+    parser.add_argument("--objective-loss", default=None, help="Override objective.loss.")
+    parser.add_argument(
+        "--straightness-weight",
+        type=float,
+        default=None,
+        help="Override objective.straightness.weight.",
+    )
+    parser.add_argument(
+        "--straightness-sample-size",
+        type=int,
+        default=None,
+        help="Override objective.straightness.sample_size.",
+    )
     return parser.parse_args()
 
 
@@ -65,6 +79,9 @@ def main() -> None:
         sampling_overrides["nfe"] = args.nfe
     if sampling_overrides:
         config = deep_update(config, {"sampling": sampling_overrides})
+    objective_overrides = _objective_overrides(args)
+    if objective_overrides:
+        config = deep_update(config, {"objective": objective_overrides})
 
     experiment = config.setdefault("experiment", {})
     seed = int(experiment.get("seed", 0))
@@ -114,6 +131,23 @@ def main() -> None:
             f"(best step {early_stopping.get('best_step')})."
         )
     print(f"Final loss: {metrics['final_loss']:.6f}")
+
+
+def _objective_overrides(args: argparse.Namespace) -> dict:
+    objective: dict = {}
+    if args.objective is not None:
+        objective["name"] = args.objective
+    if args.objective_loss is not None:
+        objective["loss"] = args.objective_loss
+
+    straightness = {}
+    if args.straightness_weight is not None:
+        straightness["weight"] = args.straightness_weight
+    if args.straightness_sample_size is not None:
+        straightness["sample_size"] = args.straightness_sample_size
+    if straightness:
+        objective["straightness"] = straightness
+    return objective
 
 
 if __name__ == "__main__":

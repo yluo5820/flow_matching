@@ -64,6 +64,10 @@ Key options:
 | `--n-samples` | Override `sampling.n_samples`. |
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
+| `--objective` | Override `objective.name`, e.g. `flow_matching`. |
+| `--objective-loss` | Override `objective.loss`, currently `mse`. |
+| `--straightness-weight` | Override `objective.straightness.weight`; `0` disables it. |
+| `--straightness-sample-size` | Override `objective.straightness.sample_size`. |
 
 Sampling artifacts use `sampling.seed` when set, otherwise `experiment.seed`. The same
 source batch is reused for every solver in generated-sample plots, and the same trajectory
@@ -92,6 +96,15 @@ objective:
 This adds `weight * ||d_t v_theta(x_t,t) + J_x v_theta(x_t,t) v_theta(x_t,t)||^2`
 on sampled training path points. It uses the learned field `v_theta` for the advective
 velocity and requires second-order autograd, so it is more expensive than plain FM.
+
+The same settings can be applied from the CLI:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_swiss_roll_linear_3d.yaml \
+  --straightness-weight 1.0e-2 \
+  --straightness-sample-size 256
+```
 
 Early stopping is configured in YAML under `training.early_stopping`:
 
