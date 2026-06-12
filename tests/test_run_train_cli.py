@@ -1,6 +1,6 @@
 from argparse import Namespace
 
-from fm_lab.experiments.run_train import _objective_overrides
+from fm_lab.experiments.run_train import _objective_overrides, _sampling_overrides
 
 
 def test_objective_overrides_from_cli_args() -> None:
@@ -27,3 +27,21 @@ def test_objective_overrides_allows_disabling_straightness() -> None:
     )
 
     assert _objective_overrides(args) == {"straightness": {"weight": 0.0}}
+
+
+def test_sampling_overrides_from_cli_args() -> None:
+    args = Namespace(
+        n_samples=8192,
+        n_trajectories=128,
+        nfe=64,
+        plot_max_points=8192,
+        trajectory_target_max_points=3000,
+    )
+
+    assert _sampling_overrides(args) == {
+        "n_samples": 8192,
+        "n_trajectories": 128,
+        "nfe": 64,
+        "plot_max_points": 8192,
+        "trajectory_target_max_points": 3000,
+    }

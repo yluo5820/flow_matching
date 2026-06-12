@@ -46,6 +46,18 @@ def parse_args() -> argparse.Namespace:
         help="Override sampling.n_trajectories.",
     )
     parser.add_argument("--nfe", type=int, default=None, help="Override sampling.nfe.")
+    parser.add_argument(
+        "--plot-max-points",
+        type=int,
+        default=None,
+        help="Maximum points shown in generated sample plots.",
+    )
+    parser.add_argument(
+        "--trajectory-target-max-points",
+        type=int,
+        default=None,
+        help="Maximum target reference points shown in trajectory plots.",
+    )
     parser.add_argument("--objective", default=None, help="Override objective.name.")
     parser.add_argument("--objective-loss", default=None, help="Override objective.loss.")
     parser.add_argument(
@@ -70,13 +82,7 @@ def main() -> None:
         config = deep_update(config, {"training": {"steps": args.steps}})
     if args.output_dir is not None:
         config = deep_update(config, {"experiment": {"output_dir": args.output_dir}})
-    sampling_overrides = {}
-    if args.n_samples is not None:
-        sampling_overrides["n_samples"] = args.n_samples
-    if args.n_trajectories is not None:
-        sampling_overrides["n_trajectories"] = args.n_trajectories
-    if args.nfe is not None:
-        sampling_overrides["nfe"] = args.nfe
+    sampling_overrides = _sampling_overrides(args)
     if sampling_overrides:
         config = deep_update(config, {"sampling": sampling_overrides})
     objective_overrides = _objective_overrides(args)
@@ -148,6 +154,21 @@ def _objective_overrides(args: argparse.Namespace) -> dict:
     if straightness:
         objective["straightness"] = straightness
     return objective
+
+
+def _sampling_overrides(args: argparse.Namespace) -> dict:
+    sampling = {}
+    if args.n_samples is not None:
+        sampling["n_samples"] = args.n_samples
+    if args.n_trajectories is not None:
+        sampling["n_trajectories"] = args.n_trajectories
+    if args.nfe is not None:
+        sampling["nfe"] = args.nfe
+    if args.plot_max_points is not None:
+        sampling["plot_max_points"] = args.plot_max_points
+    if args.trajectory_target_max_points is not None:
+        sampling["trajectory_target_max_points"] = args.trajectory_target_max_points
+    return sampling
 
 
 if __name__ == "__main__":

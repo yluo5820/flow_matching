@@ -64,6 +64,8 @@ Available 3D toy targets:
 This plot shows target samples and generated samples from each configured solver.
 For 3D runs, each panel is a 3D scatter plot over coordinates `x0`, `x1`, and `x2`.
 All solver panels start from the same saved `samples/source_reference.npy` source batch.
+Toy configs default to a single plotting solver, `rk4`, so this plot is primarily a
+sample-quality view rather than a solver-comparison view.
 
 Read it as:
 
@@ -75,6 +77,10 @@ Read it as:
 
 Do not over-interpret fine details from a small smoke run. Use enough steps and enough
 generated samples before judging shape quality.
+
+By default, the plot shows all generated samples requested by `sampling.n_samples`.
+Use `sampling.plot_max_points` or CLI `--plot-max-points` only when plotting becomes too
+slow or visually too dense.
 
 ### `plots/trajectories_*_nfe*.png`
 
@@ -108,6 +114,23 @@ When early stopping is enabled, `training.steps` is the maximum step count. Chec
 `metrics.json` for `trained_steps`, `requested_steps`, and the `early_stopping` block
 to see whether the run stopped because the logged loss plateaued.
 `metrics.json` also records the effective objective block.
+
+### `plots/training_loss.png`
+
+This is the plotted version of `diagnostics/training_history.csv`.
+
+Read it as:
+
+- `loss`: total optimized loss.
+- `flow_matching_loss`: ordinary conditional flow matching loss.
+- `straightness_weighted`: weighted straightness term added to the total loss, when enabled.
+- `straightness_loss`: raw unweighted straightness estimate, when enabled.
+- Downward trend: optimization is working.
+- Flat trend: training may have converged, learning rate may be too small, or the model may be underpowered.
+- Spikes: expected with stochastic minibatches, but large persistent spikes can indicate instability.
+
+For judging sample quality, pair the loss curve with `plots/generated_samples_nfe*.png`.
+A low loss does not guarantee the generated distribution has the right geometry or mode coverage.
 
 ## Path-Law Ambiguity Diagnostics
 

@@ -30,7 +30,7 @@ When adding or changing a CLI:
 
 | Command | Purpose | Primary input | Main outputs |
 |---|---|---|---|
-| `fm-lab-train` | Train one flow model and sample it. | Toy YAML config | checkpoint, metrics, samples, trajectory plots |
+| `fm-lab-train` | Train one flow model and sample it. | Toy YAML config | checkpoint, metrics, samples, loss/sample/trajectory plots |
 | `fm-lab-diagnostics` | Estimate path-law ambiguity before training. | Toy YAML config | ambiguity CSV/JSON, heatmaps, raw grids |
 | `fm-lab-field-diagnostics` | Measure learned-field curvature/Jacobian stats. | Checkpoint | field stats CSV |
 | `fm-lab-solver-sensitivity` | Compare generated samples across solvers/NFEs. | Checkpoint | pairwise distance CSVs, matrices |
@@ -45,7 +45,7 @@ Train one model from a config and write a normal run directory.
 fm-lab-train \
   --config configs/toy/two_moons_baseline.yaml \
   --steps 10000 \
-  --n-samples 4096 \
+  --n-samples 8192 \
   --n-trajectories 128 \
   --nfe 64 \
   --output-dir runs/demo_two_moons \
@@ -64,6 +64,8 @@ Key options:
 | `--n-samples` | Override `sampling.n_samples`. |
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
+| `--plot-max-points` | Override `sampling.plot_max_points`; defaults to all generated samples. |
+| `--trajectory-target-max-points` | Override `sampling.trajectory_target_max_points`. |
 | `--objective` | Override `objective.name`, e.g. `flow_matching`. |
 | `--objective-loss` | Override `objective.loss`, currently `mse`. |
 | `--straightness-weight` | Override `objective.straightness.weight`; `0` disables it. |
@@ -135,6 +137,7 @@ run_dir/
   trajectories/
   trajectories/source_reference_nfe*.npy
   diagnostics/training_history.csv
+  plots/training_loss.png
   plots/generated_samples_nfe*.png
   plots/trajectories_*_nfe*.png
 ```
@@ -215,6 +218,10 @@ fm-lab-solver-sensitivity \
   --output-dir runs/demo_two_moons_solver_diag \
   --device cpu
 ```
+
+Most toy configs now default to one plotting solver, `rk4`. Use this command only when
+you explicitly want pairwise solver comparisons; otherwise training plots focus on sample
+quality and trajectories for the configured solver.
 
 Key options:
 
@@ -297,7 +304,7 @@ Key options:
 | `--matrix` | Comparison matrix YAML. Required. |
 | `--output-dir` | Override matrix `experiment.output_dir`. |
 | `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
-| `--stages` | Comma-separated stages, e.g. `train,path,field,solver`. |
+| `--stages` | Comma-separated stages. Default: `train,path,field`; add `solver` when needed. |
 | `--steps` | Override `training.steps` for every variant. |
 | `--n-samples` | Override sampling and solver metric sample counts. |
 | `--diagnostic-samples` | Override path-law diagnostic samples. |

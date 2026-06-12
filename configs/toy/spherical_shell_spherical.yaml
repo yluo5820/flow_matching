@@ -37,12 +37,12 @@ training:
   time_sampling: uniform
 
 solvers:
-  names: [euler, heun, midpoint, rk4]
-  nfes: [4, 8, 16, 32, 64]
+  names: [rk4]
+  nfes: [64]
   schedule: uniform
 
 sampling:
-  n_samples: 4096
+  n_samples: 8192
   n_trajectories: 128
   nfe: 64
 

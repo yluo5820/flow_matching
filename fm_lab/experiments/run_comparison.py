@@ -29,7 +29,7 @@ from fm_lab.utils.config import ConfigError, deep_update, load_config, save_conf
 from fm_lab.utils.logging import create_run_dir, write_json
 from fm_lab.utils.seeding import seed_everything
 
-DEFAULT_STAGES = ("train", "path", "field", "solver")
+DEFAULT_STAGES = ("train", "path", "field")
 
 
 def parse_args() -> argparse.Namespace:

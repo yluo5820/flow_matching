@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -35,6 +36,53 @@ def plot_time_profile(
     axis.set_ylabel("value")
     axis.grid(alpha=0.25)
     axis.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def plot_training_history(
+    history: list[dict[str, Any]],
+    output_path: str | Path,
+    value_keys: tuple[str, ...] = (
+        "loss",
+        "flow_matching_loss",
+        "straightness_weighted",
+        "straightness_loss",
+    ),
+) -> None:
+    """Plot training loss and available objective components over steps."""
+
+    output_path = Path(output_path)
+    _configure_matplotlib_cache(output_path)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axis = plt.subplots(1, 1, figsize=(6, 4))
+    plotted_values: list[float] = []
+    for key in value_keys:
+        pairs = [
+            (int(row["step"]), float(row[key]))
+            for row in history
+            if key in row and row[key] == row[key]
+        ]
+        if not pairs:
+            continue
+        steps, values = zip(*pairs, strict=True)
+        plotted_values.extend(values)
+        axis.plot(steps, values, marker="o", linewidth=1.4, label=key)
+
+    axis.set_xlabel("step")
+    axis.set_ylabel("loss")
+    if plotted_values and all(value > 0 for value in plotted_values):
+        axis.set_yscale("log")
+    axis.grid(alpha=0.25)
+    if plotted_values:
+        axis.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
     plt.close(fig)

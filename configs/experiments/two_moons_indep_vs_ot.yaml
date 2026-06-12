@@ -5,7 +5,7 @@ experiment:
 
 runner:
   device: cpu
-  stages: [train, path, field, solver]
+  stages: [train, path, field]
   path_diagnostic_samples: 4096
   field_diagnostic_samples: 256
   solver_samples: 1024
@@ -17,11 +17,12 @@ runner:
     training:
       steps: 5000
     sampling:
-      n_samples: 1024
+      n_samples: 2048
       n_trajectories: 64
       nfe: 32
     solvers:
-      nfes: [4, 8, 16, 32]
+      names: [rk4]
+      nfes: [32]
 
 variants:
   - name: independent_linear

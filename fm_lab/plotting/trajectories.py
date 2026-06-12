@@ -17,7 +17,7 @@ def plot_generated_samples(
     target_samples: torch.Tensor,
     generated: dict[str, torch.Tensor],
     output_path: str | Path,
-    max_points: int = 3000,
+    max_points: int = 10_000,
 ) -> None:
     """Plot target samples next to solver-generated samples."""
 

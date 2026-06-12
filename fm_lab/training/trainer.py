@@ -17,6 +17,7 @@ from tqdm.auto import trange
 from fm_lab.couplings.base import Coupling
 from fm_lab.data.base import TargetDistribution
 from fm_lab.paths.base import FlowPath
+from fm_lab.plotting.diagnostics import plot_training_history
 from fm_lab.plotting.trajectories import plot_generated_samples, plot_trajectories
 from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
@@ -92,6 +93,7 @@ def train_flow_matching(
     }
     write_json(metrics, run_dir / "metrics.json")
     _write_history(history, run_dir / "diagnostics" / "training_history.csv")
+    plot_training_history(history, run_dir / "plots" / "training_loss.png")
     save_checkpoint(
         run_dir / "checkpoint.pt",
         model=model,
@@ -134,6 +136,10 @@ def sample_and_plot(
     n_trajectories = int(sampling_config.get("n_trajectories", 128))
     nfe = int(sampling_config.get("nfe", max(solver_config.get("nfes", [32]))))
     schedule = sampling_config.get("schedule", solver_config.get("schedule", "uniform"))
+    plot_max_points = int(sampling_config.get("plot_max_points", n_samples))
+    trajectory_target_max_points = int(
+        sampling_config.get("trajectory_target_max_points", min(n_samples, 3000))
+    )
     sampling_seed = _sampling_seed(config)
 
     model.eval()
@@ -149,6 +155,8 @@ def sample_and_plot(
         "n_trajectories": n_trajectories,
         "nfe": nfe,
         "schedule": schedule,
+        "plot_max_points": plot_max_points,
+        "trajectory_target_max_points": trajectory_target_max_points,
         "seed": sampling_seed,
     }
     samples_dir = run_dir / "samples"
@@ -171,6 +179,7 @@ def sample_and_plot(
             trajectory_cpu,
             run_dir / "plots" / f"trajectories_{solver.name}_nfe{nfe}.png",
             target_samples=target_samples.detach().cpu(),
+            max_target_points=trajectory_target_max_points,
         )
 
     np.save(samples_dir / "source_reference.npy", x0_samples.detach().cpu().numpy())
@@ -183,6 +192,7 @@ def sample_and_plot(
         target_samples.detach().cpu(),
         generated,
         run_dir / "plots" / f"generated_samples_nfe{nfe}.png",
+        max_points=plot_max_points,
     )
     return artifact_summary
 
