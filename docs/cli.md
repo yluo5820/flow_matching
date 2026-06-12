@@ -107,8 +107,8 @@ fm-lab-train \
 When splitting commands across lines, keep `\` as the final character on the line. A
 trailing space after `\` makes the shell stop the command early.
 
-The direction-only config uses a label-conditioned model and may use either the
-independent stress-test coupling or minibatch OT pairing:
+The direction-only config uses a label-conditioned model. The objective does not restrict
+the coupling, but the current toy config uses minibatch OT pairing:
 
 ```yaml
 coupling:
@@ -130,7 +130,8 @@ Eulerian `v(x,t)` are intentionally unsupported for this objective.
 
 Use `coupling.name: independent` to measure the cheap independent-coupling stress-test
 ceiling. Use `coupling.name: minibatch_ot` when you want more coherent source-target
-pairs for the same direction-only parameterization.
+pairs for the same direction-only parameterization. Other coupling implementations can
+also be used as long as their own `pair(x0, x1)` logic supports the training batch.
 
 If `speed_loss` dominates the total loss, sweep `--direction-weight` without editing YAML:
 
