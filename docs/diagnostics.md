@@ -49,6 +49,7 @@ Available 3D toy targets:
 |---|---|---|
 | Spherical shell | `configs/toy/gaussian_to_spherical_shell_linear_3d.yaml` | Thin shell geometry. |
 | Swiss roll | `configs/toy/gaussian_to_swiss_roll_linear_3d.yaml` | Curved connected manifold. |
+| Swiss roll with straightness regularization | `configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml` | A/B test for learned-flow straightening. |
 | 3D Gaussian mixture | `configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml` | Mode coverage and separated clusters. |
 | Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
 | Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
@@ -96,13 +97,17 @@ Columns:
 | Column | Meaning |
 |---|---|
 | `step` | Training step. |
-| `loss` | Flow matching MSE on sampled training batch. |
+| `loss` | Total optimized training loss. |
+| `flow_matching_loss` | Conditional flow matching velocity loss. |
+| `straightness_loss` | Unweighted learned-flow straightness penalty, when enabled. |
+| `straightness_weighted` | Weighted contribution added to total loss, when enabled. |
 | `loss_ema` | EMA-smoothed loss when early stopping is enabled. |
 
 Loss is useful for optimization sanity, but it is not sufficient evidence of good generation.
 When early stopping is enabled, `training.steps` is the maximum step count. Check
 `metrics.json` for `trained_steps`, `requested_steps`, and the `early_stopping` block
 to see whether the run stopped because the logged loss plateaued.
+`metrics.json` also records the effective objective block.
 
 ## Path-Law Ambiguity Diagnostics
 

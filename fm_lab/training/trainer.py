@@ -21,7 +21,7 @@ from fm_lab.plotting.trajectories import plot_generated_samples, plot_trajectori
 from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
-from fm_lab.training.losses import flow_matching_loss, sample_uniform_time
+from fm_lab.training.losses import build_objective, sample_uniform_time
 from fm_lab.utils.checkpoints import save_checkpoint
 from fm_lab.utils.logging import write_json
 
@@ -50,6 +50,7 @@ def train_flow_matching(
     lr = float(training_config.get("lr", 1e-4))
     log_every = int(training_config.get("log_every", max(1, min(500, steps))))
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
+    objective = build_objective(config.get("objective", {}))
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     history: list[dict[str, float | int]] = []
@@ -63,7 +64,7 @@ def train_flow_matching(
         x0, x1 = coupling.pair(x0, x1)
         t = sample_uniform_time(batch_size, device)
 
-        loss, loss_metrics = flow_matching_loss(model, path, x0, x1, t)
+        loss, loss_metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -86,6 +87,7 @@ def train_flow_matching(
         "source": source.metadata(),
         "coupling": getattr(coupling, "name", coupling.__class__.__name__),
         "path": getattr(path, "name", path.__class__.__name__),
+        "objective": objective.metadata(),
         "device": str(device),
     }
     write_json(metrics, run_dir / "metrics.json")

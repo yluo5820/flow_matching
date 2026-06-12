@@ -69,6 +69,30 @@ Sampling artifacts use `sampling.seed` when set, otherwise `experiment.seed`. Th
 source batch is reused for every solver in generated-sample plots, and the same trajectory
 initial positions are reused for every solver trajectory plot.
 
+Training objectives are configured in YAML under `objective`. The default is ordinary
+conditional flow matching MSE:
+
+```yaml
+objective:
+  name: flow_matching
+  loss: mse
+```
+
+To test the learned-flow straightness regularizer:
+
+```yaml
+objective:
+  name: flow_matching
+  loss: mse
+  straightness:
+    weight: 1.0e-2
+    sample_size: 256
+```
+
+This adds `weight * ||d_t v_theta(x_t,t) + J_x v_theta(x_t,t) v_theta(x_t,t)||^2`
+on sampled training path points. It uses the learned field `v_theta` for the advective
+velocity and requires second-order autograd, so it is more expensive than plain FM.
+
 Early stopping is configured in YAML under `training.early_stopping`:
 
 ```yaml
