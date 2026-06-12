@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--labels",
         nargs="*",
         default=None,
-        help="Optional labels, one per run. Defaults to experiment names.",
+        help="Optional labels, one per run. Defaults to run directory names.",
     )
     parser.add_argument(
         "--output-dir",
@@ -271,10 +271,7 @@ def _resolve_labels(
             raise ConfigError("--labels values must be unique.")
         return labels
 
-    raw_labels = [
-        str(config.get("experiment", {}).get("name") or run_dir.name)
-        for run_dir, config in zip(run_dirs, configs, strict=True)
-    ]
+    raw_labels = [run_dir.name for run_dir in run_dirs]
     return _make_unique(raw_labels)
 
 

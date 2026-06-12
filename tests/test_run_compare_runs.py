@@ -62,6 +62,8 @@ def test_compare_runs_auto_selects_single_sample_file(tmp_path: Path) -> None:
         unique_output=False,
     )
 
+    assert summary["runs"][0]["label"] == "run_a"
+    assert summary["runs"][1]["label"] == "run_b"
     assert summary["runs"][0]["sample_path"].endswith("rk4_nfe64.npy")
     assert summary["runs"][1]["sample_path"].endswith("rk4_nfe64.npy")
 

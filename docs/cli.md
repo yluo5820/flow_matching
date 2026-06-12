@@ -300,7 +300,7 @@ Key options:
 | Option | Meaning |
 |---|---|
 | `--runs` | Completed training run directories. Requires at least two. |
-| `--labels` | Optional labels, one per run. Defaults to each run's `experiment.name`. |
+| `--labels` | Optional labels, one per run. Defaults to run directory names. |
 | `--output-dir` | Comparison output directory. |
 | `--nfe` | NFE suffix to compare. Default: `64`. |
 | `--solver` | Solver sample file prefix. Default: `rk4`; use `auto` if each run has one matching sample file. |
