@@ -53,7 +53,7 @@ def main() -> None:
     output_dir = args.output_dir or _default_solver_dir(args.checkpoint)
     config = deep_update(config, {"experiment": {"output_dir": output_dir}})
     seed_everything(int(config.get("experiment", {}).get("seed", 0)))
-    run_dir = create_run_dir(config, root=output_dir)
+    run_dir = create_run_dir(config, root=output_dir, unique=args.output_dir is None)
     device = resolve_device(args.device)
 
     summaries = run_solver_sensitivity(

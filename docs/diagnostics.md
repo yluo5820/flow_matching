@@ -34,6 +34,19 @@ Training sample artifacts are drawn with `sampling.seed` when provided, otherwis
 for every solver in `plots/trajectories_*_nfe*.png`. These references are saved as
 `samples/source_reference.npy` and `trajectories/source_reference_nfe*.npy`.
 
+The `.npy` files are the raw tensors behind plots and diagnostics:
+
+- `samples/source_reference.npy`: source initial positions used for generated samples.
+- `samples/target_reference.npy`: target samples shown in sample plots.
+- `samples/<solver>_nfe*.npy`: final generated samples for a solver.
+- `trajectories/source_reference_nfe*.npy`: trajectory initial positions.
+- `trajectories/<solver>_nfe*.npy`: full ODE paths with shape `(time, trajectory, dim)`.
+
+Keep them when you want to replot, inspect coordinates, compare solvers, compute new
+metrics, or reproduce exactly which points were shown. They are not needed to resume
+training; `checkpoint.pt`, `config.yaml`, and `metrics.json` are the important files for
+that.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

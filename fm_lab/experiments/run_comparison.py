@@ -73,18 +73,27 @@ def main() -> None:
             "Comparison matrix must define experiment.output_dir or use --output-dir."
         )
 
-    result = run_comparison(matrix=matrix, output_dir=Path(output_dir))
+    result = run_comparison(
+        matrix=matrix,
+        output_dir=Path(output_dir),
+        unique_output=args.output_dir is None,
+    )
     print(f"Finished comparison: {result['output_dir']}")
 
 
-def run_comparison(matrix: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+def run_comparison(
+    matrix: dict[str, Any],
+    output_dir: Path,
+    *,
+    unique_output: bool = True,
+) -> dict[str, Any]:
     """Run all configured variants and write aggregate outputs."""
 
     runner = matrix.get("runner", {})
     stages = tuple(runner.get("stages", DEFAULT_STAGES))
     device = resolve_device(runner.get("device", "auto"))
     seed_everything(int(matrix.get("experiment", {}).get("seed", 0)))
-    comparison_dir = create_run_dir(matrix, root=output_dir)
+    comparison_dir = create_run_dir(matrix, root=output_dir, unique=unique_output)
     save_config(matrix, comparison_dir / "matrix.yaml")
 
     summaries = []
@@ -123,7 +132,7 @@ def run_variant(
 
     if "train" in stages:
         train_dir = variant_dir / "train"
-        train_run_dir = create_run_dir(config, root=train_dir)
+        train_run_dir = create_run_dir(config, root=train_dir, unique=False)
         model = build_model(config, dim=build_source(config).dim)
         metrics = train_flow_matching(
             config=config,
@@ -146,7 +155,7 @@ def run_variant(
         raise ConfigError(f"Variant {name} needs training enabled or a checkpoint path.")
 
     if "path" in stages:
-        path_dir = create_run_dir(config, root=variant_dir / "path_diagnostics")
+        path_dir = create_run_dir(config, root=variant_dir / "path_diagnostics", unique=False)
         path_rows = run_path_law_diagnostics(
             config=config,
             run_dir=path_dir,
@@ -169,7 +178,7 @@ def run_variant(
         payload = load_checkpoint(checkpoint_path, map_location="cpu")
 
     if "field" in stages and payload is not None:
-        field_dir = create_run_dir(config, root=variant_dir / "field_diagnostics")
+        field_dir = create_run_dir(config, root=variant_dir / "field_diagnostics", unique=False)
         field_rows = run_field_diagnostics(
             payload=payload,
             config=config,
@@ -180,7 +189,7 @@ def run_variant(
         summary.update(_summarize_rows(field_rows, prefix="field"))
 
     if "solver" in stages and payload is not None:
-        solver_dir = create_run_dir(config, root=variant_dir / "solver_sensitivity")
+        solver_dir = create_run_dir(config, root=variant_dir / "solver_sensitivity", unique=False)
         solver_summaries = run_solver_sensitivity(
             payload=payload,
             config=config,
@@ -196,7 +205,7 @@ def run_variant(
         summary.update(_summarize_rows(solver_summaries, prefix="solver"))
 
     if "geometry" in stages:
-        geometry_dir = create_run_dir(config, root=variant_dir / "geometry")
+        geometry_dir = create_run_dir(config, root=variant_dir / "geometry", unique=False)
         geometry_rows = run_geometry_diagnostics(
             config=config,
             run_dir=geometry_dir,

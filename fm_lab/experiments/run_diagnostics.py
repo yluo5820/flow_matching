@@ -49,7 +49,7 @@ def main() -> None:
 
     seed = int(config.get("experiment", {}).get("seed", 0))
     seed_everything(seed)
-    run_dir = create_run_dir(config, root=output_dir)
+    run_dir = create_run_dir(config, root=output_dir, unique=args.output_dir is None)
     device = resolve_device(args.device)
 
     rows = run_path_law_diagnostics(

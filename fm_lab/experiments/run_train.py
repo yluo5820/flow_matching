@@ -93,7 +93,7 @@ def main() -> None:
     seed = int(experiment.get("seed", 0))
     seed_everything(seed)
 
-    run_dir = create_run_dir(config, root=args.output_dir)
+    run_dir = create_run_dir(config, root=args.output_dir, unique=args.output_dir is None)
     if args.dry_run:
         print(f"Created dry-run directory: {Path(run_dir)}")
         return

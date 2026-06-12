@@ -29,9 +29,33 @@ def test_create_run_dir(tmp_path: Path) -> None:
 
     assert (run_dir / "config.yaml").exists()
     assert (run_dir / "metadata.json").exists()
+    assert config["experiment"]["output_dir"] == str(run_dir)
     assert not (run_dir / "plots").exists()
     assert not (run_dir / "samples").exists()
     assert not (run_dir / "trajectories").exists()
+
+
+def test_create_run_dir_uses_suffix_when_default_exists(tmp_path: Path) -> None:
+    config = {"experiment": {"name": "smoke", "seed": 0}}
+
+    first = create_run_dir(config, root=tmp_path / "run")
+    second = create_run_dir(config, root=tmp_path / "run")
+    third = create_run_dir(config, root=tmp_path / "run")
+
+    assert first == tmp_path / "run"
+    assert second == tmp_path / "run_1"
+    assert third == tmp_path / "run_2"
+    assert load_config(third / "config.yaml")["experiment"]["output_dir"] == str(third)
+
+
+def test_create_run_dir_can_reuse_explicit_path(tmp_path: Path) -> None:
+    config = {"experiment": {"name": "smoke", "seed": 0}}
+
+    first = create_run_dir(config, root=tmp_path / "run", unique=False)
+    second = create_run_dir(config, root=tmp_path / "run", unique=False)
+
+    assert first == tmp_path / "run"
+    assert second == first
 
 
 def test_3d_linear_toy_configs_build_matching_components() -> None:

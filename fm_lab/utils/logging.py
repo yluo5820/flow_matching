@@ -24,19 +24,44 @@ def write_json(payload: dict[str, Any], path: str | Path) -> None:
         handle.write("\n")
 
 
-def create_run_dir(config: dict[str, Any], root: str | Path | None = None) -> Path:
+def create_run_dir(
+    config: dict[str, Any],
+    root: str | Path | None = None,
+    *,
+    unique: bool = True,
+) -> Path:
     """Create a run directory and persist config plus metadata."""
 
-    experiment = config.get("experiment", {})
+    experiment = config.setdefault("experiment", {})
     if root is None:
         root = experiment.get("output_dir", "runs/unnamed")
 
     run_dir = Path(root)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if unique:
+        run_dir = _create_unique_dir(run_dir)
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
 
+    experiment["output_dir"] = str(run_dir)
     save_config(config, run_dir / "config.yaml")
     write_json(build_metadata(), run_dir / "metadata.json")
     return run_dir
+
+
+def _create_unique_dir(root: Path) -> Path:
+    """Create `root`, or append _N when it already exists."""
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    candidate = root
+    index = 0
+    while True:
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            index += 1
+            candidate = root.with_name(f"{root.name}_{index}")
+            continue
+        return candidate
 
 
 def build_metadata() -> dict[str, Any]:

@@ -11,6 +11,11 @@ conda activate /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.conda/fm_
 
 Without activation, prefix commands with `.conda/fm_lab/bin/`.
 
+When `--output-dir` is omitted, commands use the config/default output directory but do
+not overwrite an existing run. If `runs/example` already exists, the next default run is
+created as `runs/example_1`, then `runs/example_2`, and so on. Passing `--output-dir`
+uses that exact path.
+
 ## Maintenance Checklist
 
 When adding or changing a CLI:

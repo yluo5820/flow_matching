@@ -45,7 +45,7 @@ def main() -> None:
     output_dir = args.output_dir or _default_geometry_dir(config)
     config = deep_update(config, {"experiment": {"output_dir": output_dir}})
     seed_everything(int(config.get("experiment", {}).get("seed", 0)))
-    run_dir = create_run_dir(config, root=output_dir)
+    run_dir = create_run_dir(config, root=output_dir, unique=args.output_dir is None)
     rows = run_geometry_diagnostics(
         config=config,
         run_dir=run_dir,
