@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +90,44 @@ def plot_training_history(
     plt.close(fig)
 
 
+def plot_loss_comparison(
+    histories: Mapping[str, list[dict[str, Any]]],
+    output_path: str | Path,
+    value_key: str = "loss",
+) -> None:
+    """Plot one loss/statistic curve for multiple training runs."""
+
+    output_path = Path(output_path)
+    _configure_matplotlib_cache(output_path)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axis = plt.subplots(1, 1, figsize=(6.5, 4.25))
+    plotted_values: list[float] = []
+    for label, rows in histories.items():
+        pairs = _numeric_step_pairs(rows, value_key)
+        if not pairs:
+            continue
+        steps, values = zip(*pairs, strict=True)
+        plotted_values.extend(values)
+        axis.plot(steps, values, linewidth=1.6, label=label)
+
+    axis.set_xlabel("step")
+    axis.set_ylabel(value_key)
+    if plotted_values and all(value > 0 for value in plotted_values):
+        axis.set_yscale("log")
+    axis.grid(alpha=0.25)
+    if plotted_values:
+        axis.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
 def plot_heatmap(
     heatmap: torch.Tensor,
     output_path: str | Path,
@@ -156,3 +196,18 @@ def _configure_matplotlib_cache(output_path: Path) -> None:
     cache_dir = output_path.parent / ".matplotlib"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
+
+
+def _numeric_step_pairs(rows: list[dict[str, Any]], value_key: str) -> list[tuple[int, float]]:
+    pairs = []
+    for row in rows:
+        if "step" not in row or value_key not in row:
+            continue
+        try:
+            step = int(float(row["step"]))
+            value = float(row[value_key])
+        except (TypeError, ValueError):
+            continue
+        if isfinite(value):
+            pairs.append((step, value))
+    return pairs

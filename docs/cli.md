@@ -40,6 +40,7 @@ When adding or changing a CLI:
 | `fm-lab-field-diagnostics` | Measure learned-field curvature/Jacobian stats. | Checkpoint | field stats CSV |
 | `fm-lab-solver-sensitivity` | Compare generated samples across solvers/NFEs. | Checkpoint | pairwise distance CSVs, matrices |
 | `fm-lab-geometry` | Measure path geometry mismatch. | Geometry-capable YAML config | geometry CSV/JSON, time profile |
+| `fm-lab-compare-runs` | Compare completed runs with same source/target. | Training run directories | side-by-side samples, overlaid loss curves |
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
 
 ## `fm-lab-train`
@@ -277,6 +278,44 @@ Main outputs:
 diagnostics/geometry_time.csv
 diagnostics/geometry_time.json
 plots/geometry_time.png
+```
+
+## `fm-lab-compare-runs`
+
+Compare completed training run directories. This does not retrain; it reads saved
+`samples/<solver>_nfe*.npy` arrays and `diagnostics/training_history.csv` from each run.
+All runs must have the same `source` and `data` config blocks.
+
+```bash
+fm-lab-compare-runs \
+  --runs runs/swiss_roll_plain runs/swiss_roll_straight \
+  --labels plain straight \
+  --nfe 64 \
+  --solver rk4 \
+  --output-dir runs/comparisons/swiss_roll_plain_vs_straight
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--runs` | Completed training run directories. Requires at least two. |
+| `--labels` | Optional labels, one per run. Defaults to each run's `experiment.name`. |
+| `--output-dir` | Comparison output directory. |
+| `--nfe` | NFE suffix to compare. Default: `64`. |
+| `--solver` | Solver sample file prefix. Default: `rk4`; use `auto` if each run has one matching sample file. |
+| `--loss-key` | Training-history column to overlay. Default: `loss`. |
+| `--max-points` | Maximum points shown in the generated-sample comparison plot. |
+
+Main outputs:
+
+```text
+comparison_dir/
+  config.yaml
+  metadata.json
+  summary.json
+  plots/generated_samples_nfe64.png
+  plots/training_loss_comparison.png
 ```
 
 ## `fm-lab-run-comparison`

@@ -3,6 +3,7 @@
 from fm_lab.plotting.diagnostics import (
     plot_distance_matrix,
     plot_heatmap,
+    plot_loss_comparison,
     plot_time_profile,
     plot_training_history,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "plot_distance_matrix",
     "plot_generated_samples",
     "plot_heatmap",
+    "plot_loss_comparison",
     "plot_time_profile",
     "plot_training_history",
     "plot_trajectories",

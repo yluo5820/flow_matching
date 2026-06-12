@@ -302,7 +302,38 @@ Interpretation:
 - If radial deviation is high, the path is spending time away from the data geometry.
 - If normal/tangent ratio is high, the target velocity is dominated by off-manifold movement.
 
-## Comparison Outputs
+## Completed-Run Comparison Outputs
+
+Produced by `fm-lab-compare-runs`.
+
+### `plots/generated_samples_nfe*.png`
+
+This is a side-by-side sample-quality comparison across completed training runs. The
+target panel uses `samples/target_reference.npy` from the first run; each run panel uses
+`samples/<solver>_nfe*.npy` from that run. The command rejects runs whose `source` or
+`data` config blocks differ.
+
+Read it as:
+
+- Same support/modes as target: better sample quality.
+- Mode collapse or off-manifold points in one panel: that run is weaker for generation.
+- Equal axes across panels: visual scale is comparable.
+
+### `plots/training_loss_comparison.png`
+
+This overlays one training-history column, `loss` by default, across completed runs.
+Use `--loss-key flow_matching_loss` or another column when you want to compare a specific
+objective component.
+
+Read it as optimization behavior only. Lower loss does not automatically mean better
+samples, especially when objectives differ or a regularization term changes the total loss.
+
+### `summary.json`
+
+Records the compared run directories, labels, selected solver/NFE, input `.npy` paths, and
+plot paths. Use it to recover exactly which runs were compared.
+
+## Matrix Comparison Outputs
 
 Produced by `fm-lab-run-comparison`.
 
