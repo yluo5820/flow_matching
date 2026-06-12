@@ -72,6 +72,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override objective.straightness.sample_size.",
     )
+    parser.add_argument(
+        "--direction-weight",
+        type=float,
+        default=None,
+        help="Override objective.direction_weight for direction_only_straight.",
+    )
+    parser.add_argument(
+        "--speed-weight",
+        type=float,
+        default=None,
+        help="Override objective.speed_weight for direction_only_straight.",
+    )
     return parser.parse_args()
 
 
@@ -145,6 +157,10 @@ def _objective_overrides(args: argparse.Namespace) -> dict:
         objective["name"] = args.objective
     if args.objective_loss is not None:
         objective["loss"] = args.objective_loss
+    if args.direction_weight is not None:
+        objective["direction_weight"] = args.direction_weight
+    if args.speed_weight is not None:
+        objective["speed_weight"] = args.speed_weight
 
     straightness = {}
     if args.straightness_weight is not None:

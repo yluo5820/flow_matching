@@ -76,6 +76,8 @@ Key options:
 | `--objective-loss` | Override `objective.loss`, currently `mse`. |
 | `--straightness-weight` | Override `objective.straightness.weight`; `0` disables it. |
 | `--straightness-sample-size` | Override `objective.straightness.sample_size`. |
+| `--direction-weight` | Override `objective.direction_weight` for `direction_only_straight`. |
+| `--speed-weight` | Override `objective.speed_weight` for `direction_only_straight`. |
 
 Sampling artifacts use `sampling.seed` when set, otherwise `experiment.seed`. The same
 source batch is reused for every solver in generated-sample plots, and the same trajectory
@@ -110,13 +112,22 @@ model:
 
 objective:
   name: direction_only_straight
-  direction_weight: 1.0
+  direction_weight: 2.0
   speed_weight: 1.0
 ```
 
 This is label-conditioned/Lagrangian flow matching. The model carries the source label
 through sampling and predicts `s(t,x,a) n(a)`, so learned-field diagnostics that assume an
 Eulerian `v(x,t)` are intentionally unsupported for this objective in v1.
+
+If `speed_loss` dominates the total loss, sweep `--direction-weight` without editing YAML:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml \
+  --direction-weight 10.0 \
+  --speed-weight 1.0
+```
 
 To test the learned-flow straightness regularizer:
 

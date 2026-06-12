@@ -162,6 +162,8 @@ For `direction_only_straight` runs, read direction and speed metrics separately:
 - High `perpendicular_residual_mean`: independent coupling is asking one source label to point in incompatible directions.
 - High `speed_abs_mean` or `speed_abs_p90`: the speed network may be compensating for poor directions.
 - High `direction_pairwise_abs_mean`: directions may be collapsing to similar lines.
+- Compare `direction_weighted` and `speed_weighted` to decide whether `--direction-weight`
+  needs to be increased for the next run.
 
 `metrics.json` also includes `sampling.line_containment` for label-conditioned runs. The
 off-line values should be close to numerical zero because trajectories are constrained to

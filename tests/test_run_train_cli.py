@@ -9,6 +9,8 @@ def test_objective_overrides_from_cli_args() -> None:
         objective_loss="mse",
         straightness_weight=0.01,
         straightness_sample_size=128,
+        direction_weight=None,
+        speed_weight=None,
     )
 
     assert _objective_overrides(args) == {
@@ -24,9 +26,28 @@ def test_objective_overrides_allows_disabling_straightness() -> None:
         objective_loss=None,
         straightness_weight=0.0,
         straightness_sample_size=None,
+        direction_weight=None,
+        speed_weight=None,
     )
 
     assert _objective_overrides(args) == {"straightness": {"weight": 0.0}}
+
+
+def test_direction_only_weight_overrides_from_cli_args() -> None:
+    args = Namespace(
+        objective="direction_only_straight",
+        objective_loss=None,
+        straightness_weight=None,
+        straightness_sample_size=None,
+        direction_weight=10.0,
+        speed_weight=1.0,
+    )
+
+    assert _objective_overrides(args) == {
+        "name": "direction_only_straight",
+        "direction_weight": 10.0,
+        "speed_weight": 1.0,
+    }
 
 
 def test_sampling_overrides_from_cli_args() -> None:

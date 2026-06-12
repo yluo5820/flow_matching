@@ -30,7 +30,7 @@ model:
 
 objective:
   name: direction_only_straight
-  direction_weight: 1.0
+  direction_weight: 2.0
   speed_weight: 1.0
   eps: 1.0e-8
 
