@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override training.steps for quick runs.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override training.batch_size.",
+    )
     parser.add_argument("--n-samples", type=int, default=None, help="Override sampling.n_samples.")
     parser.add_argument(
         "--n-trajectories",
@@ -90,8 +96,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    if args.steps is not None:
-        config = deep_update(config, {"training": {"steps": args.steps}})
+    training_overrides = _training_overrides(args)
+    if training_overrides:
+        config = deep_update(config, {"training": training_overrides})
     if args.output_dir is not None:
         config = deep_update(config, {"experiment": {"output_dir": args.output_dir}})
     sampling_overrides = _sampling_overrides(args)
@@ -170,6 +177,15 @@ def _objective_overrides(args: argparse.Namespace) -> dict:
     if straightness:
         objective["straightness"] = straightness
     return objective
+
+
+def _training_overrides(args: argparse.Namespace) -> dict:
+    training = {}
+    if args.steps is not None:
+        training["steps"] = args.steps
+    if args.batch_size is not None:
+        training["batch_size"] = args.batch_size
+    return training
 
 
 def _sampling_overrides(args: argparse.Namespace) -> dict:

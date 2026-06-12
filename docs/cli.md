@@ -67,6 +67,7 @@ Key options:
 | `--dry-run` | Create run directory and metadata without training. |
 | `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
 | `--steps` | Override `training.steps`. When early stopping is enabled, this is the maximum step count. |
+| `--batch-size` | Override `training.batch_size`. |
 | `--n-samples` | Override `sampling.n_samples`. |
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
@@ -98,6 +99,7 @@ To test direction-only straight flow, use the dedicated YAML config:
 fm-lab-train \
   --config configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml \
   --steps 50000 \
+  --batch-size 256 \
   --n-samples 4096 \
   --n-trajectories 128 \
   --nfe 64 \
@@ -132,6 +134,8 @@ Use `coupling.name: independent` to measure the cheap independent-coupling stres
 ceiling. Use `coupling.name: minibatch_ot` when you want more coherent source-target
 pairs for the same direction-only parameterization. Other coupling implementations can
 also be used as long as their own `pair(x0, x1)` logic supports the training batch.
+For `minibatch_ot`, `training.batch_size` or `--batch-size` must be less than or equal
+to `coupling.max_exact_size`.
 
 If `speed_loss` dominates the total loss, sweep `--direction-weight` without editing YAML:
 

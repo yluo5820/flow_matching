@@ -1,6 +1,10 @@
 from argparse import Namespace
 
-from fm_lab.experiments.run_train import _objective_overrides, _sampling_overrides
+from fm_lab.experiments.run_train import (
+    _objective_overrides,
+    _sampling_overrides,
+    _training_overrides,
+)
 
 
 def test_objective_overrides_from_cli_args() -> None:
@@ -47,6 +51,18 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
         "name": "direction_only_straight",
         "direction_weight": 10.0,
         "speed_weight": 1.0,
+    }
+
+
+def test_training_overrides_from_cli_args() -> None:
+    args = Namespace(
+        steps=1234,
+        batch_size=256,
+    )
+
+    assert _training_overrides(args) == {
+        "steps": 1234,
+        "batch_size": 256,
     }
 
 
