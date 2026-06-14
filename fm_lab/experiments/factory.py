@@ -19,6 +19,7 @@ from fm_lab.data import (
     GaussianMixture2D,
     GaussianMixture3D,
     HelixMixture,
+    MNISTImages,
     MultiSwissRoll,
     MultiTorus,
     NestedSphericalShells,
@@ -66,6 +67,13 @@ def build_target(config: dict[str, Any]):
             n_modes=int(data_config.get("n_modes", 12)),
             radius=float(data_config.get("radius", 2.0)),
             std=float(data_config.get("std", 0.08)),
+        )
+    if name == "mnist":
+        return MNISTImages(
+            root=data_config.get("root", "data/mnist"),
+            train=bool(data_config.get("train", True)),
+            download=bool(data_config.get("download", False)),
+            normalize=str(data_config.get("normalize", "zero_one")),
         )
     if name in {"concentric_circles", "circles"}:
         radii = tuple(float(value) for value in data_config.get("radii", [0.8, 1.6]))

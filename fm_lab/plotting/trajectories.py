@@ -18,6 +18,8 @@ def plot_generated_samples(
     generated: dict[str, torch.Tensor],
     output_path: str | Path,
     max_points: int = 10_000,
+    image_shape: list[int] | tuple[int, ...] | None = None,
+    image_value_range: list[float] | tuple[float, float] = (0.0, 1.0),
 ) -> None:
     """Plot target samples next to solver-generated samples."""
 
@@ -30,6 +32,18 @@ def plot_generated_samples(
     import matplotlib.pyplot as plt
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if image_shape is not None:
+        _plot_generated_image_samples(
+            plt=plt,
+            target_samples=target_samples,
+            generated=generated,
+            output_path=output_path,
+            max_points=max_points,
+            image_shape=image_shape,
+            image_value_range=image_value_range,
+        )
+        return
+
     target_np = _to_numpy(target_samples[:max_points])
     generated_np = {
         name: _to_numpy(samples[:max_points]) for name, samples in generated.items()
@@ -72,6 +86,8 @@ def plot_trajectories(
     output_path: str | Path,
     target_samples: torch.Tensor | None = None,
     max_target_points: int = 1500,
+    image_shape: list[int] | tuple[int, ...] | None = None,
+    image_value_range: list[float] | tuple[float, float] = (0.0, 1.0),
 ) -> None:
     """Plot sample trajectories with an optional target reference cloud."""
 
@@ -84,6 +100,15 @@ def plot_trajectories(
     import matplotlib.pyplot as plt
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if image_shape is not None:
+        _plot_image_trajectories(
+            plt=plt,
+            trajectory=trajectory,
+            output_path=output_path,
+            image_shape=image_shape,
+            image_value_range=image_value_range,
+        )
+        return
 
     trajectory_np = _to_numpy(trajectory)
     plot_dim = _plot_dim(trajectory_np)
@@ -198,3 +223,111 @@ def _configure_matplotlib_cache(output_path: Path) -> None:
     cache_dir = output_path.parent / ".matplotlib"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir))
+
+
+def _plot_generated_image_samples(
+    *,
+    plt,
+    target_samples: torch.Tensor,
+    generated: dict[str, torch.Tensor],
+    output_path: Path,
+    max_points: int,
+    image_shape: list[int] | tuple[int, ...],
+    image_value_range: list[float] | tuple[float, float],
+) -> None:
+    n_images = min(max_points, 64)
+    panels = {"target": _to_numpy(target_samples[:n_images])}
+    panels.update({name: _to_numpy(samples[:n_images]) for name, samples in generated.items()})
+    n_panels = len(panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=(3.2 * n_panels, 3.4), squeeze=False)
+    vmin, vmax = float(image_value_range[0]), float(image_value_range[1])
+    for axis, (name, samples) in zip(axes.ravel(), panels.items(), strict=True):
+        grid = _make_image_grid(samples, image_shape=image_shape, value_range=(vmin, vmax))
+        axis.imshow(grid, cmap="gray", vmin=vmin, vmax=vmax)
+        axis.set_title(name)
+        axis.axis("off")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_image_trajectories(
+    *,
+    plt,
+    trajectory: torch.Tensor,
+    output_path: Path,
+    image_shape: list[int] | tuple[int, ...],
+    image_value_range: list[float] | tuple[float, float],
+) -> None:
+    trajectory_np = _to_numpy(trajectory)
+    n_steps, n_trajectories = trajectory_np.shape[:2]
+    n_rows = min(n_trajectories, 8)
+    n_cols = min(n_steps, 6)
+    time_indices = np.linspace(0, n_steps - 1, n_cols, dtype=int)
+    vmin, vmax = float(image_value_range[0]), float(image_value_range[1])
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(1.35 * n_cols, 1.35 * n_rows),
+        squeeze=False,
+    )
+    for row in range(n_rows):
+        for col, time_idx in enumerate(time_indices):
+            image = _reshape_image_samples(
+                trajectory_np[time_idx, row : row + 1],
+                image_shape=image_shape,
+            )[0]
+            axes[row, col].imshow(np.clip(image, vmin, vmax), cmap="gray", vmin=vmin, vmax=vmax)
+            axes[row, col].axis("off")
+            if row == 0:
+                axes[row, col].set_title(f"t{time_idx}", fontsize=8)
+    fig.tight_layout(pad=0.15)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def _make_image_grid(
+    samples: np.ndarray,
+    *,
+    image_shape: list[int] | tuple[int, ...],
+    value_range: tuple[float, float],
+) -> np.ndarray:
+    images = _reshape_image_samples(samples, image_shape=image_shape)
+    n_images, height, width = images.shape
+    grid_cols = int(np.ceil(np.sqrt(n_images)))
+    grid_rows = int(np.ceil(n_images / grid_cols))
+    vmin, vmax = value_range
+    grid = np.full((grid_rows * height, grid_cols * width), vmin, dtype=np.float32)
+    for idx, image in enumerate(images):
+        row = idx // grid_cols
+        col = idx % grid_cols
+        grid[row * height : (row + 1) * height, col * width : (col + 1) * width] = np.clip(
+            image,
+            vmin,
+            vmax,
+        )
+    return grid
+
+
+def _reshape_image_samples(
+    samples: np.ndarray,
+    *,
+    image_shape: list[int] | tuple[int, ...],
+) -> np.ndarray:
+    height, width = _normalize_image_shape(image_shape)
+    if samples.shape[-1] != height * width:
+        raise ValueError(
+            f"Image samples have dim {samples.shape[-1]}, expected {height * width} "
+            f"for image_shape={tuple(image_shape)}."
+        )
+    return samples.reshape(-1, height, width)
+
+
+def _normalize_image_shape(image_shape: list[int] | tuple[int, ...]) -> tuple[int, int]:
+    shape = tuple(int(value) for value in image_shape)
+    if len(shape) == 2:
+        return shape
+    if len(shape) == 3 and shape[0] == 1:
+        return shape[1], shape[2]
+    raise ValueError(f"Only grayscale image shapes are supported, got {shape}.")

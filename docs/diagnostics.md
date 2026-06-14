@@ -71,12 +71,23 @@ Available 3D toy targets:
 | Helix mixture | `configs/toy/gaussian_to_helix_mixture_linear_3d.yaml` | Thin curved 1D structures in 3D. |
 | Nested spherical shells | `configs/toy/gaussian_to_nested_spherical_shells_linear_3d.yaml` | Multiple radial shells and radial ambiguity. |
 
+## Image Runs
+
+MNIST is represented as flattened 784D image vectors, with `image_shape` metadata used
+only for plotting. The first image-space config is:
+
+| Target | Config | What it stresses |
+|---|---|---|
+| MNIST | `configs/mnist/mnist_linear_baseline.yaml` | High-dimensional image-space FM baseline with image-grid plots. |
+
 ## Training Outputs
 
 ### `plots/generated_samples_nfe*.png`
 
 This plot shows target samples and generated samples from each configured solver.
 For 3D runs, each panel is a 3D scatter plot over coordinates `x0`, `x1`, and `x2`.
+For image runs such as MNIST, each panel is an image grid: target images first, followed
+by generated images for each solver.
 All solver panels start from the same saved `samples/source_reference.npy` source batch.
 Toy configs default to a single plotting solver, `rk4`, so this plot is primarily a
 sample-quality view rather than a solver-comparison view.
@@ -88,6 +99,8 @@ Read it as:
 - Good toy fit: generated cloud has the same coarse support, modes, and shape as target.
 - Bad toy fit: generated cloud remains Gaussian-like, collapses to one region, leaks far away,
   or misses modes.
+- Good MNIST fit: generated grids show digit-like strokes with diverse classes.
+- Bad MNIST fit: images look like noise, gray mush, saturated pixels, or repeated templates.
 
 Do not over-interpret fine details from a small smoke run. Use enough steps and enough
 generated samples before judging shape quality.

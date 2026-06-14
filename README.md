@@ -74,6 +74,7 @@ Useful toy configs:
 configs/toy/two_moons_baseline.yaml       # independent coupling + linear path
 configs/toy/two_moons_ot.yaml             # minibatch OT coupling + linear path
 configs/toy/circles_tangent_normal.yaml   # polar tangent-normal path
+configs/mnist/mnist_linear_baseline.yaml   # flattened MNIST image-space baseline
 ```
 
 ## Repository Layout

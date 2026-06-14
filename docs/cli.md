@@ -172,6 +172,22 @@ fm-lab-train \
   --speed-weight 1.0
 ```
 
+To train the first flattened MNIST image-space baseline:
+
+```bash
+fm-lab-train \
+  --config configs/mnist/mnist_linear_baseline.yaml \
+  --steps 50000 \
+  --n-samples 256 \
+  --n-trajectories 16 \
+  --nfe 64 \
+  --device auto
+```
+
+The MNIST config uses the standard IDX gzip files under `data/mnist` and has
+`data.download: true`, so the first run attempts to download them. MNIST sample and
+trajectory PNGs are image grids instead of coordinate scatter plots.
+
 To test the learned-flow straightness regularizer:
 
 ```yaml

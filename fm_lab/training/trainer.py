@@ -150,6 +150,9 @@ def sample_and_plot(
         sampling_config.get("trajectory_target_max_points", min(n_samples, 3000))
     )
     sampling_seed = _sampling_seed(config)
+    target_metadata = target.metadata()
+    image_shape = target_metadata.get("image_shape")
+    image_value_range = target_metadata.get("image_value_range", (0.0, 1.0))
 
     model.eval()
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
@@ -169,6 +172,9 @@ def sample_and_plot(
         "trajectory_target_max_points": trajectory_target_max_points,
         "seed": sampling_seed,
     }
+    if image_shape is not None:
+        artifact_summary["image_shape"] = image_shape
+        artifact_summary["image_value_range"] = image_value_range
     samples_dir = run_dir / "samples"
     trajectories_dir = run_dir / "trajectories"
     samples_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +213,8 @@ def sample_and_plot(
             run_dir / "plots" / f"trajectories_{solver.name}_nfe{nfe}.png",
             target_samples=target_samples.detach().cpu(),
             max_target_points=trajectory_target_max_points,
+            image_shape=image_shape,
+            image_value_range=image_value_range,
         )
 
     np.save(samples_dir / "source_reference.npy", x0_samples.detach().cpu().numpy())
@@ -220,6 +228,8 @@ def sample_and_plot(
         generated,
         run_dir / "plots" / f"generated_samples_nfe{nfe}.png",
         max_points=plot_max_points,
+        image_shape=image_shape,
+        image_value_range=image_value_range,
     )
     return artifact_summary
 

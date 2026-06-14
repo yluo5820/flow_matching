@@ -90,3 +90,19 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
             assert model(x, t, context={"source_label": x}).shape == (8, 3)
         else:
             assert model(x, t).shape == (8, 3)
+
+
+def test_mnist_config_builds_matching_components_without_loading_data() -> None:
+    config = load_config("configs/mnist/mnist_linear_baseline.yaml")
+
+    source = build_source(config)
+    target = build_target(config)
+    path = build_path(config)
+    model = build_model(config, dim=source.dim)
+
+    assert source.dim == 784
+    assert target.dim == 784
+    assert path.name == "linear"
+    x = torch.zeros(2, 784)
+    t = torch.zeros(2)
+    assert model(x, t).shape == (2, 784)
