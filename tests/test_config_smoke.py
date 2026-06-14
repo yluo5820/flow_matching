@@ -171,6 +171,7 @@ def test_mnist_image_unet_configs_build_matching_components_without_loading_data
             assert model(x, t).shape == (2, 784)
         if "learned_acceleration" in config_path:
             assert path.name == "learned_acceleration"
+            assert path.metadata()["network"] == "image_unet"
             assert path.sample_xt(x, x, t).shape == (2, 784)
         else:
             assert path.name == "linear"

@@ -23,9 +23,11 @@ coupling:
 path:
   name: learned_acceleration
   basis: factorized_polynomial
-  hidden_dim: 512
-  depth: 3
+  network: image_unet
+  image_shape: [28, 28]
+  base_channels: 32
   activation: silu
+  zero_init_head: true
 
 model:
   name: image_unet

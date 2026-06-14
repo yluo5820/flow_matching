@@ -187,6 +187,14 @@ def build_path(config: dict[str, Any]):
             hidden_dim=int(path_config.get("hidden_dim", 128)),
             depth=int(path_config.get("depth", 3)),
             activation=str(path_config.get("activation", "silu")),
+            network=str(path_config.get("network", path_config.get("backbone", "mlp"))),
+            image_shape=(
+                tuple(int(value) for value in path_config["image_shape"])
+                if "image_shape" in path_config
+                else None
+            ),
+            base_channels=int(path_config.get("base_channels", 32)),
+            zero_init_head=bool(path_config.get("zero_init_head", True)),
             eps=float(path_config.get("eps", 1e-8)),
         )
     if name == "spherical":

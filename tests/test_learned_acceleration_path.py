@@ -96,6 +96,27 @@ def test_factorized_polynomial_formula_and_endpoints() -> None:
     )
 
 
+def test_image_unet_learned_path_matches_linear_when_zero_initialized() -> None:
+    path = LearnedAccelerationPath(
+        dim=16,
+        basis="factorized_polynomial",
+        network="image_unet",
+        image_shape=(4, 4),
+        base_channels=4,
+    )
+    linear = LinearPath()
+    x0 = torch.randn(2, 16)
+    x1 = torch.randn(2, 16)
+    t = torch.tensor([0.25, 0.75])
+
+    coefficients = path.coefficients(x0, x1)
+
+    assert coefficients.shape == (2, 3, 16)
+    assert torch.allclose(coefficients, torch.zeros_like(coefficients))
+    assert torch.allclose(path.sample_xt(x0, x1, t), linear.sample_xt(x0, x1, t))
+    assert torch.allclose(path.target_velocity(x0, x1, t), linear.target_velocity(x0, x1, t))
+
+
 def test_learned_acceleration_penalty_and_diagnostics_are_finite() -> None:
     path = LearnedAccelerationPath(dim=3, hidden_dim=8, depth=1)
     x0 = torch.randn(16, 3)

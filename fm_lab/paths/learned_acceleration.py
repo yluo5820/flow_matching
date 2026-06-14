@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from fm_lab.paths.base import expand_time
@@ -43,15 +45,15 @@ class LearnedAccelerationPath(nn.Module):
         hidden_dim: int = 128,
         depth: int = 3,
         activation: str = "silu",
+        network: str = "mlp",
+        image_shape: tuple[int, int] | None = None,
+        base_channels: int = 32,
+        zero_init_head: bool = True,
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
         if dim < 1:
             raise ValueError("LearnedAccelerationPath dim must be positive.")
-        if hidden_dim < 1:
-            raise ValueError("LearnedAccelerationPath hidden_dim must be positive.")
-        if depth < 1:
-            raise ValueError("LearnedAccelerationPath depth must be positive.")
         basis = basis.lower()
         basis = _normalize_basis_name(basis)
         if basis not in {"quadratic", "endpoint_bump", "factorized_polynomial"}:
@@ -64,24 +66,47 @@ class LearnedAccelerationPath(nn.Module):
         self.basis = basis
         self.eps = eps
         self.n_coefficients = 3 if basis == "factorized_polynomial" else 1
+        self.network = _normalize_network_name(network)
 
-        layers: list[nn.Module] = []
-        input_dim = 2 * dim
-        for layer_idx in range(depth):
-            layers.append(nn.Linear(input_dim if layer_idx == 0 else hidden_dim, hidden_dim))
-            layers.append(_activation(activation))
-        output = nn.Linear(hidden_dim, self.n_coefficients * dim)
-        nn.init.zeros_(output.weight)
-        nn.init.zeros_(output.bias)
-        layers.append(output)
-        self.net = nn.Sequential(*layers)
+        if self.network == "mlp":
+            if hidden_dim < 1:
+                raise ValueError("LearnedAccelerationPath hidden_dim must be positive.")
+            if depth < 1:
+                raise ValueError("LearnedAccelerationPath depth must be positive.")
+            layers: list[nn.Module] = []
+            input_dim = 2 * dim
+            for layer_idx in range(depth):
+                layers.append(nn.Linear(input_dim if layer_idx == 0 else hidden_dim, hidden_dim))
+                layers.append(_activation(activation))
+            output = nn.Linear(hidden_dim, self.n_coefficients * dim)
+            nn.init.zeros_(output.weight)
+            nn.init.zeros_(output.bias)
+            layers.append(output)
+            self.net = nn.Sequential(*layers)
+        elif self.network == "image_unet":
+            if image_shape is None:
+                raise ValueError("LearnedAccelerationPath image_unet network requires image_shape.")
+            self.net = _ImageCoefficientNet(
+                dim=dim,
+                n_coefficients=self.n_coefficients,
+                image_shape=image_shape,
+                base_channels=base_channels,
+                activation=activation,
+                zero_init_head=zero_init_head,
+            )
+        else:
+            raise ValueError(
+                "LearnedAccelerationPath network must be 'mlp' or 'image_unet'."
+            )
 
     def coefficients(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """Return learned correction coefficients with shape `(batch, terms, dim)`."""
 
-        delta = x1 - x0
-        raw_coefficients = self.net(torch.cat([x0, delta], dim=1))
-        return raw_coefficients.reshape(x0.shape[0], self.n_coefficients, self.dim)
+        if self.network == "mlp":
+            delta = x1 - x0
+            raw_coefficients = self.net(torch.cat([x0, delta], dim=1))
+            return raw_coefficients.reshape(x0.shape[0], self.n_coefficients, self.dim)
+        return self.net(x0, x1)
 
     def acceleration(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """Return learned correction coefficients, flattened for multi-term bases."""
@@ -198,6 +223,7 @@ class LearnedAccelerationPath(nn.Module):
             "basis": self.basis,
             "dim": self.dim,
             "n_coefficients": self.n_coefficients,
+            "network": self.network,
             "eps": self.eps,
         }
 
@@ -248,6 +274,106 @@ def _combine_basis(weights: torch.Tensor, coefficients: torch.Tensor) -> torch.T
     return (weights * coefficients).sum(dim=1)
 
 
+class _ImageCoefficientNet(nn.Module):
+    """Image U-Net style pair map `(x0, x1 - x0) -> coefficient images`."""
+
+    def __init__(
+        self,
+        *,
+        dim: int,
+        n_coefficients: int,
+        image_shape: tuple[int, int],
+        base_channels: int,
+        activation: str,
+        zero_init_head: bool,
+    ) -> None:
+        super().__init__()
+        height, width = image_shape
+        if dim != height * width:
+            raise ValueError(
+                f"Image learned path dim={dim} does not match image_shape={image_shape}."
+            )
+        if height % 4 != 0 or width % 4 != 0:
+            raise ValueError("Image learned path requires image dimensions divisible by 4.")
+        if base_channels < 1:
+            raise ValueError("Image learned path base_channels must be positive.")
+
+        self.dim = dim
+        self.n_coefficients = n_coefficients
+        self.image_shape = (height, width)
+        c0 = int(base_channels)
+        c1 = 2 * c0
+        c2 = 4 * c0
+
+        self.input_block = _ImageResBlock(2, c0, activation)
+        self.down1 = nn.Conv2d(c0, c1, kernel_size=3, stride=2, padding=1)
+        self.down1_block = _ImageResBlock(c1, c1, activation)
+        self.down2 = nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1)
+        self.down2_block = _ImageResBlock(c2, c2, activation)
+        self.middle = _ImageResBlock(c2, c2, activation)
+        self.up1_block = _ImageResBlock(c2 + c1, c1, activation)
+        self.up0_block = _ImageResBlock(c1 + c0, c0, activation)
+        self.output_block = nn.Sequential(
+            nn.GroupNorm(_group_count(c0), c0),
+            _activation(activation),
+            nn.Conv2d(c0, n_coefficients, kernel_size=3, padding=1),
+        )
+        if zero_init_head:
+            nn.init.zeros_(self.output_block[-1].weight)
+            nn.init.zeros_(self.output_block[-1].bias)
+
+    def forward(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
+        batch_size = x0.shape[0]
+        delta = x1 - x0
+        pair_image = torch.stack(
+            (
+                x0.reshape(batch_size, *self.image_shape),
+                delta.reshape(batch_size, *self.image_shape),
+            ),
+            dim=1,
+        )
+
+        h0 = self.input_block(pair_image)
+        h1 = self.down1_block(self.down1(h0))
+        h2 = self.down2_block(self.down2(h1))
+        middle = self.middle(h2)
+
+        u1 = F.interpolate(middle, size=h1.shape[-2:], mode="nearest")
+        u1 = self.up1_block(torch.cat([u1, h1], dim=1))
+        u0 = F.interpolate(u1, size=h0.shape[-2:], mode="nearest")
+        u0 = self.up0_block(torch.cat([u0, h0], dim=1))
+        return self.output_block(u0).reshape(batch_size, self.n_coefficients, self.dim)
+
+
+class _ImageResBlock(nn.Module):
+    """Small residual image block for pair-conditioned path coefficients."""
+
+    def __init__(self, in_channels: int, out_channels: int, activation: str) -> None:
+        super().__init__()
+        self.norm1 = nn.GroupNorm(_group_count(in_channels), in_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(_group_count(out_channels), out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.skip = (
+            nn.Conv2d(in_channels, out_channels, kernel_size=1)
+            if in_channels != out_channels
+            else nn.Identity()
+        )
+        self.activation = _activation(activation)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.conv1(self.activation(self.norm1(x)))
+        h = self.conv2(self.activation(self.norm2(h)))
+        return (h + self.skip(x)) / math.sqrt(2.0)
+
+
+def _group_count(channels: int) -> int:
+    for groups in (8, 4, 2):
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
 def _normalize_basis_name(name: str) -> str:
     normalized = name.lower()
     aliases = {
@@ -257,6 +383,16 @@ def _normalize_basis_name(name: str) -> str:
         "quartic": "factorized_polynomial",
         "t_factorized": "factorized_polynomial",
         "t_factorized_polynomial": "factorized_polynomial",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _normalize_network_name(name: str) -> str:
+    normalized = name.lower()
+    aliases = {
+        "conv": "image_unet",
+        "conv_unet": "image_unet",
+        "image": "image_unet",
     }
     return aliases.get(normalized, normalized)
 

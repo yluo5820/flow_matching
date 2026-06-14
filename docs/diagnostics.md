@@ -83,6 +83,8 @@ image U-Net, and minibatch OT:
 | Target | Config | What it stresses |
 |---|---|---|
 | MNIST image U-Net + OT | `configs/mnist/mnist_image_unet_ot.yaml` | Cost-effective image-space FM check with spatial inductive bias. |
+| MNIST direction-only image U-Net + OT | `configs/mnist/mnist_direction_only_image_unet_ot.yaml` | Checks whether direction-only failure is partly backbone capacity. |
+| MNIST learned-acceleration image U-Net + OT | `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml` | Uses image U-Nets for both Eulerian velocity and learned interpolant coefficients. |
 | MNIST flat MLP | `configs/mnist/mnist_linear_baseline.yaml` | Deliberately naive flattened-pixel baseline. |
 
 ## Training Outputs

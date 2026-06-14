@@ -192,6 +192,12 @@ why image inductive bias matters. MNIST configs use the standard IDX gzip files 
 `data/mnist` and have `data.download: true`, so the first run attempts to download them.
 MNIST sample and trajectory PNGs are image grids instead of coordinate scatter plots.
 
+Experimental MNIST configs also include `configs/mnist/mnist_direction_only_image_unet_ot.yaml`
+and `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml`.
+The learned-acceleration MNIST config sets `path.network: image_unet`, so the learned
+interpolant coefficient map reads `[x0, x1 - x0]` as image channels instead of using the
+default flattened MLP pair net.
+
 To test the learned-flow straightness regularizer:
 
 ```yaml
