@@ -332,7 +332,10 @@ training:
 
 The stopper monitors the EMA-smoothed logged training loss after `warmup_steps`.
 Training stops when that monitor has not improved by at least `min_delta` for
-`patience_steps`.
+`patience_steps`. When early stopping is enabled, the trainer restores the best logged
+state before writing `checkpoint.pt` and generating samples. In `metrics.json`,
+`trained_steps` is the last step actually run, while `checkpoint_step` is the step used
+for the saved checkpoint and plots.
 
 Main outputs:
 

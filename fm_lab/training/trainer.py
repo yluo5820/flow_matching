@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -73,10 +74,12 @@ def train_flow_matching(
     history: list[dict[str, float | int]] = []
 
     final_step = 0
+    best_state: _TrainingState | None = None
     progress = trange(1, steps + 1, desc="training", dynamic_ncols=True)
     for step in progress:
         final_step = step
         should_log = step == 1 or step % log_every == 0 or step == steps
+        candidate_state: _TrainingState | None = None
 
         if trainable_path:
             assert psi_optimizer is not None
@@ -112,6 +115,14 @@ def train_flow_matching(
                     t=t,
                     compute_diagnostics=True,
                 )
+                if early_stopping.enabled:
+                    candidate_state = _capture_training_state(
+                        model=model,
+                        path=path,
+                        theta_optimizer=theta_optimizer,
+                        psi_optimizer=psi_optimizer,
+                        step=step,
+                    )
         else:
             x0, x1, t = _sample_training_batch(
                 source=source,
@@ -128,6 +139,14 @@ def train_flow_matching(
                 t=t,
                 compute_diagnostics=should_log,
             )
+            if should_log and early_stopping.enabled:
+                candidate_state = _capture_training_state(
+                    model=model,
+                    path=path,
+                    theta_optimizer=theta_optimizer,
+                    psi_optimizer=psi_optimizer,
+                    step=step,
+                )
 
             theta_optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -137,14 +156,51 @@ def train_flow_matching(
             record = {"step": step, **loss_metrics}
             history.append(record)
             progress.set_postfix(loss=f"{record['loss']:.4f}")
-            if early_stopping.update(record):
+            previous_best_step = early_stopping.best_step
+            should_stop = early_stopping.update(record)
+            improved = (
+                early_stopping.enabled
+                and early_stopping.best_step == step
+                and previous_best_step != step
+            )
+            if improved:
+                if candidate_state is None:
+                    candidate_state = _capture_training_state(
+                        model=model,
+                        path=path,
+                        theta_optimizer=theta_optimizer,
+                        psi_optimizer=psi_optimizer,
+                        step=step,
+                    )
+                candidate_state.record = dict(record)
+                best_state = candidate_state
+            if should_stop:
                 progress.set_postfix(loss=f"{record['loss']:.4f}", stopped="early")
                 break
 
+    selected_step = final_step
+    selected_record = history[-1]
+    restored_best_checkpoint = False
+    if best_state is not None:
+        _restore_training_state(
+            best_state,
+            model=model,
+            path=path,
+            theta_optimizer=theta_optimizer,
+            psi_optimizer=psi_optimizer,
+        )
+        selected_step = best_state.step
+        selected_record = best_state.record or selected_record
+        restored_best_checkpoint = selected_step != final_step
+
     metrics = {
-        "final_loss": history[-1]["loss"],
+        "final_loss": selected_record["loss"],
+        "last_loss": history[-1]["loss"],
         "requested_steps": steps,
         "trained_steps": final_step,
+        "checkpoint_step": selected_step,
+        "checkpoint_loss": selected_record["loss"],
+        "restored_best_checkpoint": restored_best_checkpoint,
         "early_stopping": early_stopping.summary(),
         "target": target.metadata(),
         "source": source.metadata(),
@@ -166,7 +222,7 @@ def train_flow_matching(
             else theta_optimizer
         ),
         path_module=path if isinstance(path, nn.Module) else None,
-        step=final_step,
+        step=selected_step,
         config=config,
         metrics=metrics,
     )
@@ -191,6 +247,16 @@ class _LearnedAccelerationSchedule:
     theta_steps: int = 1
     psi_steps: int = 1
     psi_lr: float = 1e-4
+
+
+@dataclass
+class _TrainingState:
+    step: int
+    model_state: dict[str, Any]
+    theta_optimizer_state: dict[str, Any]
+    path_state: dict[str, Any] | None = None
+    psi_optimizer_state: dict[str, Any] | None = None
+    record: dict[str, float | int] | None = None
 
 
 def _train_learned_acceleration_step(
@@ -241,6 +307,62 @@ def _train_learned_acceleration_step(
             loss, _ = objective.psi_update_loss(model=model, path=path, x0=x0, x1=x1, t=t)
         loss.backward()
         psi_optimizer.step()
+
+
+def _capture_training_state(
+    *,
+    model: nn.Module,
+    path: FlowPath,
+    theta_optimizer: torch.optim.Optimizer,
+    psi_optimizer: torch.optim.Optimizer | None,
+    step: int,
+) -> _TrainingState:
+    path_state = path.state_dict() if isinstance(path, nn.Module) else None
+    return _TrainingState(
+        step=step,
+        model_state=_clone_state(model.state_dict()),
+        path_state=_clone_state(path_state) if path_state is not None else None,
+        theta_optimizer_state=_clone_state(theta_optimizer.state_dict()),
+        psi_optimizer_state=(
+            _clone_state(psi_optimizer.state_dict()) if psi_optimizer is not None else None
+        ),
+    )
+
+
+def _restore_training_state(
+    state: _TrainingState,
+    *,
+    model: nn.Module,
+    path: FlowPath,
+    theta_optimizer: torch.optim.Optimizer,
+    psi_optimizer: torch.optim.Optimizer | None,
+) -> None:
+    model.load_state_dict(state.model_state)
+    theta_optimizer.load_state_dict(state.theta_optimizer_state)
+    if state.path_state is not None:
+        if not isinstance(path, nn.Module):
+            raise ValueError(
+                "Best checkpoint state includes a path module, but path is not a module."
+            )
+        path.load_state_dict(state.path_state)
+    if state.psi_optimizer_state is not None:
+        if psi_optimizer is None:
+            raise ValueError(
+                "Best checkpoint state includes a path optimizer, but no path optimizer exists."
+            )
+        psi_optimizer.load_state_dict(state.psi_optimizer_state)
+
+
+def _clone_state(value: Any) -> Any:
+    if torch.is_tensor(value):
+        return value.detach().cpu().clone()
+    if isinstance(value, dict):
+        return {key: _clone_state(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_state(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_state(item) for item in value)
+    return copy.deepcopy(value)
 
 
 def _sample_training_batch(

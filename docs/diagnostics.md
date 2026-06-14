@@ -191,8 +191,10 @@ Columns:
 
 Loss is useful for optimization sanity, but it is not sufficient evidence of good generation.
 When early stopping is enabled, `training.steps` is the maximum step count. Check
-`metrics.json` for `trained_steps`, `requested_steps`, and the `early_stopping` block
-to see whether the run stopped because the logged loss plateaued.
+`metrics.json` for `trained_steps`, `checkpoint_step`, `requested_steps`, and the
+`early_stopping` block to see whether the run stopped because the logged loss plateaued.
+Generated samples and `checkpoint.pt` use `checkpoint_step`; `trained_steps` only records
+how long the run continued before stopping.
 `metrics.json` also records the effective objective block.
 
 ### `plots/training_loss.png`

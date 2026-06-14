@@ -55,6 +55,26 @@ class CustomCoupling:
         return x0, x1
 
 
+class ConstantSource:
+    dim = 2
+
+    def sample(self, n: int, device: torch.device | None = None) -> torch.Tensor:
+        return torch.zeros(n, self.dim, device=device)
+
+    def metadata(self) -> dict[str, str | int]:
+        return {"name": "constant_zero", "dim": self.dim}
+
+
+class ConstantTarget:
+    dim = 2
+
+    def sample(self, n: int, device: torch.device | None = None) -> torch.Tensor:
+        return torch.ones(n, self.dim, device=device)
+
+    def metadata(self) -> dict[str, str | int]:
+        return {"name": "constant_one", "dim": self.dim}
+
+
 def test_sample_and_plot_reuses_trajectory_sources_across_solvers(tmp_path) -> None:
     config = _sampling_config(seed=123)
 
@@ -220,6 +240,48 @@ def test_train_flow_matching_updates_trainable_learned_acceleration_path(tmp_pat
     assert (tmp_path / "plots" / "generated_samples_nfe3.png").exists()
 
 
+def test_train_flow_matching_restores_best_early_stopping_checkpoint(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 8,
+            "steps": 4,
+            "log_every": 1,
+            "lr": 0.0,
+            "early_stopping": {
+                "enabled": True,
+                "warmup_steps": 0,
+                "patience_steps": 1,
+                "min_delta": 0.0,
+                "ema_alpha": 1.0,
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TrainableConstantVelocity(dim=2, value=0.0),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    checkpoint = load_checkpoint(tmp_path / "checkpoint.pt")
+
+    assert metrics["trained_steps"] == 2
+    assert metrics["checkpoint_step"] == 1
+    assert metrics["restored_best_checkpoint"] is True
+    assert metrics["final_loss"] == metrics["checkpoint_loss"]
+    assert checkpoint["step"] == 1
+    assert checkpoint["metrics"]["checkpoint_step"] == 1
+
+
 def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:
     config = {
         "experiment": {"seed": 0},
@@ -280,6 +342,16 @@ class TrainableTimeScaledVelocity(nn.Module):
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return self.scale * t[:, None] * x
+
+
+class TrainableConstantVelocity(nn.Module):
+    def __init__(self, dim: int, value: float) -> None:
+        super().__init__()
+        self.velocity = nn.Parameter(torch.full((dim,), value))
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return self.velocity.expand_as(x)
 
 
 def _sampling_config(seed: int) -> dict:
