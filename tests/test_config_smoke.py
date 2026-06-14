@@ -66,7 +66,6 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
         "configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml",
-        "configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only_vector_unet.yaml",
         "configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml",
         "configs/toy/gaussian_to_torus_linear_3d.yaml",
         "configs/toy/gaussian_to_multi_torus_linear_3d.yaml",
@@ -102,11 +101,6 @@ def test_3d_learned_acceleration_configs_build_matching_components() -> None:
             "configs/toy/"
             "gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_"
             "factorized_polynomial_3d.yaml"
-        ),
-        (
-            "configs/toy/"
-            "gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_"
-            "factorized_polynomial_vector_unet_3d.yaml"
         ),
     )
 

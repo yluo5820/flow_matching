@@ -31,10 +31,8 @@ from fm_lab.data import (
 from fm_lab.models import (
     DirectionSpeedImageUNet,
     DirectionSpeedMLP,
-    DirectionSpeedVectorUNet,
     ImageUNetVelocity,
     MLPVelocity,
-    VectorUNetVelocity,
 )
 from fm_lab.paths import LearnedAccelerationPath, LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import (
@@ -220,24 +218,6 @@ def build_model(config: dict[str, Any], dim: int):
             activation=model_config.get("activation", "silu"),
             time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
             direction_eps=float(model_config.get("direction_eps", 1e-8)),
-        )
-    if name in {"vector_unet", "toy_unet", "coordinate_unet"}:
-        return VectorUNetVelocity(
-            dim=dim,
-            base_channels=int(model_config.get("base_channels", 64)),
-            time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
-            activation=model_config.get("activation", "silu"),
-            zero_init_head=bool(model_config.get("zero_init_head", True)),
-        )
-    if name in {"direction_speed_vector_unet", "direction_only_vector_unet"}:
-        return DirectionSpeedVectorUNet(
-            dim=dim,
-            base_channels=int(model_config.get("base_channels", 64)),
-            time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
-            activation=model_config.get("activation", "silu"),
-            direction_eps=float(model_config.get("direction_eps", 1e-8)),
-            direction_zero_init_head=bool(model_config.get("direction_zero_init_head", False)),
-            speed_zero_init_head=bool(model_config.get("speed_zero_init_head", True)),
         )
     if name in {"image_unet", "mnist_unet", "conv_unet"}:
         image_shape = tuple(int(value) for value in model_config.get("image_shape", [28, 28]))
