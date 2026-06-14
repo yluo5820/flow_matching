@@ -125,6 +125,29 @@ Read it as:
 - Sharp turns or tangled paths can indicate high curvature or solver stress.
 - This is qualitative; pair it with field and solver diagnostics.
 
+### `diagnostics/mnist_eval_*.json`
+
+Produced by `fm-lab-mnist-eval` for completed MNIST runs. Use it as a lightweight local
+gatekeeper before moving an idea to larger image datasets.
+
+Key sections:
+
+- `pixel_stats.generated`: generated pixel range, mean, standard deviation, and fraction
+  outside the configured image range. Large out-of-range fractions usually mean the field
+  has not mapped noise onto the image domain.
+- `moment_gaps`: per-pixel mean/std gaps between generated samples and MNIST reference
+  samples. Smaller is better, but this is not enough by itself.
+- `diversity`: pairwise generated-sample distances. Very low values can indicate collapse.
+- `nearest_neighbors`: L2 distance from generated samples to their nearest MNIST training
+  images. Use with `plots/mnist_nearest_neighbors_*.png`; very close copies can indicate
+  memorization, while huge distances usually mean off-manifold samples.
+- `classifier.generated`: recognizability and predicted digit diversity from the cached
+  MNIST classifier. Good local samples should have reasonable confidence, high normalized
+  digit entropy, and no single digit dominating the histogram.
+
+The classifier metrics use clipped generated samples; read them together with
+`pixel_stats.generated.frac_out_of_range`.
+
 ### `diagnostics/training_history.csv`
 
 Columns:

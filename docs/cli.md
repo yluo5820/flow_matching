@@ -41,6 +41,7 @@ When adding or changing a CLI:
 | `fm-lab-solver-sensitivity` | Compare generated samples across solvers/NFEs. | Checkpoint | pairwise distance CSVs, matrices |
 | `fm-lab-geometry` | Measure path geometry mismatch. | Geometry-capable YAML config | geometry CSV/JSON, time profile |
 | `fm-lab-compare-runs` | Compare completed runs with same source/target. | Training run directories | side-by-side samples, overlaid loss curves |
+| `fm-lab-mnist-eval` | Evaluate a completed MNIST image-generation run. | MNIST run directory | pixel/classifier/nearest-neighbor metrics, nearest-neighbor plot |
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
 
 ## `fm-lab-train`
@@ -248,6 +249,34 @@ run_dir/
   plots/generated_samples_nfe*.png
   plots/trajectories_*_nfe*.png
 ```
+
+## `fm-lab-mnist-eval`
+
+Evaluate a completed MNIST image-generation run. This is the local gatekeeper for image
+experiments: it checks pixel range/statistics, generated-sample diversity, nearest
+training images, and optional classifier recognizability/diversity.
+
+```bash
+fm-lab-mnist-eval \
+  --run-dir runs/mnist_image_unet_ot \
+  --solver auto \
+  --nfe 64 \
+  --max-samples 256 \
+  --reference-samples 2048 \
+  --device auto
+```
+
+Main outputs:
+
+```text
+run_dir/
+  diagnostics/mnist_eval_<solver>_nfe*.json
+  diagnostics/mnist_eval_<solver>_nfe*.csv
+  plots/mnist_nearest_neighbors_<solver>_nfe*.png
+```
+
+The first classifier run trains a small cached MNIST CNN under `artifacts/`; later runs
+reuse it. Use `--skip-classifier` for quick range/diversity/nearest-neighbor checks.
 
 ## `fm-lab-diagnostics`
 

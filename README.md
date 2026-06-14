@@ -68,6 +68,12 @@ Run the first controlled comparison from the research brief:
 .conda/fm_lab/bin/fm-lab-run-comparison --matrix configs/experiments/two_moons_indep_vs_ot.yaml
 ```
 
+Evaluate a completed local MNIST image run:
+
+```bash
+.conda/fm_lab/bin/fm-lab-mnist-eval --run-dir runs/mnist_image_unet_ot --solver auto --nfe 64 --device auto
+```
+
 Useful toy configs:
 
 ```text
