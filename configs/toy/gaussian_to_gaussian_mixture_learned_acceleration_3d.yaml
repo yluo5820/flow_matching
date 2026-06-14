@@ -19,7 +19,7 @@ coupling:
 
 path:
   name: learned_acceleration
-  basis: quadratic
+  basis: endpoint_bump
   hidden_dim: 128
   depth: 3
   activation: silu
@@ -38,7 +38,7 @@ objective:
     weight: 1.0e-2
     sample_size: 256
   interpolant_acceleration:
-    weight: 1.0e-3
+    weight: 1.0e-1
 
 training:
   batch_size: 512
@@ -47,10 +47,10 @@ training:
   log_every: 500
   time_sampling: uniform
   learned_acceleration:
-    warmup_steps: 5000
+    warmup_steps: 10000
     theta_steps: 1
     psi_steps: 1
-    psi_lr: 1.0e-4
+    psi_lr: 1.0e-5
   early_stopping:
     enabled: true
     warmup_steps: 10000
