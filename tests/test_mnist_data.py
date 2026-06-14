@@ -36,6 +36,25 @@ def test_mnist_images_supports_centered_normalization(tmp_path) -> None:
     assert target.metadata()["image_value_range"] == [-1.0, 1.0]
 
 
+def test_mnist_images_supports_dequantization(tmp_path) -> None:
+    _write_fake_mnist(tmp_path, split="train", count=2)
+    target = MNISTImages(
+        root=tmp_path,
+        train=True,
+        download=False,
+        normalize="minus_one_one",
+        dequantize=True,
+    )
+
+    first = target.sample(2)
+    second = target.sample(2)
+
+    assert torch.all(first >= -1.0)
+    assert torch.all(first <= 1.0)
+    assert not torch.allclose(first, second)
+    assert target.metadata()["dequantize"] is True
+
+
 def test_mnist_images_missing_files_fail_clearly(tmp_path) -> None:
     target = MNISTImages(root=tmp_path, train=True, download=False)
 

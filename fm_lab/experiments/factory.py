@@ -28,7 +28,7 @@ from fm_lab.data import (
     Torus,
     TwoMoons,
 )
-from fm_lab.models import DirectionSpeedMLP, MLPVelocity
+from fm_lab.models import DirectionSpeedMLP, ImageUNetVelocity, MLPVelocity
 from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import (
     EulerSolver,
@@ -74,6 +74,7 @@ def build_target(config: dict[str, Any]):
             train=bool(data_config.get("train", True)),
             download=bool(data_config.get("download", False)),
             normalize=str(data_config.get("normalize", "zero_one")),
+            dequantize=bool(data_config.get("dequantize", False)),
         )
     if name in {"concentric_circles", "circles"}:
         radii = tuple(float(value) for value in data_config.get("radii", [0.8, 1.6]))
@@ -202,6 +203,16 @@ def build_model(config: dict[str, Any], dim: int):
             activation=model_config.get("activation", "silu"),
             time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
             direction_eps=float(model_config.get("direction_eps", 1e-8)),
+        )
+    if name in {"image_unet", "mnist_unet", "conv_unet"}:
+        image_shape = tuple(int(value) for value in model_config.get("image_shape", [28, 28]))
+        return ImageUNetVelocity(
+            dim=dim,
+            image_shape=image_shape,
+            base_channels=int(model_config.get("base_channels", 32)),
+            time_embedding_dim=int(model_config.get("time_embedding_dim", 128)),
+            activation=model_config.get("activation", "silu"),
+            zero_init_head=bool(model_config.get("zero_init_head", True)),
         )
     raise ValueError(f"Unsupported model: {name}")
 

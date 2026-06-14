@@ -1,6 +1,6 @@
 import torch
 
-from fm_lab.models import DirectionSpeedMLP
+from fm_lab.models import DirectionSpeedMLP, ImageUNetVelocity
 
 
 def test_direction_speed_mlp_directions_are_unit_norm() -> None:
@@ -25,3 +25,18 @@ def test_direction_speed_mlp_velocity_is_parallel_to_direction() -> None:
 
     assert velocity.shape == (8, 3)
     assert torch.allclose(velocity, projection, atol=1e-5)
+
+
+def test_image_unet_velocity_preserves_flattened_image_shape() -> None:
+    model = ImageUNetVelocity(
+        dim=28 * 28,
+        image_shape=(28, 28),
+        base_channels=8,
+        time_embedding_dim=16,
+    )
+    x = torch.randn(4, 28 * 28)
+    t = torch.linspace(0.0, 1.0, 4)
+
+    velocity = model(x, t)
+
+    assert velocity.shape == x.shape

@@ -106,3 +106,19 @@ def test_mnist_config_builds_matching_components_without_loading_data() -> None:
     x = torch.zeros(2, 784)
     t = torch.zeros(2)
     assert model(x, t).shape == (2, 784)
+
+
+def test_mnist_image_unet_config_builds_matching_components_without_loading_data() -> None:
+    config = load_config("configs/mnist/mnist_image_unet_ot.yaml")
+
+    source = build_source(config)
+    target = build_target(config)
+    path = build_path(config)
+    model = build_model(config, dim=source.dim)
+
+    assert source.dim == 784
+    assert target.dim == 784
+    assert path.name == "linear"
+    x = torch.zeros(2, 784)
+    t = torch.zeros(2)
+    assert model(x, t).shape == (2, 784)

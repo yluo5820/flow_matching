@@ -38,18 +38,29 @@ class MNISTImages:
     train: bool = True
     download: bool = False
     normalize: str = "zero_one"
+    dequantize: bool = False
     name: str = "mnist"
     dim: int = 28 * 28
     image_shape: tuple[int, int] = (28, 28)
+    _raw_images: torch.Tensor | None = field(default=None, init=False, repr=False)
     _images: torch.Tensor | None = field(default=None, init=False, repr=False)
     _labels: torch.Tensor | None = field(default=None, init=False, repr=False)
 
     def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
         if n < 1:
             raise ValueError("MNISTImages.sample requires n >= 1.")
-        images = self.images
-        indices = torch.randint(0, images.shape[0], (n,))
-        samples = images[indices]
+        self._load()
+        assert self._images is not None
+        indices = torch.randint(0, self._images.shape[0], (n,))
+        if self.dequantize:
+            assert self._raw_images is not None
+            samples = _normalize_images(
+                self._raw_images[indices],
+                self.normalize,
+                dequantize=True,
+            )
+        else:
+            samples = self._images[indices]
         if device is not None:
             samples = samples.to(torch.device(device))
         return samples
@@ -65,6 +76,7 @@ class MNISTImages:
             "root": str(self.root),
             "train": self.train,
             "normalize": self.normalize,
+            "dequantize": self.dequantize,
             "image_shape": list(self.image_shape),
             "image_value_range": list(_image_value_range(self.normalize)),
             "n_images": int(self.images.shape[0]),
@@ -104,6 +116,7 @@ class MNISTImages:
             raise ValueError(
                 f"MNIST image/label count mismatch: {images.shape[0]} vs {labels.shape[0]}."
             )
+        self._raw_images = images
         self._images = _normalize_images(images, self.normalize)
         self._labels = labels
 
@@ -140,12 +153,22 @@ def _read_idx_labels(path: Path) -> torch.Tensor:
     return torch.from_numpy(data.astype(np.int64))
 
 
-def _normalize_images(images: torch.Tensor, normalize: str) -> torch.Tensor:
+def _normalize_images(
+    images: torch.Tensor,
+    normalize: str,
+    *,
+    dequantize: bool = False,
+) -> torch.Tensor:
+    if dequantize:
+        images = images + torch.rand_like(images)
+        denominator = 256.0
+    else:
+        denominator = 255.0
     normalized = normalize.lower()
     if normalized in {"zero_one", "01", "unit"}:
-        return images / 255.0
+        return images / denominator
     if normalized in {"minus_one_one", "-1_1", "centered"}:
-        return images / 127.5 - 1.0
+        return 2.0 * (images / denominator) - 1.0
     raise ValueError(f"Unsupported MNIST normalization: {normalize}")
 
 

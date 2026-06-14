@@ -74,11 +74,13 @@ Available 3D toy targets:
 ## Image Runs
 
 MNIST is represented as flattened 784D image vectors, with `image_shape` metadata used
-only for plotting. The first image-space config is:
+only for plotting. The recommended local check uses centered, dequantized pixels, a small
+image U-Net, and minibatch OT:
 
 | Target | Config | What it stresses |
 |---|---|---|
-| MNIST | `configs/mnist/mnist_linear_baseline.yaml` | High-dimensional image-space FM baseline with image-grid plots. |
+| MNIST image U-Net + OT | `configs/mnist/mnist_image_unet_ot.yaml` | Cost-effective image-space FM check with spatial inductive bias. |
+| MNIST flat MLP | `configs/mnist/mnist_linear_baseline.yaml` | Deliberately naive flattened-pixel baseline. |
 
 ## Training Outputs
 

@@ -1,7 +1,7 @@
 experiment:
-  name: mnist_linear_baseline
+  name: mnist_image_unet_ot
   seed: 0
-  output_dir: runs/mnist_linear_baseline
+  output_dir: runs/mnist_image_unet_ot
 
 data:
   name: mnist
@@ -17,29 +17,31 @@ source:
   std: 1.0
 
 coupling:
-  name: independent
+  name: minibatch_ot
+  max_exact_size: 128
 
 path:
   name: linear
 
 model:
-  name: mlp
-  hidden_dim: 512
-  depth: 4
+  name: image_unet
+  image_shape: [28, 28]
+  base_channels: 32
   activation: silu
   time_embedding_dim: 128
+  zero_init_head: true
 
 training:
-  batch_size: 256
-  steps: 50000
-  lr: 1.0e-4
+  batch_size: 128
+  steps: 100000
+  lr: 2.0e-4
   log_every: 500
   time_sampling: uniform
   early_stopping:
     enabled: true
-    warmup_steps: 10000
-    patience_steps: 5000
-    min_delta: 1.0e-3
+    warmup_steps: 20000
+    patience_steps: 10000
+    min_delta: 5.0e-4
     ema_alpha: 0.3
 
 solvers:
