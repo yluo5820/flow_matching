@@ -79,6 +79,11 @@ def run_field_diagnostics(
     model.load_state_dict(payload["model_state_dict"])
     model.to(device)
     model.eval()
+    if isinstance(path, torch.nn.Module):
+        if "path_state_dict" in payload:
+            path.load_state_dict(payload["path_state_dict"])
+        path.to(device)
+        path.eval()
     ambiguity_config = config.get("diagnostics", {}).get("ambiguity", {})
     t_values = [float(value) for value in ambiguity_config.get("t_values", [0.25, 0.5, 0.75])]
 

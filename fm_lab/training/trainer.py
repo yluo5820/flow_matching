@@ -45,6 +45,8 @@ def train_flow_matching(
         raise ValueError(f"Source dim {source.dim} does not match target dim {target.dim}.")
 
     model.to(device)
+    if isinstance(path, nn.Module):
+        path.to(device)
     training_config = config.get("training", {})
     batch_size = int(training_config.get("batch_size", 1024))
     steps = int(training_config.get("steps", 10_000))
@@ -54,31 +56,82 @@ def train_flow_matching(
     objective = build_objective(config.get("objective", {}))
     _validate_training_compatibility(objective, coupling, path, model)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    trainable_path = _is_trainable_path(path)
+    theta_optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    psi_optimizer: torch.optim.Optimizer | None = None
+    learned_acceleration_schedule: _LearnedAccelerationSchedule | None = None
+    if trainable_path:
+        _validate_trainable_path_objective(objective)
+        learned_acceleration_schedule = _build_learned_acceleration_schedule(
+            training_config.get("learned_acceleration", {}),
+            default_psi_lr=lr,
+        )
+        psi_optimizer = torch.optim.AdamW(
+            _path_parameters(path),
+            lr=learned_acceleration_schedule.psi_lr,
+        )
     history: list[dict[str, float | int]] = []
 
     final_step = 0
     progress = trange(1, steps + 1, desc="training", dynamic_ncols=True)
     for step in progress:
         final_step = step
-        x0 = source.sample(batch_size, device=device)
-        x1 = target.sample(batch_size, device=device)
-        x0, x1 = coupling.pair(x0, x1)
-        t = sample_uniform_time(batch_size, device)
         should_log = step == 1 or step % log_every == 0 or step == steps
 
-        loss, loss_metrics = objective(
-            model=model,
-            path=path,
-            x0=x0,
-            x1=x1,
-            t=t,
-            compute_diagnostics=should_log,
-        )
+        if trainable_path:
+            assert psi_optimizer is not None
+            assert learned_acceleration_schedule is not None
+            _train_learned_acceleration_step(
+                objective=objective,
+                model=model,
+                path=path,
+                source=source,
+                target=target,
+                coupling=coupling,
+                batch_size=batch_size,
+                device=device,
+                step=step,
+                theta_optimizer=theta_optimizer,
+                psi_optimizer=psi_optimizer,
+                schedule=learned_acceleration_schedule,
+            )
+            loss_metrics = {}
+            if should_log:
+                x0, x1, t = _sample_training_batch(
+                    source=source,
+                    target=target,
+                    coupling=coupling,
+                    batch_size=batch_size,
+                    device=device,
+                )
+                _, loss_metrics = objective(
+                    model=model,
+                    path=path,
+                    x0=x0,
+                    x1=x1,
+                    t=t,
+                    compute_diagnostics=True,
+                )
+        else:
+            x0, x1, t = _sample_training_batch(
+                source=source,
+                target=target,
+                coupling=coupling,
+                batch_size=batch_size,
+                device=device,
+            )
+            loss, loss_metrics = objective(
+                model=model,
+                path=path,
+                x0=x0,
+                x1=x1,
+                t=t,
+                compute_diagnostics=should_log,
+            )
 
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+            theta_optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            theta_optimizer.step()
 
         if should_log:
             record = {"step": step, **loss_metrics}
@@ -97,6 +150,7 @@ def train_flow_matching(
         "source": source.metadata(),
         "coupling": getattr(coupling, "name", coupling.__class__.__name__),
         "path": getattr(path, "name", path.__class__.__name__),
+        "path_metadata": path.metadata() if hasattr(path, "metadata") else {},
         "objective": objective.metadata(),
         "device": str(device),
     }
@@ -106,7 +160,12 @@ def train_flow_matching(
     save_checkpoint(
         run_dir / "checkpoint.pt",
         model=model,
-        optimizer=optimizer,
+        optimizer=(
+            {"theta": theta_optimizer, "psi": psi_optimizer}
+            if psi_optimizer is not None
+            else theta_optimizer
+        ),
+        path_module=path if isinstance(path, nn.Module) else None,
         step=final_step,
         config=config,
         metrics=metrics,
@@ -124,6 +183,79 @@ def train_flow_matching(
     metrics["sampling"] = sample_artifacts
     write_json(metrics, run_dir / "metrics.json")
     return metrics
+
+
+@dataclass(frozen=True)
+class _LearnedAccelerationSchedule:
+    warmup_steps: int = 5000
+    theta_steps: int = 1
+    psi_steps: int = 1
+    psi_lr: float = 1e-4
+
+
+def _train_learned_acceleration_step(
+    *,
+    objective: Any,
+    model: nn.Module,
+    path: FlowPath,
+    source: SourceDistribution,
+    target: TargetDistribution,
+    coupling: Coupling,
+    batch_size: int,
+    device: torch.device,
+    step: int,
+    theta_optimizer: torch.optim.Optimizer,
+    psi_optimizer: torch.optim.Optimizer,
+    schedule: _LearnedAccelerationSchedule,
+) -> None:
+    model.train()
+    if isinstance(path, nn.Module):
+        path.train()
+
+    for _ in range(schedule.theta_steps):
+        x0, x1, t = _sample_training_batch(
+            source=source,
+            target=target,
+            coupling=coupling,
+            batch_size=batch_size,
+            device=device,
+        )
+        loss, _ = objective.theta_update_loss(model=model, path=path, x0=x0, x1=x1, t=t)
+        theta_optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        theta_optimizer.step()
+
+    if step <= schedule.warmup_steps:
+        return
+
+    for _ in range(schedule.psi_steps):
+        x0, x1, t = _sample_training_batch(
+            source=source,
+            target=target,
+            coupling=coupling,
+            batch_size=batch_size,
+            device=device,
+        )
+        psi_optimizer.zero_grad(set_to_none=True)
+        with _frozen_parameters(model):
+            loss, _ = objective.psi_update_loss(model=model, path=path, x0=x0, x1=x1, t=t)
+        loss.backward()
+        psi_optimizer.step()
+
+
+def _sample_training_batch(
+    *,
+    source: SourceDistribution,
+    target: TargetDistribution,
+    coupling: Coupling,
+    batch_size: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    x0 = source.sample(batch_size, device=device)
+    x1 = target.sample(batch_size, device=device)
+    x0, x1 = coupling.pair(x0, x1)
+    t = sample_uniform_time(batch_size, device)
+    return x0, x1, t
 
 
 @torch.no_grad()
@@ -258,6 +390,28 @@ def _validate_training_compatibility(
         raise ValueError("direction_only_straight requires a source-label-conditioned model.")
 
 
+def _validate_trainable_path_objective(objective: Any) -> None:
+    required = ("theta_update_loss", "psi_update_loss")
+    if not all(hasattr(objective, name) for name in required):
+        raise ValueError("Trainable paths require the flow_matching objective in v1.")
+    if float(getattr(objective, "straightness_weight", 0.0)) <= 0:
+        raise ValueError(
+            "Trainable learned-acceleration paths require objective.straightness.weight > 0."
+        )
+
+
+def _is_trainable_path(path: FlowPath) -> bool:
+    return isinstance(path, nn.Module) and any(
+        parameter.requires_grad for parameter in path.parameters()
+    )
+
+
+def _path_parameters(path: FlowPath) -> list[nn.Parameter]:
+    if not isinstance(path, nn.Module):
+        return []
+    return [parameter for parameter in path.parameters() if parameter.requires_grad]
+
+
 def _requires_source_label(model: nn.Module) -> bool:
     return bool(getattr(model, "requires_source_label", False))
 
@@ -322,6 +476,19 @@ def _temporary_torch_seed(seed: int | None, device: torch.device) -> Iterator[No
         if device.type == "cuda":
             torch.cuda.manual_seed_all(seed)
         yield
+
+
+@contextmanager
+def _frozen_parameters(module: nn.Module) -> Iterator[None]:
+    parameters = list(module.parameters())
+    previous = [parameter.requires_grad for parameter in parameters]
+    for parameter in parameters:
+        parameter.requires_grad_(False)
+    try:
+        yield
+    finally:
+        for parameter, requires_grad in zip(parameters, previous, strict=True):
+            parameter.requires_grad_(requires_grad)
 
 
 def _write_history(history: list[dict[str, float | int]], path: Path) -> None:
@@ -412,4 +579,29 @@ def _build_early_stopping(config: dict[str, Any]) -> _EarlyStopping:
         min_delta=min_delta,
         warmup_steps=warmup_steps,
         ema_alpha=ema_alpha,
+    )
+
+
+def _build_learned_acceleration_schedule(
+    config: dict[str, Any],
+    *,
+    default_psi_lr: float,
+) -> _LearnedAccelerationSchedule:
+    warmup_steps = int(config.get("warmup_steps", 5000))
+    theta_steps = int(config.get("theta_steps", 1))
+    psi_steps = int(config.get("psi_steps", 1))
+    psi_lr = float(config.get("psi_lr", default_psi_lr))
+    if warmup_steps < 0:
+        raise ValueError("training.learned_acceleration.warmup_steps must be non-negative.")
+    if theta_steps < 1:
+        raise ValueError("training.learned_acceleration.theta_steps must be positive.")
+    if psi_steps < 1:
+        raise ValueError("training.learned_acceleration.psi_steps must be positive.")
+    if psi_lr <= 0:
+        raise ValueError("training.learned_acceleration.psi_lr must be positive.")
+    return _LearnedAccelerationSchedule(
+        warmup_steps=warmup_steps,
+        theta_steps=theta_steps,
+        psi_steps=psi_steps,
+        psi_lr=psi_lr,
     )

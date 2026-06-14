@@ -29,7 +29,7 @@ from fm_lab.data import (
     TwoMoons,
 )
 from fm_lab.models import DirectionSpeedMLP, ImageUNetVelocity, MLPVelocity
-from fm_lab.paths import LinearPath, SphericalPath, TangentNormalPath
+from fm_lab.paths import LearnedAccelerationPath, LinearPath, SphericalPath, TangentNormalPath
 from fm_lab.solvers import (
     EulerSolver,
     HeunSolver,
@@ -174,6 +174,16 @@ def build_path(config: dict[str, Any]):
     name = path_config.get("name", "linear").lower()
     if name in {"linear", "rectified"}:
         return LinearPath()
+    if name in {"learned_acceleration", "acceleration", "quadratic_acceleration"}:
+        source_dim = int(config.get("source", {}).get("dim", config.get("data", {}).get("dim", 2)))
+        return LearnedAccelerationPath(
+            dim=source_dim,
+            basis=str(path_config.get("basis", "quadratic")),
+            hidden_dim=int(path_config.get("hidden_dim", 128)),
+            depth=int(path_config.get("depth", 3)),
+            activation=str(path_config.get("activation", "silu")),
+            eps=float(path_config.get("eps", 1e-8)),
+        )
     if name == "spherical":
         return SphericalPath(
             eps=float(path_config.get("eps", 1e-6)),

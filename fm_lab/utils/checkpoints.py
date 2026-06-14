@@ -13,7 +13,8 @@ def save_checkpoint(
     path: str | Path,
     *,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer | None,
+    optimizer: torch.optim.Optimizer | dict[str, torch.optim.Optimizer | None] | None,
+    path_module: nn.Module | None = None,
     step: int,
     config: dict[str, Any],
     metrics: dict[str, Any],
@@ -29,7 +30,16 @@ def save_checkpoint(
         "metrics": metrics,
     }
     if optimizer is not None:
-        payload["optimizer_state_dict"] = optimizer.state_dict()
+        if isinstance(optimizer, dict):
+            payload["optimizer_state_dict"] = {
+                name: value.state_dict()
+                for name, value in optimizer.items()
+                if value is not None
+            }
+        else:
+            payload["optimizer_state_dict"] = optimizer.state_dict()
+    if path_module is not None:
+        payload["path_state_dict"] = path_module.state_dict()
     torch.save(payload, output_path)
 
 

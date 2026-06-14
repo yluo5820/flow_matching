@@ -55,6 +55,7 @@ class FlowMatchingObjective:
     loss: str = "mse"
     straightness_weight: float = 0.0
     straightness_sample_size: int | None = None
+    interpolant_acceleration_weight: float = 0.0
     name: str = "flow_matching"
 
     def __call__(
@@ -67,31 +68,69 @@ class FlowMatchingObjective:
         t: torch.Tensor,
         compute_diagnostics: bool = True,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        del compute_diagnostics
-        xt = path.sample_xt(x0, x1, t)
-        target_velocity = path.target_velocity(x0, x1, t)
-        predicted_velocity = model(xt, t)
-        matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
-        total_loss = matching_loss
-        metrics = {
-            "loss": float(total_loss.detach().cpu()),
-            "flow_matching_loss": float(matching_loss.detach().cpu()),
-        }
+        return self._loss(
+            model=model,
+            path=path,
+            x0=x0,
+            x1=x1,
+            t=t,
+            compute_diagnostics=compute_diagnostics,
+            include_flow_matching=True,
+            include_straightness=True,
+            include_interpolant_acceleration=True,
+            detach_path=False,
+            straightness_detach_inputs=True,
+        )
 
-        if self.straightness_weight > 0:
-            straightness = learned_flow_straightness_loss(
-                model=model,
-                x=xt,
-                t=t,
-                sample_size=self.straightness_sample_size,
-            )
-            weighted_straightness = self.straightness_weight * straightness
-            total_loss = total_loss + weighted_straightness
-            metrics["loss"] = float(total_loss.detach().cpu())
-            metrics["straightness_loss"] = float(straightness.detach().cpu())
-            metrics["straightness_weighted"] = float(weighted_straightness.detach().cpu())
+    def theta_update_loss(
+        self,
+        *,
+        model: torch.nn.Module,
+        path: FlowPath,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Loss for updating the Eulerian velocity model while freezing the path."""
 
-        return total_loss, metrics
+        return self._loss(
+            model=model,
+            path=path,
+            x0=x0,
+            x1=x1,
+            t=t,
+            compute_diagnostics=False,
+            include_flow_matching=True,
+            include_straightness=True,
+            include_interpolant_acceleration=False,
+            detach_path=True,
+            straightness_detach_inputs=True,
+        )
+
+    def psi_update_loss(
+        self,
+        *,
+        model: torch.nn.Module,
+        path: FlowPath,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Loss for updating the learned interpolant while treating the model as fixed."""
+
+        return self._loss(
+            model=model,
+            path=path,
+            x0=x0,
+            x1=x1,
+            t=t,
+            compute_diagnostics=False,
+            include_flow_matching=False,
+            include_straightness=True,
+            include_interpolant_acceleration=True,
+            detach_path=False,
+            straightness_detach_inputs=False,
+        )
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -101,7 +140,66 @@ class FlowMatchingObjective:
                 "weight": self.straightness_weight,
                 "sample_size": self.straightness_sample_size,
             },
+            "interpolant_acceleration": {
+                "weight": self.interpolant_acceleration_weight,
+            },
         }
+
+    def _loss(
+        self,
+        *,
+        model: torch.nn.Module,
+        path: FlowPath,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+        compute_diagnostics: bool,
+        include_flow_matching: bool,
+        include_straightness: bool,
+        include_interpolant_acceleration: bool,
+        detach_path: bool,
+        straightness_detach_inputs: bool,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        xt = path.sample_xt(x0, x1, t)
+        target_velocity = path.target_velocity(x0, x1, t)
+        if detach_path:
+            xt = xt.detach()
+            target_velocity = target_velocity.detach()
+
+        total_loss = x0.new_tensor(0.0)
+        metrics: dict[str, float] = {}
+        if include_flow_matching:
+            predicted_velocity = model(xt, t)
+            matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
+            total_loss = total_loss + matching_loss
+            metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
+
+        if include_straightness and self.straightness_weight > 0:
+            straightness = learned_flow_straightness_loss(
+                model=model,
+                x=xt,
+                t=t,
+                sample_size=self.straightness_sample_size,
+                detach_inputs=straightness_detach_inputs,
+            )
+            weighted_straightness = self.straightness_weight * straightness
+            total_loss = total_loss + weighted_straightness
+            metrics["straightness_loss"] = float(straightness.detach().cpu())
+            metrics["straightness_weighted"] = float(weighted_straightness.detach().cpu())
+
+        if include_interpolant_acceleration and self.interpolant_acceleration_weight > 0:
+            acceleration = _interpolant_acceleration_loss(path=path, x0=x0, x1=x1)
+            weighted_acceleration = self.interpolant_acceleration_weight * acceleration
+            total_loss = total_loss + weighted_acceleration
+            metrics["interpolant_acceleration_loss"] = float(acceleration.detach().cpu())
+            metrics["interpolant_acceleration_weighted"] = float(
+                weighted_acceleration.detach().cpu()
+            )
+
+        metrics["loss"] = float(total_loss.detach().cpu())
+        if compute_diagnostics and hasattr(path, "diagnostics"):
+            metrics.update(path.diagnostics(x0=x0, x1=x1, t=t))
+        return total_loss, metrics
 
 
 @dataclass
@@ -185,6 +283,7 @@ def learned_flow_straightness_loss(
     x: torch.Tensor,
     t: torch.Tensor,
     sample_size: int | None = None,
+    detach_inputs: bool = True,
 ) -> torch.Tensor:
     """Penalize learned material acceleration: d_t v + J_x v · v."""
 
@@ -193,7 +292,7 @@ def learned_flow_straightness_loss(
         x = x[indices]
         t = t[indices]
 
-    x_reg = x.detach().requires_grad_(True)
+    x_reg = x.detach().requires_grad_(True) if detach_inputs else x.requires_grad_(True)
     t_reg = t.detach().requires_grad_(True)
     velocity = model(x_reg, t_reg)
     residual_components = []
@@ -245,10 +344,16 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
         if straightness_sample_size < 1:
             raise ValueError("objective.straightness.sample_size must be positive.")
 
+    interpolant_acceleration_config = config.get("interpolant_acceleration", {})
+    interpolant_acceleration_weight = float(interpolant_acceleration_config.get("weight", 0.0))
+    if interpolant_acceleration_weight < 0:
+        raise ValueError("objective.interpolant_acceleration.weight must be non-negative.")
+
     return FlowMatchingObjective(
         loss=str(config.get("loss", "mse")).lower(),
         straightness_weight=straightness_weight,
         straightness_sample_size=straightness_sample_size,
+        interpolant_acceleration_weight=interpolant_acceleration_weight,
         name=name,
     )
 
@@ -261,6 +366,20 @@ def _velocity_loss(
     if loss == "mse":
         return F.mse_loss(predicted_velocity, target_velocity)
     raise ValueError(f"Unsupported velocity loss: {loss}")
+
+
+def _interpolant_acceleration_loss(
+    *,
+    path: FlowPath,
+    x0: torch.Tensor,
+    x1: torch.Tensor,
+) -> torch.Tensor:
+    if not hasattr(path, "acceleration_penalty"):
+        raise ValueError(
+            "objective.interpolant_acceleration.weight requires a path with "
+            "acceleration_penalty, such as path.name: learned_acceleration."
+        )
+    return path.acceleration_penalty(x0, x1)
 
 
 def _mean_stat(values: torch.Tensor) -> float:
