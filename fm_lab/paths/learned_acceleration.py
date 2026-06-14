@@ -53,31 +53,43 @@ class LearnedAccelerationPath(nn.Module):
         if depth < 1:
             raise ValueError("LearnedAccelerationPath depth must be positive.")
         basis = basis.lower()
-        if basis not in {"quadratic", "endpoint_bump"}:
+        basis = _normalize_basis_name(basis)
+        if basis not in {"quadratic", "endpoint_bump", "factorized_polynomial"}:
             raise ValueError(
-                "LearnedAccelerationPath basis must be 'quadratic' or 'endpoint_bump'."
+                "LearnedAccelerationPath basis must be 'quadratic', 'endpoint_bump', "
+                "or 'factorized_polynomial'."
             )
 
         self.dim = dim
         self.basis = basis
         self.eps = eps
+        self.n_coefficients = 3 if basis == "factorized_polynomial" else 1
 
         layers: list[nn.Module] = []
         input_dim = 2 * dim
         for layer_idx in range(depth):
             layers.append(nn.Linear(input_dim if layer_idx == 0 else hidden_dim, hidden_dim))
             layers.append(_activation(activation))
-        output = nn.Linear(hidden_dim, dim)
+        output = nn.Linear(hidden_dim, self.n_coefficients * dim)
         nn.init.zeros_(output.weight)
         nn.init.zeros_(output.bias)
         layers.append(output)
         self.net = nn.Sequential(*layers)
 
-    def acceleration(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
-        """Return the pair-dependent learned acceleration mode `A_psi`."""
+    def coefficients(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
+        """Return learned correction coefficients with shape `(batch, terms, dim)`."""
 
         delta = x1 - x0
-        return self.net(torch.cat([x0, delta], dim=1))
+        raw_coefficients = self.net(torch.cat([x0, delta], dim=1))
+        return raw_coefficients.reshape(x0.shape[0], self.n_coefficients, self.dim)
+
+    def acceleration(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
+        """Return learned correction coefficients, flattened for multi-term bases."""
+
+        coefficients = self.coefficients(x0, x1)
+        if self.n_coefficients == 1:
+            return coefficients[:, 0, :]
+        return coefficients.flatten(start_dim=1)
 
     def sample_xt(
         self,
@@ -90,7 +102,8 @@ class LearnedAccelerationPath(nn.Module):
         t_expanded = expand_time(t, x0)
         basis = self._basis(t_expanded)
         delta = x1 - x0
-        return x0 + t_expanded * delta + basis.h * self.acceleration(x0, x1)
+        correction = _combine_basis(basis.h, self.coefficients(x0, x1))
+        return x0 + t_expanded * delta + correction
 
     def target_velocity(
         self,
@@ -103,7 +116,8 @@ class LearnedAccelerationPath(nn.Module):
         t_expanded = expand_time(t, x0)
         basis = self._basis(t_expanded)
         delta = x1 - x0
-        return delta + basis.dh * self.acceleration(x0, x1)
+        correction_velocity = _combine_basis(basis.dh, self.coefficients(x0, x1))
+        return delta + correction_velocity
 
     def conditional_acceleration(
         self,
@@ -115,12 +129,12 @@ class LearnedAccelerationPath(nn.Module):
 
         t_expanded = expand_time(t, x0)
         basis = self._basis(t_expanded)
-        return basis.d2h * self.acceleration(x0, x1)
+        return _combine_basis(basis.d2h, self.coefficients(x0, x1))
 
     def acceleration_penalty(self, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """Return `E ||A_psi(x0, x1)||^2`."""
 
-        return self.acceleration(x0, x1).square().sum(dim=1).mean()
+        return self.coefficients(x0, x1).square().sum(dim=(1, 2)).mean()
 
     def diagnostics(
         self,
@@ -134,12 +148,12 @@ class LearnedAccelerationPath(nn.Module):
             t_expanded = expand_time(t, x0)
             basis = self._basis(t_expanded)
             delta = x1 - x0
-            acceleration = self.acceleration(x0, x1)
-            correction = basis.h * acceleration
-            target_velocity = delta + basis.dh * acceleration
-            conditional_acceleration = basis.d2h * acceleration
+            coefficients = self.coefficients(x0, x1)
+            correction = _combine_basis(basis.h, coefficients)
+            target_velocity = delta + _combine_basis(basis.dh, coefficients)
+            conditional_acceleration = _combine_basis(basis.d2h, coefficients)
             delta_norm = delta.norm(dim=1)
-            acceleration_norm = acceleration.norm(dim=1)
+            coefficient_norm = coefficients.flatten(start_dim=1).norm(dim=1)
             correction_norm = correction.norm(dim=1)
             target_velocity_norm = target_velocity.norm(dim=1)
             conditional_acceleration_norm = conditional_acceleration.norm(dim=1)
@@ -150,12 +164,14 @@ class LearnedAccelerationPath(nn.Module):
                 (self.sample_xt(x0, x1, t0) - x0).norm(dim=1),
                 (self.sample_xt(x0, x1, t1) - x1).norm(dim=1),
             )
-            relative_acceleration = acceleration_norm / (delta_norm + self.eps)
+            relative_acceleration = coefficient_norm / (delta_norm + self.eps)
             relative_deviation = correction_norm / (delta_norm + self.eps)
 
             return {
-                "interpolant_acceleration_norm_mean": _mean(acceleration_norm),
-                "interpolant_acceleration_norm_p90": _quantile(acceleration_norm, 0.90),
+                "interpolant_acceleration_norm_mean": _mean(coefficient_norm),
+                "interpolant_acceleration_norm_p90": _quantile(coefficient_norm, 0.90),
+                "interpolant_coefficient_norm_mean": _mean(coefficient_norm),
+                "interpolant_coefficient_norm_p90": _quantile(coefficient_norm, 0.90),
                 "interpolant_relative_acceleration_mean": _mean(relative_acceleration),
                 "interpolant_relative_acceleration_p90": _quantile(
                     relative_acceleration,
@@ -181,23 +197,68 @@ class LearnedAccelerationPath(nn.Module):
             "name": self.name,
             "basis": self.basis,
             "dim": self.dim,
+            "n_coefficients": self.n_coefficients,
             "eps": self.eps,
         }
 
     def _basis(self, t: torch.Tensor) -> _BasisValues:
         if self.basis == "quadratic":
             return _BasisValues(
-                h=t * (1.0 - t),
-                dh=1.0 - 2.0 * t,
-                d2h=torch.full_like(t, -2.0),
+                h=(t * (1.0 - t))[:, None, :],
+                dh=(1.0 - 2.0 * t)[:, None, :],
+                d2h=torch.full_like(t, -2.0)[:, None, :],
             )
         if self.basis == "endpoint_bump":
             return _BasisValues(
-                h=t.square() * (1.0 - t).square(),
-                dh=2.0 * t * (1.0 - t) * (1.0 - 2.0 * t),
-                d2h=2.0 - 12.0 * t + 12.0 * t.square(),
+                h=(t.square() * (1.0 - t).square())[:, None, :],
+                dh=(2.0 * t * (1.0 - t) * (1.0 - 2.0 * t))[:, None, :],
+                d2h=(2.0 - 12.0 * t + 12.0 * t.square())[:, None, :],
+            )
+        if self.basis == "factorized_polynomial":
+            return _BasisValues(
+                h=torch.stack(
+                    (
+                        t * (1.0 - t),
+                        t.square() * (1.0 - t),
+                        t.pow(3) * (1.0 - t),
+                    ),
+                    dim=1,
+                ),
+                dh=torch.stack(
+                    (
+                        1.0 - 2.0 * t,
+                        2.0 * t - 3.0 * t.square(),
+                        3.0 * t.square() - 4.0 * t.pow(3),
+                    ),
+                    dim=1,
+                ),
+                d2h=torch.stack(
+                    (
+                        torch.full_like(t, -2.0),
+                        2.0 - 6.0 * t,
+                        6.0 * t - 12.0 * t.square(),
+                    ),
+                    dim=1,
+                ),
             )
         raise ValueError(f"Unsupported learned acceleration basis: {self.basis}")
+
+
+def _combine_basis(weights: torch.Tensor, coefficients: torch.Tensor) -> torch.Tensor:
+    return (weights * coefficients).sum(dim=1)
+
+
+def _normalize_basis_name(name: str) -> str:
+    normalized = name.lower()
+    aliases = {
+        "full": "factorized_polynomial",
+        "full_polynomial": "factorized_polynomial",
+        "polynomial": "factorized_polynomial",
+        "quartic": "factorized_polynomial",
+        "t_factorized": "factorized_polynomial",
+        "t_factorized_polynomial": "factorized_polynomial",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _mean(values: torch.Tensor) -> float:

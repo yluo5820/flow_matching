@@ -316,6 +316,28 @@ Use this config to decide whether the K=1 failure was a proxy-optimization issue
 increasing the polynomial/interpolant capacity. It is intended for low-dimensional toy
 runs, not MNIST or CIFAR-style image experiments.
 
+For the full factorized polynomial fallback, use:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_factorized_polynomial_3d.yaml \
+  --steps 50000 \
+  --n-samples 8192 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --device auto
+```
+
+This uses the endpoint-constrained correction:
+
+```text
+I(t) = x0 + t(x1 - x0) + t(1 - t) [B0(x0,x1) + t B1(x0,x1) + t^2 B2(x0,x1)]
+```
+
+The correction vanishes at both endpoints, but unlike `endpoint_bump`, endpoint
+velocities are not constrained to match the linear path. This is intentionally more
+flexible for the last low-order learned-interpolant test.
+
 Early stopping is configured in YAML under `training.early_stopping`:
 
 ```yaml

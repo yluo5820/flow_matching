@@ -97,6 +97,11 @@ def test_3d_learned_acceleration_configs_build_matching_components() -> None:
     config_paths = (
         "configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d.yaml",
+        (
+            "configs/toy/"
+            "gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_"
+            "factorized_polynomial_3d.yaml"
+        ),
     )
 
     for config_path in config_paths:

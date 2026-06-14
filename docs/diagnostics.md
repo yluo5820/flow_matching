@@ -67,6 +67,7 @@ Available 3D toy targets:
 | 3D Gaussian mixture with direction-only flow | `configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml` | Label-conditioned straight-line direction stress test. |
 | 3D Gaussian mixture with learned acceleration path | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml` | Low-order pair-dependent interpolant straightening. |
 | 3D Gaussian mixture with kernel-v* learned acceleration | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d.yaml` | Tests whether K=1 learned interpolants failed from proxy optimization. |
+| 3D Gaussian mixture with full factorized polynomial path | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_factorized_polynomial_3d.yaml` | Last low-order capacity test with three endpoint-vanishing correction coefficients. |
 | Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
 | Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
 | Multi torus | `configs/toy/gaussian_to_multi_torus_linear_3d.yaml` | Multiple disconnected topological components. |
@@ -170,8 +171,9 @@ Columns:
 | `kernel_vstar_query_size`, `kernel_vstar_estimator_size` | Actual query and auxiliary pool sizes used after clipping to batch size. |
 | `interpolant_acceleration_loss` | Raw `E ||A_psi(x0,x1)||^2` penalty for learned acceleration paths. |
 | `interpolant_acceleration_weighted` | Weighted acceleration penalty added to the total loss. |
-| `interpolant_acceleration_norm_mean/p90` | Norm of the learned pair acceleration mode `A_psi`. |
-| `interpolant_relative_acceleration_mean/p90` | `||A_psi|| / (||x1-x0|| + eps)`; large values suggest path cheating. |
+| `interpolant_acceleration_norm_mean/p90` | Norm of the learned path coefficient vector. For one-term bases this is `||A_psi||`; for `factorized_polynomial` it is the combined norm of `[B0,B1,B2]`. |
+| `interpolant_coefficient_norm_mean/p90` | Same coefficient norm under an explicit name for multi-term learned paths. |
+| `interpolant_relative_acceleration_mean/p90` | Coefficient norm divided by `||x1-x0|| + eps`; large values suggest path cheating. |
 | `interpolant_path_deviation_mean/p90` | Norm of the actual mid-path correction `h(t) A_psi`. |
 | `interpolant_relative_deviation_mean/p90` | Path correction size relative to endpoint displacement. |
 | `interpolant_target_velocity_norm_mean/p90` | Norm of the learned interpolant target velocity. |

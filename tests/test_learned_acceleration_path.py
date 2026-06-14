@@ -12,6 +12,12 @@ class TimeScaledVelocity(nn.Module):
 
 def test_zero_initialized_learned_acceleration_matches_linear_path() -> None:
     path = LearnedAccelerationPath(dim=2, hidden_dim=8, depth=1)
+    polynomial_path = LearnedAccelerationPath(
+        dim=2,
+        basis="factorized_polynomial",
+        hidden_dim=8,
+        depth=1,
+    )
     linear = LinearPath()
     x0 = torch.tensor([[0.0, 1.0], [2.0, 3.0]])
     x1 = torch.tensor([[2.0, 5.0], [4.0, 7.0]])
@@ -19,6 +25,11 @@ def test_zero_initialized_learned_acceleration_matches_linear_path() -> None:
 
     assert torch.allclose(path.sample_xt(x0, x1, t), linear.sample_xt(x0, x1, t))
     assert torch.allclose(path.target_velocity(x0, x1, t), linear.target_velocity(x0, x1, t))
+    assert torch.allclose(polynomial_path.sample_xt(x0, x1, t), linear.sample_xt(x0, x1, t))
+    assert torch.allclose(
+        polynomial_path.target_velocity(x0, x1, t),
+        linear.target_velocity(x0, x1, t),
+    )
 
 
 def test_quadratic_learned_acceleration_formula_and_endpoints() -> None:
@@ -51,6 +62,37 @@ def test_endpoint_bump_formula_preserves_endpoint_velocities() -> None:
     assert torch.allclose(
         path.conditional_acceleration(x0, x1, t),
         torch.tensor([[-0.25, 0.5]]),
+    )
+
+
+def test_factorized_polynomial_formula_and_endpoints() -> None:
+    path = LearnedAccelerationPath(
+        dim=2,
+        basis="factorized_polynomial",
+        hidden_dim=8,
+        depth=1,
+    )
+    _set_constant_coefficients(
+        path,
+        torch.tensor(
+            [
+                [1.0, -2.0],
+                [0.5, 1.0],
+                [-1.0, 0.25],
+            ]
+        ),
+    )
+    x0 = torch.tensor([[0.0, 0.0]])
+    x1 = torch.tensor([[2.0, 4.0]])
+    t = torch.tensor([0.25])
+
+    assert torch.allclose(path.sample_xt(x0, x1, torch.tensor([0.0])), x0)
+    assert torch.allclose(path.sample_xt(x0, x1, torch.tensor([1.0])), x1)
+    assert torch.allclose(path.sample_xt(x0, x1, t), torch.tensor([[0.69921875, 0.6748047]]))
+    assert torch.allclose(path.target_velocity(x0, x1, t), torch.tensor([[2.53125, 3.34375]]))
+    assert torch.allclose(
+        path.conditional_acceleration(x0, x1, t),
+        torch.tensor([[-2.5, 4.6875]]),
     )
 
 
@@ -138,3 +180,11 @@ def _set_constant_acceleration(path: LearnedAccelerationPath, value: torch.Tenso
     with torch.no_grad():
         output.weight.zero_()
         output.bias.copy_(value)
+
+
+def _set_constant_coefficients(path: LearnedAccelerationPath, values: torch.Tensor) -> None:
+    output = path.net[-1]
+    assert isinstance(output, nn.Linear)
+    with torch.no_grad():
+        output.weight.zero_()
+        output.bias.copy_(values.flatten())
