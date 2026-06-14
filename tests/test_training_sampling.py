@@ -220,6 +220,59 @@ def test_train_flow_matching_updates_trainable_learned_acceleration_path(tmp_pat
     assert (tmp_path / "plots" / "generated_samples_nfe3.png").exists()
 
 
+def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {
+            "name": "flow_matching",
+            "straightness": {"weight": 0.1, "sample_size": 4},
+            "interpolant_acceleration": {"weight": 0.001},
+            "learned_interpolant": {
+                "mode": "kernel_vstar",
+                "estimator_size": 4,
+                "query_size": 2,
+                "bandwidth": 10.0,
+            },
+        },
+        "training": {
+            "batch_size": 8,
+            "steps": 2,
+            "log_every": 1,
+            "lr": 1.0e-3,
+            "learned_acceleration": {
+                "warmup_steps": 0,
+                "theta_steps": 1,
+                "psi_steps": 1,
+                "psi_lr": 1.0e-3,
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=TwoMoons(noise=0.0),
+        source=GaussianSource(dim=2),
+        coupling=IndependentCoupling(),
+        path=LearnedAccelerationPath(dim=2, hidden_dim=8, depth=1),
+        model=TrainableTimeScaledVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    checkpoint = load_checkpoint(tmp_path / "checkpoint.pt")
+    history_text = (tmp_path / "diagnostics" / "training_history.csv").read_text()
+
+    assert "path_state_dict" in checkpoint
+    assert "kernel_vstar_straightness_loss" in history_text
+    assert "kernel_vstar_effective_sample_size_mean" in history_text
+    assert (tmp_path / "plots" / "training_loss.png").exists()
+    assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
+    assert (tmp_path / "trajectories" / "euler_nfe3.npy").exists()
+
+
 class TrainableTimeScaledVelocity(nn.Module):
     def __init__(self) -> None:
         super().__init__()

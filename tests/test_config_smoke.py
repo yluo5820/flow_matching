@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 
 from fm_lab.experiments.factory import build_model, build_path, build_source, build_target
+from fm_lab.training.losses import FlowMatchingObjective, build_objective
 from fm_lab.utils.config import deep_update, load_config
 from fm_lab.utils.logging import create_run_dir
 
@@ -92,25 +93,34 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
             assert model(x, t).shape == (8, 3)
 
 
-def test_3d_learned_acceleration_config_builds_matching_components() -> None:
-    config = load_config("configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml")
+def test_3d_learned_acceleration_configs_build_matching_components() -> None:
+    config_paths = (
+        "configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml",
+        "configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d.yaml",
+    )
 
-    source = build_source(config)
-    target = build_target(config)
-    path = build_path(config)
-    model = build_model(config, dim=source.dim)
+    for config_path in config_paths:
+        config = load_config(config_path)
+        source = build_source(config)
+        target = build_target(config)
+        path = build_path(config)
+        model = build_model(config, dim=source.dim)
+        objective = build_objective(config["objective"])
 
-    assert source.dim == 3
-    assert target.dim == 3
-    assert path.name == "learned_acceleration"
-    assert source.sample(8).shape == (8, 3)
-    assert target.sample(8).shape == (8, 3)
-    x0 = torch.zeros(8, 3)
-    x1 = torch.ones(8, 3)
-    t = torch.full((8,), 0.5)
-    assert path.sample_xt(x0, x1, t).shape == (8, 3)
-    assert path.target_velocity(x0, x1, t).shape == (8, 3)
-    assert model(x0, t).shape == (8, 3)
+        assert source.dim == 3
+        assert target.dim == 3
+        assert path.name == "learned_acceleration"
+        assert isinstance(objective, FlowMatchingObjective)
+        if "kernel_vstar" in config_path:
+            assert objective.learned_interpolant.mode == "kernel_vstar"
+        assert source.sample(8).shape == (8, 3)
+        assert target.sample(8).shape == (8, 3)
+        x0 = torch.zeros(8, 3)
+        x1 = torch.ones(8, 3)
+        t = torch.full((8,), 0.5)
+        assert path.sample_xt(x0, x1, t).shape == (8, 3)
+        assert path.target_velocity(x0, x1, t).shape == (8, 3)
+        assert model(x0, t).shape == (8, 3)
 
 
 def test_mnist_config_builds_matching_components_without_loading_data() -> None:

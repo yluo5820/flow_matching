@@ -93,6 +93,45 @@ def test_psi_update_straightness_loss_backpropagates_to_path() -> None:
     assert grad_norm > 0
 
 
+def test_kernel_vstar_psi_update_backpropagates_to_path() -> None:
+    path = LearnedAccelerationPath(dim=2, hidden_dim=8, depth=1)
+    objective = build_objective(
+        {
+            "straightness": {"weight": 1.0},
+            "learned_interpolant": {
+                "mode": "kernel_vstar",
+                "estimator_size": 4,
+                "query_size": 2,
+                "bandwidth": 10.0,
+            },
+        }
+    )
+    x0 = torch.tensor(
+        [[0.0, 1.0], [1.0, -1.0], [0.5, 0.5], [-0.5, 1.5]],
+    )
+    x1 = torch.tensor(
+        [[2.0, 0.0], [-1.0, 2.0], [1.5, -0.5], [0.25, -1.0]],
+    )
+    t = torch.full((4,), 0.5)
+
+    loss, metrics = objective.psi_update_loss(
+        model=TimeScaledVelocity(),
+        path=path,
+        x0=x0,
+        x1=x1,
+        t=t,
+    )
+    loss.backward()
+
+    grad_norm = sum(
+        parameter.grad.abs().sum()
+        for parameter in path.parameters()
+        if parameter.grad is not None
+    )
+    assert grad_norm > 0
+    assert metrics["kernel_vstar_effective_sample_size_mean"] > 0
+
+
 def _set_constant_acceleration(path: LearnedAccelerationPath, value: torch.Tensor) -> None:
     output = path.net[-1]
     assert isinstance(output, nn.Linear)

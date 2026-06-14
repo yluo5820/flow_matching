@@ -1,0 +1,85 @@
+experiment:
+  name: gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d
+  seed: 0
+  output_dir: runs/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d
+
+data:
+  name: gaussian_mixture_3d
+  n_modes: 16
+  radius: 2.0
+  std: 0.08
+
+source:
+  name: gaussian
+  dim: 3
+  std: 1.0
+
+coupling:
+  name: independent
+
+path:
+  name: learned_acceleration
+  basis: endpoint_bump
+  hidden_dim: 128
+  depth: 3
+  activation: silu
+
+model:
+  name: mlp
+  hidden_dim: 256
+  depth: 4
+  activation: silu
+  time_embedding: sinusoidal
+
+objective:
+  name: flow_matching
+  loss: mse
+  straightness:
+    weight: 1.0e-2
+    sample_size: 256
+  interpolant_acceleration:
+    weight: 1.0e-3
+  learned_interpolant:
+    mode: kernel_vstar
+    estimator_size: 256
+    query_size: 64
+    bandwidth: median
+    bandwidth_scale: 1.0
+    min_bandwidth: 1.0e-3
+
+training:
+  batch_size: 512
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+  learned_acceleration:
+    warmup_steps: 10000
+    theta_steps: 1
+    psi_steps: 1
+    psi_lr: 1.0e-5
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 5000
+    min_delta: 1.0e-3
+    ema_alpha: 0.3
+
+solvers:
+  names: [rk4]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 8192
+  n_trajectories: 128
+  nfe: 64
+
+diagnostics:
+  ambiguity:
+    methods: [knn]
+    t_values: [0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95]
+  curvature:
+    enabled: true
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]

@@ -278,6 +278,44 @@ fm-lab-compare-runs \
   --nfe 64
 ```
 
+To test the kernel-v* learned interpolant objective, use the V2 config:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d.yaml \
+  --steps 50000 \
+  --n-samples 8192 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --device auto
+```
+
+This keeps the same K=1 learned-acceleration path family, but changes the path update.
+Instead of using only `v_theta` as the advective velocity, it estimates the induced
+optimal field
+
+```text
+v*_phi(t, x) = E[u_t | x_t = x]
+```
+
+by Gaussian-kernel averaging over path states from an auxiliary minibatch pool. The
+YAML-only controls are:
+
+```yaml
+objective:
+  learned_interpolant:
+    mode: kernel_vstar
+    estimator_size: 256
+    query_size: 64
+    bandwidth: median
+    bandwidth_scale: 1.0
+    min_bandwidth: 1.0e-3
+```
+
+Use this config to decide whether the K=1 failure was a proxy-optimization issue before
+increasing the polynomial/interpolant capacity. It is intended for low-dimensional toy
+runs, not MNIST or CIFAR-style image experiments.
+
 Early stopping is configured in YAML under `training.early_stopping`:
 
 ```yaml

@@ -51,6 +51,8 @@ def plot_training_history(
         "flow_matching_loss",
         "straightness_weighted",
         "straightness_loss",
+        "kernel_vstar_straightness_weighted",
+        "kernel_vstar_straightness_loss",
         "interpolant_acceleration_weighted",
         "interpolant_acceleration_loss",
         "direction_weighted",

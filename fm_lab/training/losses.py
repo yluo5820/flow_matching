@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import torch
@@ -48,6 +48,27 @@ class TrainingObjective(Protocol):
         """Return a serializable objective description."""
 
 
+@dataclass(frozen=True)
+class KernelVStarConfig:
+    """Configuration for low-dimensional kernel estimates of `v*_phi`."""
+
+    mode: str | None = None
+    estimator_size: int = 256
+    query_size: int = 64
+    bandwidth: str | float = "median"
+    bandwidth_scale: float = 1.0
+    min_bandwidth: float = 1e-3
+    eps: float = 1e-8
+
+
+@dataclass(frozen=True)
+class KernelVStarEstimate:
+    query_x: torch.Tensor
+    query_t: torch.Tensor
+    vstar: torch.Tensor
+    metrics: dict[str, float]
+
+
 @dataclass
 class FlowMatchingObjective:
     """Conditional flow matching objective with optional learned-flow regularizers."""
@@ -56,6 +77,7 @@ class FlowMatchingObjective:
     straightness_weight: float = 0.0
     straightness_sample_size: int | None = None
     interpolant_acceleration_weight: float = 0.0
+    learned_interpolant: KernelVStarConfig = field(default_factory=KernelVStarConfig)
     name: str = "flow_matching"
 
     def __call__(
@@ -143,6 +165,14 @@ class FlowMatchingObjective:
             "interpolant_acceleration": {
                 "weight": self.interpolant_acceleration_weight,
             },
+            "learned_interpolant": {
+                "mode": self.learned_interpolant.mode,
+                "estimator_size": self.learned_interpolant.estimator_size,
+                "query_size": self.learned_interpolant.query_size,
+                "bandwidth": self.learned_interpolant.bandwidth,
+                "bandwidth_scale": self.learned_interpolant.bandwidth_scale,
+                "min_bandwidth": self.learned_interpolant.min_bandwidth,
+            },
         }
 
     def _loss(
@@ -175,17 +205,32 @@ class FlowMatchingObjective:
             metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
 
         if include_straightness and self.straightness_weight > 0:
-            straightness = learned_flow_straightness_loss(
-                model=model,
-                x=xt,
-                t=t,
-                sample_size=self.straightness_sample_size,
-                detach_inputs=straightness_detach_inputs,
-            )
+            if self.learned_interpolant.mode == "kernel_vstar":
+                straightness, kernel_metrics = kernel_vstar_straightness_loss(
+                    model=model,
+                    path=path,
+                    x0=x0,
+                    x1=x1,
+                    t=t,
+                    config=self.learned_interpolant,
+                    detach_inputs=straightness_detach_inputs,
+                )
+                metrics.update(kernel_metrics)
+            else:
+                straightness = learned_flow_straightness_loss(
+                    model=model,
+                    x=xt,
+                    t=t,
+                    sample_size=self.straightness_sample_size,
+                    detach_inputs=straightness_detach_inputs,
+                )
             weighted_straightness = self.straightness_weight * straightness
             total_loss = total_loss + weighted_straightness
             metrics["straightness_loss"] = float(straightness.detach().cpu())
             metrics["straightness_weighted"] = float(weighted_straightness.detach().cpu())
+            if self.learned_interpolant.mode == "kernel_vstar":
+                metrics["kernel_vstar_straightness_loss"] = metrics["straightness_loss"]
+                metrics["kernel_vstar_straightness_weighted"] = metrics["straightness_weighted"]
 
         if include_interpolant_acceleration and self.interpolant_acceleration_weight > 0:
             acceleration = _interpolant_acceleration_loss(path=path, x0=x0, x1=x1)
@@ -284,6 +329,7 @@ def learned_flow_straightness_loss(
     t: torch.Tensor,
     sample_size: int | None = None,
     detach_inputs: bool = True,
+    advective_velocity: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Penalize learned material acceleration: d_t v + J_x v · v."""
 
@@ -291,10 +337,16 @@ def learned_flow_straightness_loss(
         indices = torch.randperm(x.shape[0], device=x.device)[:sample_size]
         x = x[indices]
         t = t[indices]
+        if advective_velocity is not None:
+            advective_velocity = advective_velocity[indices]
 
     x_reg = x.detach().requires_grad_(True) if detach_inputs else x.requires_grad_(True)
     t_reg = t.detach().requires_grad_(True)
     velocity = model(x_reg, t_reg)
+    if advective_velocity is None:
+        advective = velocity
+    else:
+        advective = advective_velocity.detach() if detach_inputs else advective_velocity
     residual_components = []
     for component in range(velocity.shape[1]):
         grad_x, grad_t = torch.autograd.grad(
@@ -308,11 +360,143 @@ def learned_flow_straightness_loss(
             grad_x = torch.zeros_like(x_reg)
         if grad_t is None:
             grad_t = torch.zeros_like(t_reg)
-        directional_derivative = (grad_x * velocity).sum(dim=1)
+        directional_derivative = (grad_x * advective).sum(dim=1)
         residual_components.append(grad_t + directional_derivative)
 
     residual = torch.stack(residual_components, dim=1)
     return residual.square().sum(dim=1).mean()
+
+
+def kernel_vstar_estimate(
+    *,
+    path: FlowPath,
+    x0: torch.Tensor,
+    x1: torch.Tensor,
+    t: torch.Tensor,
+    config: KernelVStarConfig,
+    query_indices: torch.Tensor | None = None,
+    estimator_indices: torch.Tensor | None = None,
+    detach_inputs: bool = True,
+) -> KernelVStarEstimate:
+    """Estimate `E[u_t | x_t = x]` by Gaussian-kernel conditional averaging."""
+
+    batch_size = x0.shape[0]
+    if batch_size < 1:
+        raise ValueError("kernel_vstar_estimate requires a non-empty batch.")
+    if query_indices is None:
+        query_indices = torch.randperm(batch_size, device=x0.device)[
+            : min(config.query_size, batch_size)
+        ]
+    if estimator_indices is None:
+        estimator_indices = torch.randperm(batch_size, device=x0.device)[
+            : min(config.estimator_size, batch_size)
+        ]
+
+    x0_query = x0[query_indices]
+    x1_query = x1[query_indices]
+    t_query = t[query_indices]
+    query_x = path.sample_xt(x0_query, x1_query, t_query)
+
+    x0_estimator = x0[estimator_indices]
+    x1_estimator = x1[estimator_indices]
+    query_count = query_indices.numel()
+    estimator_count = estimator_indices.numel()
+    dim = x0.shape[1]
+
+    estimator_x0 = (
+        x0_estimator[None, :, :]
+        .expand(query_count, estimator_count, dim)
+        .reshape(query_count * estimator_count, dim)
+    )
+    estimator_x1 = (
+        x1_estimator[None, :, :]
+        .expand(query_count, estimator_count, dim)
+        .reshape(query_count * estimator_count, dim)
+    )
+    estimator_t = (
+        t_query[:, None]
+        .expand(query_count, estimator_count)
+        .reshape(query_count * estimator_count)
+    )
+    estimator_xt = path.sample_xt(estimator_x0, estimator_x1, estimator_t).reshape(
+        query_count,
+        estimator_count,
+        dim,
+    )
+    estimator_velocity = path.target_velocity(estimator_x0, estimator_x1, estimator_t).reshape(
+        query_count,
+        estimator_count,
+        dim,
+    )
+
+    if detach_inputs:
+        query_for_weights = query_x.detach()
+        estimator_xt_for_weights = estimator_xt.detach()
+        estimator_velocity_for_average = estimator_velocity.detach()
+    else:
+        query_for_weights = query_x
+        estimator_xt_for_weights = estimator_xt
+        estimator_velocity_for_average = estimator_velocity
+
+    distance_sq = (estimator_xt_for_weights - query_for_weights[:, None, :]).square().sum(dim=2)
+    bandwidth = _kernel_bandwidth(distance_sq, config)
+    weights = torch.exp(-0.5 * distance_sq / bandwidth.square().clamp_min(config.eps))
+    denominator = weights.sum(dim=1).clamp_min(config.eps)
+    vstar = (weights[:, :, None] * estimator_velocity_for_average).sum(dim=1) / denominator[:, None]
+    if detach_inputs:
+        vstar = vstar.detach()
+
+    effective_sample_size = denominator.square() / weights.square().sum(dim=1).clamp_min(
+        config.eps
+    )
+    vstar_norm = vstar.detach().norm(dim=1)
+    metrics = {
+        "kernel_vstar_bandwidth": float(bandwidth.detach().cpu()),
+        "kernel_vstar_effective_sample_size_mean": _mean_stat(effective_sample_size),
+        "kernel_vstar_effective_sample_size_min": float(
+            effective_sample_size.detach().min().cpu()
+        ),
+        "kernel_vstar_denominator_mean": _mean_stat(denominator),
+        "kernel_vstar_denominator_min": float(denominator.detach().min().cpu()),
+        "kernel_vstar_norm_mean": _mean_stat(vstar_norm),
+        "kernel_vstar_norm_p90": _quantile_stat(vstar_norm, 0.90),
+        "kernel_vstar_query_size": float(query_count),
+        "kernel_vstar_estimator_size": float(estimator_count),
+    }
+    return KernelVStarEstimate(
+        query_x=query_x,
+        query_t=t_query,
+        vstar=vstar,
+        metrics=metrics,
+    )
+
+
+def kernel_vstar_straightness_loss(
+    *,
+    model: torch.nn.Module,
+    path: FlowPath,
+    x0: torch.Tensor,
+    x1: torch.Tensor,
+    t: torch.Tensor,
+    config: KernelVStarConfig,
+    detach_inputs: bool,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    estimate = kernel_vstar_estimate(
+        path=path,
+        x0=x0,
+        x1=x1,
+        t=t,
+        config=config,
+        detach_inputs=detach_inputs,
+    )
+    loss = learned_flow_straightness_loss(
+        model=model,
+        x=estimate.query_x,
+        t=estimate.query_t,
+        detach_inputs=detach_inputs,
+        advective_velocity=estimate.vstar,
+    )
+    return loss, estimate.metrics
 
 
 def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
@@ -348,13 +532,55 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
     interpolant_acceleration_weight = float(interpolant_acceleration_config.get("weight", 0.0))
     if interpolant_acceleration_weight < 0:
         raise ValueError("objective.interpolant_acceleration.weight must be non-negative.")
+    learned_interpolant_config = _build_kernel_vstar_config(config.get("learned_interpolant", {}))
 
     return FlowMatchingObjective(
         loss=str(config.get("loss", "mse")).lower(),
         straightness_weight=straightness_weight,
         straightness_sample_size=straightness_sample_size,
         interpolant_acceleration_weight=interpolant_acceleration_weight,
+        learned_interpolant=learned_interpolant_config,
         name=name,
+    )
+
+
+def _build_kernel_vstar_config(config: dict[str, Any]) -> KernelVStarConfig:
+    if not config:
+        return KernelVStarConfig()
+    mode = config.get("mode")
+    if mode is not None:
+        mode = str(mode).lower()
+    if mode not in {None, "kernel_vstar"}:
+        raise ValueError(f"Unsupported objective.learned_interpolant.mode: {mode}")
+
+    estimator_size = int(config.get("estimator_size", 256))
+    query_size = int(config.get("query_size", 64))
+    bandwidth_value = config.get("bandwidth", "median")
+    try:
+        bandwidth: str | float = float(bandwidth_value)
+    except (TypeError, ValueError):
+        bandwidth = str(bandwidth_value).lower()
+    if bandwidth != "median" and not isinstance(bandwidth, float):
+        raise ValueError("objective.learned_interpolant.bandwidth must be 'median' or a float.")
+    bandwidth_scale = float(config.get("bandwidth_scale", 1.0))
+    min_bandwidth = float(config.get("min_bandwidth", 1e-3))
+    if estimator_size < 1:
+        raise ValueError("objective.learned_interpolant.estimator_size must be positive.")
+    if query_size < 1:
+        raise ValueError("objective.learned_interpolant.query_size must be positive.")
+    if isinstance(bandwidth, float) and bandwidth <= 0:
+        raise ValueError("objective.learned_interpolant.bandwidth must be positive.")
+    if bandwidth_scale <= 0:
+        raise ValueError("objective.learned_interpolant.bandwidth_scale must be positive.")
+    if min_bandwidth <= 0:
+        raise ValueError("objective.learned_interpolant.min_bandwidth must be positive.")
+    return KernelVStarConfig(
+        mode=mode,
+        estimator_size=estimator_size,
+        query_size=query_size,
+        bandwidth=bandwidth,
+        bandwidth_scale=bandwidth_scale,
+        min_bandwidth=min_bandwidth,
     )
 
 
@@ -380,6 +606,19 @@ def _interpolant_acceleration_loss(
             "acceleration_penalty, such as path.name: learned_acceleration."
         )
     return path.acceleration_penalty(x0, x1)
+
+
+def _kernel_bandwidth(distance_sq: torch.Tensor, config: KernelVStarConfig) -> torch.Tensor:
+    if isinstance(config.bandwidth, float):
+        bandwidth = max(config.bandwidth * config.bandwidth_scale, config.min_bandwidth)
+        return distance_sq.new_tensor(bandwidth)
+    distances = distance_sq.detach().sqrt().flatten()
+    positive = distances[distances > 0]
+    if positive.numel() == 0:
+        bandwidth = distance_sq.new_tensor(config.min_bandwidth)
+    else:
+        bandwidth = torch.quantile(positive, 0.5).to(distance_sq.device)
+    return (bandwidth * config.bandwidth_scale).clamp_min(config.min_bandwidth)
 
 
 def _mean_stat(values: torch.Tensor) -> float:

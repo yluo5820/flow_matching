@@ -66,6 +66,7 @@ Available 3D toy targets:
 | 3D Gaussian mixture | `configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml` | Mode coverage and separated clusters. |
 | 3D Gaussian mixture with direction-only flow | `configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml` | Label-conditioned straight-line direction stress test. |
 | 3D Gaussian mixture with learned acceleration path | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml` | Low-order pair-dependent interpolant straightening. |
+| 3D Gaussian mixture with kernel-v* learned acceleration | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_3d.yaml` | Tests whether K=1 learned interpolants failed from proxy optimization. |
 | Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
 | Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
 | Multi torus | `configs/toy/gaussian_to_multi_torus_linear_3d.yaml` | Multiple disconnected topological components. |
@@ -160,6 +161,13 @@ Columns:
 | `flow_matching_loss` | Conditional flow matching velocity loss. |
 | `straightness_loss` | Unweighted learned-flow straightness penalty, when enabled. |
 | `straightness_weighted` | Weighted contribution added to total loss, when enabled. |
+| `kernel_vstar_straightness_loss` | Same Burgers residual as `straightness_loss`, but using kernel-estimated `v*_phi` as the advective velocity. |
+| `kernel_vstar_straightness_weighted` | Weighted kernel-v* Burgers residual contribution. |
+| `kernel_vstar_bandwidth` | Gaussian-kernel bandwidth used for the conditional `v*_phi` estimate. |
+| `kernel_vstar_effective_sample_size_mean/min` | Effective number of auxiliary path states contributing to the estimate; very low values mean the kernel estimate is noisy. |
+| `kernel_vstar_denominator_mean/min` | Kernel denominator health check; tiny values mean query points have poor local support. |
+| `kernel_vstar_norm_mean/p90` | Norm of the estimated `v*_phi`; unstable growth suggests the path update is becoming pathological. |
+| `kernel_vstar_query_size`, `kernel_vstar_estimator_size` | Actual query and auxiliary pool sizes used after clipping to batch size. |
 | `interpolant_acceleration_loss` | Raw `E ||A_psi(x0,x1)||^2` penalty for learned acceleration paths. |
 | `interpolant_acceleration_weighted` | Weighted acceleration penalty added to the total loss. |
 | `interpolant_acceleration_norm_mean/p90` | Norm of the learned pair acceleration mode `A_psi`. |
@@ -197,6 +205,8 @@ Read it as:
 - `flow_matching_loss`: ordinary conditional flow matching loss.
 - `straightness_weighted`: weighted straightness term added to the total loss, when enabled.
 - `straightness_loss`: raw unweighted straightness estimate, when enabled.
+- `kernel_vstar_straightness_weighted`: kernel-v* version of the weighted Burgers residual.
+- `kernel_vstar_straightness_loss`: raw kernel-v* Burgers residual.
 - Downward trend: optimization is working.
 - Flat trend: training may have converged, learning rate may be too small, or the model may be underpowered.
 - Spikes: expected with stochastic minibatches, but large persistent spikes can indicate instability.
@@ -222,6 +232,19 @@ the linear baseline under the same source, target, model budget, and coupling. T
 is promising only if low-NFE samples, trajectory curvature, or field diagnostics improve
 without high-NFE sample quality collapsing. Use `fm-lab-compare-runs` for side-by-side
 `generated_samples_nfe*.png` and overlaid loss curves.
+
+For the kernel-v* V2 learned interpolant config, focus on whether the estimator is healthy
+before judging the path idea:
+
+- Useful signal: moderate `interpolant_path_deviation_mean`, non-trivial but stable
+  `kernel_vstar_norm_mean`, and `kernel_vstar_effective_sample_size_mean` comfortably
+  above one. Then check whether low-NFE samples or trajectory metrics improve.
+- Proxy still failing: low effective sample size, tiny kernel denominators, unstable
+  `vstar_norm`, or runaway path corrections. In this case the empirical `v*_phi`
+  estimate is probably too noisy to guide `A_psi`.
+- Capacity likely failing: stable kernel diagnostics and meaningful path corrections
+  with no sample or trajectory improvement. That points toward the K=1 path family being
+  too restricted, which is when higher-order expansion is the next experiment.
 
 For `direction_only_straight` runs, read direction and speed metrics separately:
 

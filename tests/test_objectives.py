@@ -3,8 +3,10 @@ from torch import nn
 
 from fm_lab.paths import LearnedAccelerationPath, LinearPath
 from fm_lab.training.losses import (
+    KernelVStarConfig,
     build_objective,
     flow_matching_loss,
+    kernel_vstar_estimate,
     learned_flow_straightness_loss,
 )
 
@@ -76,6 +78,70 @@ def test_learned_flow_straightness_is_positive_for_curved_field() -> None:
     loss = learned_flow_straightness_loss(model=model, x=x, t=t)
 
     assert loss > 0
+
+
+def test_learned_flow_straightness_uses_supplied_advective_velocity() -> None:
+    x = torch.randn(8, 3)
+    t = torch.linspace(0.1, 0.9, 8)
+    advective = torch.randn_like(x)
+
+    constant_loss = learned_flow_straightness_loss(
+        model=ConstantVelocity(dim=3, value=0.5),
+        x=x,
+        t=t,
+        advective_velocity=advective,
+    )
+    curved_loss = learned_flow_straightness_loss(
+        model=TimeScaledVelocity(),
+        x=x,
+        t=t,
+        advective_velocity=torch.ones_like(x),
+    )
+
+    assert torch.allclose(constant_loss, torch.tensor(0.0))
+    assert curved_loss > 0
+
+
+def test_kernel_vstar_estimator_recovers_constant_target_velocity() -> None:
+    path = LinearPath()
+    shift = torch.tensor([0.25, -1.0, 0.5])
+    x0 = torch.randn(12, 3)
+    x1 = x0 + shift
+    t = torch.linspace(0.1, 0.9, 12)
+    config = KernelVStarConfig(estimator_size=12, query_size=12, bandwidth=5.0)
+
+    estimate = kernel_vstar_estimate(
+        path=path,
+        x0=x0,
+        x1=x1,
+        t=t,
+        config=config,
+    )
+
+    assert estimate.vstar.shape == (12, 3)
+    assert torch.allclose(estimate.vstar, shift.expand_as(estimate.vstar), atol=1.0e-6)
+    assert estimate.metrics["kernel_vstar_effective_sample_size_mean"] > 1.0
+
+
+def test_kernel_vstar_estimator_is_finite_for_2d_and_3d_batches() -> None:
+    for dim in (2, 3):
+        path = LearnedAccelerationPath(dim=dim, hidden_dim=8, depth=1)
+        x0 = torch.randn(10, dim)
+        x1 = torch.randn(10, dim)
+        t = torch.linspace(0.1, 0.9, 10)
+        config = KernelVStarConfig(estimator_size=8, query_size=4)
+
+        estimate = kernel_vstar_estimate(
+            path=path,
+            x0=x0,
+            x1=x1,
+            t=t,
+            config=config,
+        )
+
+        assert estimate.query_x.shape == (4, dim)
+        assert torch.isfinite(estimate.vstar).all()
+        assert all(value == value for value in estimate.metrics.values())
 
 
 def test_objective_adds_straightness_metrics() -> None:
