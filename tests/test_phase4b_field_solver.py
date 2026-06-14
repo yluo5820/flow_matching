@@ -7,6 +7,8 @@ from fm_lab.diagnostics import (
     jacobian_stats,
     pairwise_solver_distances,
 )
+from fm_lab.experiments import run_field_diagnostics as field_diagnostics_module
+from fm_lab.experiments.factory import build_model, build_path
 from fm_lab.experiments.run_field_diagnostics import run_field_diagnostics
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
@@ -113,3 +115,52 @@ def test_field_diagnostics_reject_label_conditioned_models() -> None:
         assert "Eulerian" in str(exc)
     else:
         raise AssertionError("Expected label-conditioned field diagnostics to be rejected.")
+
+
+def test_field_diagnostics_loads_learned_path_state(monkeypatch) -> None:
+    config = _learned_acceleration_config()
+    model = build_model(config, dim=2)
+    path = build_path(config)
+    output = path.net[-1]
+    assert isinstance(output, nn.Linear)
+    with torch.no_grad():
+        output.bias.copy_(torch.tensor([1.0, -2.0]))
+    captured: dict[str, torch.Tensor] = {}
+
+    def fake_sample_path_batch(**kwargs):
+        loaded_path = kwargs["path"]
+        x0 = torch.zeros(4, 2)
+        x1 = torch.ones(4, 2)
+        t = torch.full((4,), kwargs["t_value"])
+        captured["acceleration"] = loaded_path.acceleration(x0, x1).detach()
+        return {"xt": torch.zeros(4, 2), "t": t}
+
+    monkeypatch.setattr(field_diagnostics_module, "sample_path_batch", fake_sample_path_batch)
+
+    run_field_diagnostics(
+        payload={
+            "model_state_dict": model.state_dict(),
+            "path_state_dict": path.state_dict(),
+        },
+        config=config,
+        device=torch.device("cpu"),
+        n_samples=4,
+    )
+
+    assert torch.allclose(captured["acceleration"], torch.tensor([[1.0, -2.0]]).expand(4, 2))
+
+
+def _learned_acceleration_config() -> dict:
+    return {
+        "data": {"name": "two_moons", "noise": 0.0},
+        "source": {"name": "gaussian", "dim": 2},
+        "coupling": {"name": "independent"},
+        "path": {"name": "learned_acceleration", "hidden_dim": 8, "depth": 1},
+        "model": {
+            "name": "mlp",
+            "hidden_dim": 8,
+            "depth": 1,
+            "time_embedding_dim": 4,
+        },
+        "diagnostics": {"ambiguity": {"t_values": [0.5]}},
+    }

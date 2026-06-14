@@ -65,6 +65,7 @@ Available 3D toy targets:
 | Swiss roll with straightness regularization | `configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml` | A/B test for learned-flow straightening. |
 | 3D Gaussian mixture | `configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml` | Mode coverage and separated clusters. |
 | 3D Gaussian mixture with direction-only flow | `configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml` | Label-conditioned straight-line direction stress test. |
+| 3D Gaussian mixture with learned acceleration path | `configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml` | Low-order pair-dependent interpolant straightening. |
 | Multi Swiss roll | `configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml` | Multimodal curved manifolds. |
 | Torus | `configs/toy/gaussian_to_torus_linear_3d.yaml` | Hole/topology and tube geometry. |
 | Multi torus | `configs/toy/gaussian_to_multi_torus_linear_3d.yaml` | Multiple disconnected topological components. |
@@ -159,6 +160,15 @@ Columns:
 | `flow_matching_loss` | Conditional flow matching velocity loss. |
 | `straightness_loss` | Unweighted learned-flow straightness penalty, when enabled. |
 | `straightness_weighted` | Weighted contribution added to total loss, when enabled. |
+| `interpolant_acceleration_loss` | Raw `E ||A_psi(x0,x1)||^2` penalty for learned acceleration paths. |
+| `interpolant_acceleration_weighted` | Weighted acceleration penalty added to the total loss. |
+| `interpolant_acceleration_norm_mean/p90` | Norm of the learned pair acceleration mode `A_psi`. |
+| `interpolant_relative_acceleration_mean/p90` | `||A_psi|| / (||x1-x0|| + eps)`; large values suggest path cheating. |
+| `interpolant_path_deviation_mean/p90` | Norm of the actual mid-path correction `h(t) A_psi`. |
+| `interpolant_relative_deviation_mean/p90` | Path correction size relative to endpoint displacement. |
+| `interpolant_target_velocity_norm_mean/p90` | Norm of the learned interpolant target velocity. |
+| `interpolant_conditional_acceleration_norm_mean` | Norm of `d^2 I_psi / dt^2` on the logged batch. |
+| `interpolant_endpoint_error_max` | Numerical endpoint constraint error; should stay near zero. |
 | `direction_loss` | Direction-only objective angle loss, when enabled. |
 | `speed_loss` | Direction-only scalar speed prediction loss, when enabled. |
 | `direction_weighted` | Weighted direction loss contribution. |
@@ -193,6 +203,25 @@ Read it as:
 
 For judging sample quality, pair the loss curve with `plots/generated_samples_nfe*.png`.
 A low loss does not guarantee the generated distribution has the right geometry or mode coverage.
+
+For `learned_acceleration` path runs, read the loss curve as a coupled training trace:
+
+- `flow_matching_loss`: how well `v_theta` fits the current learned interpolant.
+- `straightness_loss`: Burgers residual used to make the learned field straighter.
+- `interpolant_acceleration_loss`: size penalty that keeps `A_psi` from growing without bound.
+- During `training.learned_acceleration.warmup_steps`, only the velocity model is updated,
+  so acceleration diagnostics should remain near their zero-initialized values.
+- After warmup, acceleration norms should move gradually. Sudden jumps, very high
+  relative acceleration, or high target-velocity norm usually mean the interpolant is
+  making pathological paths rather than useful straightening corrections.
+- `interpolant_endpoint_error_max` should remain close to machine precision. If not, the
+  path implementation is violating the endpoint constraints and the run should not be trusted.
+
+Success is not a lower training loss by itself. Compare the learned-acceleration run with
+the linear baseline under the same source, target, model budget, and coupling. The method
+is promising only if low-NFE samples, trajectory curvature, or field diagnostics improve
+without high-NFE sample quality collapsing. Use `fm-lab-compare-runs` for side-by-side
+`generated_samples_nfe*.png` and overlaid loss curves.
 
 For `direction_only_straight` runs, read direction and speed metrics separately:
 

@@ -3,12 +3,17 @@ import torch
 from torch import nn
 
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling
-from fm_lab.data import GaussianMixture3D
-from fm_lab.paths import LinearPath, SphericalPath
+from fm_lab.data import GaussianMixture3D, TwoMoons
+from fm_lab.paths import LearnedAccelerationPath, LinearPath, SphericalPath
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
 from fm_lab.training.losses import build_objective
-from fm_lab.training.trainer import _validate_training_compatibility, sample_and_plot
+from fm_lab.training.trainer import (
+    _validate_training_compatibility,
+    sample_and_plot,
+    train_flow_matching,
+)
+from fm_lab.utils.checkpoints import load_checkpoint
 
 
 class ZeroVelocity(nn.Module):
@@ -162,6 +167,66 @@ def test_direction_only_training_guard_rejects_non_linear_path() -> None:
         assert "linear" in str(exc)
     else:
         raise AssertionError("Expected non-linear path to be rejected.")
+
+
+def test_train_flow_matching_updates_trainable_learned_acceleration_path(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {
+            "name": "flow_matching",
+            "straightness": {"weight": 0.1, "sample_size": 4},
+            "interpolant_acceleration": {"weight": 0.001},
+        },
+        "training": {
+            "batch_size": 8,
+            "steps": 2,
+            "log_every": 1,
+            "lr": 1.0e-3,
+            "learned_acceleration": {
+                "warmup_steps": 0,
+                "theta_steps": 1,
+                "psi_steps": 1,
+                "psi_lr": 1.0e-3,
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+    path = LearnedAccelerationPath(dim=2, hidden_dim=8, depth=1)
+    initial_path_state = {key: value.detach().clone() for key, value in path.state_dict().items()}
+
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=TwoMoons(noise=0.0),
+        source=GaussianSource(dim=2),
+        coupling=IndependentCoupling(),
+        path=path,
+        model=TrainableTimeScaledVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    checkpoint = load_checkpoint(tmp_path / "checkpoint.pt")
+
+    assert "path_state_dict" in checkpoint
+    assert "theta" in checkpoint["optimizer_state_dict"]
+    assert "psi" in checkpoint["optimizer_state_dict"]
+    assert any(
+        not torch.allclose(value, initial_path_state[key])
+        for key, value in path.state_dict().items()
+    )
+    assert (tmp_path / "diagnostics" / "training_history.csv").exists()
+    assert (tmp_path / "plots" / "training_loss.png").exists()
+    assert (tmp_path / "plots" / "generated_samples_nfe3.png").exists()
+
+
+class TrainableTimeScaledVelocity(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.scale * t[:, None] * x
 
 
 def _sampling_config(seed: int) -> dict:

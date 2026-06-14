@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from fm_lab.paths import LinearPath
+from fm_lab.paths import LearnedAccelerationPath, LinearPath
 from fm_lab.training.losses import (
     build_objective,
     flow_matching_loss,
@@ -102,6 +102,26 @@ def test_objective_rejects_invalid_straightness_config() -> None:
         assert "weight" in str(exc)
     else:
         raise AssertionError("Expected invalid straightness weight to raise.")
+
+
+def test_objective_adds_interpolant_acceleration_metrics() -> None:
+    objective = build_objective({"interpolant_acceleration": {"weight": 0.5}})
+    model = ConstantVelocity(dim=2, value=0.0)
+    path = LearnedAccelerationPath(dim=2, hidden_dim=8, depth=1)
+    output = path.net[-1]
+    assert isinstance(output, nn.Linear)
+    with torch.no_grad():
+        output.bias.fill_(2.0)
+    x0 = torch.zeros(4, 2)
+    x1 = torch.ones(4, 2)
+    t = torch.full((4,), 0.5)
+
+    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+
+    assert loss > 0
+    assert metrics["interpolant_acceleration_loss"] == 8.0
+    assert metrics["interpolant_acceleration_weighted"] == 4.0
+    assert metrics["interpolant_acceleration_norm_mean"] > 0
 
 
 def test_direction_only_objective_computes_decomposed_losses() -> None:

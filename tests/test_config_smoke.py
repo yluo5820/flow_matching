@@ -92,6 +92,27 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
             assert model(x, t).shape == (8, 3)
 
 
+def test_3d_learned_acceleration_config_builds_matching_components() -> None:
+    config = load_config("configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml")
+
+    source = build_source(config)
+    target = build_target(config)
+    path = build_path(config)
+    model = build_model(config, dim=source.dim)
+
+    assert source.dim == 3
+    assert target.dim == 3
+    assert path.name == "learned_acceleration"
+    assert source.sample(8).shape == (8, 3)
+    assert target.sample(8).shape == (8, 3)
+    x0 = torch.zeros(8, 3)
+    x1 = torch.ones(8, 3)
+    t = torch.full((8,), 0.5)
+    assert path.sample_xt(x0, x1, t).shape == (8, 3)
+    assert path.target_velocity(x0, x1, t).shape == (8, 3)
+    assert model(x0, t).shape == (8, 3)
+
+
 def test_mnist_config_builds_matching_components_without_loading_data() -> None:
     config = load_config("configs/mnist/mnist_linear_baseline.yaml")
 

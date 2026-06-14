@@ -216,6 +216,68 @@ fm-lab-train \
   --straightness-sample-size 256
 ```
 
+To test the low-order learned acceleration interpolant, use the dedicated YAML config:
+
+```bash
+fm-lab-train \
+  --config configs/toy/gaussian_to_gaussian_mixture_learned_acceleration_3d.yaml \
+  --steps 50000 \
+  --n-samples 8192 \
+  --n-trajectories 128 \
+  --nfe 64 \
+  --device auto
+```
+
+This keeps the velocity model Eulerian, but replaces the linear training path with:
+
+```text
+I(t, x0, x1) = x0 + t * (x1 - x0) + h(t) * A_psi(x0, x1)
+```
+
+The default basis is `h(t)=t(1-t)`. The endpoint-velocity-preserving ablation uses:
+
+```yaml
+path:
+  name: learned_acceleration
+  basis: endpoint_bump
+```
+
+The path is trained with a staged two-optimizer schedule:
+
+```yaml
+objective:
+  name: flow_matching
+  straightness:
+    weight: 1.0e-2
+    sample_size: 256
+  interpolant_acceleration:
+    weight: 1.0e-3
+
+training:
+  learned_acceleration:
+    warmup_steps: 5000
+    theta_steps: 1
+    psi_steps: 1
+    psi_lr: 1.0e-4
+```
+
+During warmup only the velocity model is updated. After warmup, the trainer alternates
+velocity-model updates against FM plus Burgers residual and interpolant updates against
+Burgers residual plus `interpolant_acceleration.weight * ||A_psi||^2`. There are no
+extra CLI flags for this v1 path; edit YAML to sweep the basis, weights, warmup, or
+`psi_lr`.
+
+Compare it against the linear baseline with:
+
+```bash
+fm-lab-compare-runs \
+  --run-a runs/gaussian_to_gaussian_mixture_linear_3d \
+  --label-a linear \
+  --run-b runs/gaussian_to_gaussian_mixture_learned_acceleration_3d \
+  --label-b learned_acceleration \
+  --nfe 64
+```
+
 Early stopping is configured in YAML under `training.early_stopping`:
 
 ```yaml
