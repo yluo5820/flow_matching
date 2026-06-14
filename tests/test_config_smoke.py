@@ -66,6 +66,7 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
         "configs/toy/gaussian_to_swiss_roll_linear_3d_straight.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_linear_3d.yaml",
         "configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only.yaml",
+        "configs/toy/gaussian_to_gaussian_mixture_linear_3d_direction_only_vector_unet.yaml",
         "configs/toy/gaussian_to_multi_swiss_roll_linear_3d.yaml",
         "configs/toy/gaussian_to_torus_linear_3d.yaml",
         "configs/toy/gaussian_to_multi_torus_linear_3d.yaml",
@@ -101,6 +102,11 @@ def test_3d_learned_acceleration_configs_build_matching_components() -> None:
             "configs/toy/"
             "gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_"
             "factorized_polynomial_3d.yaml"
+        ),
+        (
+            "configs/toy/"
+            "gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_"
+            "factorized_polynomial_vector_unet_3d.yaml"
         ),
     )
 
@@ -144,17 +150,33 @@ def test_mnist_config_builds_matching_components_without_loading_data() -> None:
     assert model(x, t).shape == (2, 784)
 
 
-def test_mnist_image_unet_config_builds_matching_components_without_loading_data() -> None:
-    config = load_config("configs/mnist/mnist_image_unet_ot.yaml")
+def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
+    config_paths = (
+        "configs/mnist/mnist_image_unet_ot.yaml",
+        "configs/mnist/mnist_direction_only_image_unet_ot.yaml",
+        (
+            "configs/mnist/"
+            "mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml"
+        ),
+    )
 
-    source = build_source(config)
-    target = build_target(config)
-    path = build_path(config)
-    model = build_model(config, dim=source.dim)
+    for config_path in config_paths:
+        config = load_config(config_path)
+        source = build_source(config)
+        target = build_target(config)
+        path = build_path(config)
+        model = build_model(config, dim=source.dim)
 
-    assert source.dim == 784
-    assert target.dim == 784
-    assert path.name == "linear"
-    x = torch.zeros(2, 784)
-    t = torch.zeros(2)
-    assert model(x, t).shape == (2, 784)
+        assert source.dim == 784
+        assert target.dim == 784
+        x = torch.zeros(2, 784)
+        t = torch.zeros(2)
+        if getattr(model, "requires_source_label", False):
+            assert model(x, t, context={"source_label": x}).shape == (2, 784)
+        else:
+            assert model(x, t).shape == (2, 784)
+        if "learned_acceleration" in config_path:
+            assert path.name == "learned_acceleration"
+            assert path.sample_xt(x, x, t).shape == (2, 784)
+        else:
+            assert path.name == "linear"

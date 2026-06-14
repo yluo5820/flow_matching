@@ -1,6 +1,12 @@
 import torch
 
-from fm_lab.models import DirectionSpeedMLP, ImageUNetVelocity
+from fm_lab.models import (
+    DirectionSpeedImageUNet,
+    DirectionSpeedMLP,
+    DirectionSpeedVectorUNet,
+    ImageUNetVelocity,
+    VectorUNetVelocity,
+)
 
 
 def test_direction_speed_mlp_directions_are_unit_norm() -> None:
@@ -40,3 +46,50 @@ def test_image_unet_velocity_preserves_flattened_image_shape() -> None:
     velocity = model(x, t)
 
     assert velocity.shape == x.shape
+
+
+def test_vector_unet_velocity_preserves_vector_shape() -> None:
+    model = VectorUNetVelocity(dim=3, base_channels=8, time_embedding_dim=16)
+    x = torch.randn(4, 3)
+    t = torch.linspace(0.0, 1.0, 4)
+
+    velocity = model(x, t)
+
+    assert velocity.shape == x.shape
+
+
+def test_direction_speed_vector_unet_velocity_is_parallel_to_direction() -> None:
+    model = DirectionSpeedVectorUNet(dim=3, base_channels=8, time_embedding_dim=16)
+    source_label = torch.randn(4, 3)
+    x = torch.randn(4, 3)
+    t = torch.linspace(0.1, 0.9, 4)
+
+    direction = model.direction(source_label)
+    velocity = model(x, t, context={"source_label": source_label})
+    projection = (velocity * direction).sum(dim=1, keepdim=True) * direction
+
+    assert direction.shape == (4, 3)
+    assert torch.allclose(direction.norm(dim=1), torch.ones(4), atol=1e-5)
+    assert velocity.shape == (4, 3)
+    assert torch.allclose(velocity, projection, atol=1e-5)
+
+
+def test_direction_speed_image_unet_velocity_is_parallel_to_direction() -> None:
+    model = DirectionSpeedImageUNet(
+        dim=28 * 28,
+        image_shape=(28, 28),
+        base_channels=8,
+        time_embedding_dim=16,
+    )
+    source_label = torch.randn(2, 28 * 28)
+    x = torch.randn(2, 28 * 28)
+    t = torch.linspace(0.1, 0.9, 2)
+
+    direction = model.direction(source_label)
+    velocity = model(x, t, context={"source_label": source_label})
+    projection = (velocity * direction).sum(dim=1, keepdim=True) * direction
+
+    assert direction.shape == (2, 28 * 28)
+    assert torch.allclose(direction.norm(dim=1), torch.ones(2), atol=1e-5)
+    assert velocity.shape == (2, 28 * 28)
+    assert torch.allclose(velocity, projection, atol=1e-5)

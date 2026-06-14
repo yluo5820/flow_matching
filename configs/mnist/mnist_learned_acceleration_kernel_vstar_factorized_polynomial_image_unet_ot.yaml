@@ -1,0 +1,90 @@
+experiment:
+  name: mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot
+  seed: 0
+  output_dir: runs/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot
+
+data:
+  name: mnist
+  root: data/mnist
+  train: true
+  download: true
+  normalize: minus_one_one
+  dequantize: true
+
+source:
+  name: gaussian
+  dim: 784
+  std: 1.0
+
+coupling:
+  name: minibatch_ot
+  max_exact_size: 64
+
+path:
+  name: learned_acceleration
+  basis: factorized_polynomial
+  hidden_dim: 512
+  depth: 3
+  activation: silu
+
+model:
+  name: image_unet
+  image_shape: [28, 28]
+  base_channels: 32
+  activation: silu
+  time_embedding_dim: 128
+  zero_init_head: true
+
+objective:
+  name: flow_matching
+  loss: mse
+  straightness:
+    weight: 1.0e-4
+    sample_size: 8
+  interpolant_acceleration:
+    weight: 1.0e-5
+  learned_interpolant:
+    mode: kernel_vstar
+    estimator_size: 64
+    query_size: 8
+    bandwidth: median
+    bandwidth_scale: 1.0
+    min_bandwidth: 1.0e-3
+
+training:
+  batch_size: 64
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+  learned_acceleration:
+    warmup_steps: 10000
+    theta_steps: 1
+    psi_steps: 1
+    psi_lr: 1.0e-5
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 10000
+    min_delta: 5.0e-4
+    ema_alpha: 0.3
+
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 256
+  n_trajectories: 16
+  nfe: 64
+  plot_max_points: 64
+
+diagnostics:
+  ambiguity:
+    methods: [knn]
+    t_values: [0.1, 0.3, 0.5, 0.7, 0.9]
+  curvature:
+    enabled: false
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]
