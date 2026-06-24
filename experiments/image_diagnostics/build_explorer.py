@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recompute-diagnostics", action="store_true")
     parser.add_argument("--no-explorer", action="store_true")
     parser.add_argument(
+        "--no-id-estimation",
+        action="store_true",
+        help="Build projections without the configured intrinsic-dimension analysis.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate and count samples without computing features or UMAP.",
@@ -65,6 +70,7 @@ def main() -> None:
         recompute_projection=args.recompute_projection,
         recompute_diagnostics=args.recompute_diagnostics,
         no_explorer=args.no_explorer,
+        no_id_estimation=args.no_id_estimation,
     )
     config = diagnostics_config_from_dict(effective)
     result = run_diagnostics_build(
@@ -77,6 +83,11 @@ def main() -> None:
     else:
         print(f"Finished dataset explorer build: {result['output_dir']}")
         if result["explorer_data"] is not None:
+            if result["id_estimation"] is not None:
+                print(
+                    "Explorer with ID: "
+                    f"{result['id_estimation']['merged_explorer_path']}"
+                )
             print("Launch explorer:")
             print(
                 "  streamlit run experiments/image_diagnostics/explorer_app.py"
@@ -94,6 +105,9 @@ def _print_dry_run(result: dict) -> None:
     print(f"Requires model download: {result['requires_model_download']}")
     print(f"Projection: {result['projection_method']}")
     print(f"Diagnostics neighbors: {result['k_neighbors']}")
+    print(f"ID estimation enabled: {result['id_estimation_enabled']}")
+    if result["id_estimation_enabled"] and result["id_estimation_config"]:
+        print(f"ID config: {result['id_estimation_config']}")
     print(f"Output directory: {result['output_dir']}")
 
 

@@ -14,6 +14,8 @@ from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
 from fm_lab.image_diagnostics.feature_models import ImageFeatureExtractor, load_feature_model
 from fm_lab.image_diagnostics.feature_runner import FeatureResult, compute_or_load_features
+from fm_lab.image_diagnostics.id_config import load_id_config
+from fm_lab.image_diagnostics.id_runner import run_id_estimation
 from fm_lab.image_diagnostics.label_store import ensure_label_store
 from fm_lab.image_diagnostics.local_diagnostics import compute_or_load_local_diagnostics
 from fm_lab.image_diagnostics.projection_diagnostics import (
@@ -36,6 +38,14 @@ def run_diagnostics_build(
 ) -> dict[str, Any]:
     """Build features, projections, diagnostics, and explorer data."""
 
+    configured_id = None
+    id_config_path = None
+    if config.id_estimation.enabled:
+        id_config_path = _resolve_project_path(
+            config.id_estimation.config_path,
+            project_root=project_root,
+        )
+        configured_id = load_id_config(id_config_path)
     if dry_run:
         dataset = load_dataset(config.input, project_root=project_root)
         return _dry_run_result(config, dataset)
@@ -125,6 +135,31 @@ def run_diagnostics_build(
         write_parquet(explorer_data, explorer_path)
         logger.info("Saved explorer data: %s", explorer_path)
 
+    id_estimation = None
+    if config.id_estimation.enabled:
+        if not explorer_path.exists():
+            raise RuntimeError(
+                "Intrinsic-dimension estimation requires saved explorer data."
+            )
+        assert configured_id is not None
+        configured_id = replace(
+            configured_id,
+            input=replace(
+                configured_id.input,
+                diagnostics_dir=str(output_dir.resolve()),
+            ),
+        )
+        logger.info("Running intrinsic-dimension estimation: %s", id_config_path)
+        id_estimation = run_id_estimation(
+            configured_id,
+            project_root=project_root,
+        )
+        logger = configure_logging(output_dir)
+        logger.info(
+            "Saved explorer with intrinsic-dimension estimates: %s",
+            id_estimation.get("merged_explorer_path"),
+        )
+
     elapsed = time.perf_counter() - started
     logger.info("Finished dataset explorer build in %.2f seconds.", elapsed)
     return {
@@ -139,6 +174,7 @@ def run_diagnostics_build(
         "diagnostic_rows": len(diagnostics),
         "explorer_data": explorer_path if explorer_path.exists() else None,
         "manual_labels": labels_path,
+        "id_estimation": id_estimation,
         "runtime_seconds": elapsed,
     }
 
@@ -152,6 +188,19 @@ def _feature_output_dir(
     if not config.features.cache_dir:
         return default
     path = Path(config.features.cache_dir).expanduser()
+    if not path.is_absolute():
+        path = Path(project_root or Path.cwd()) / path
+    return path.resolve()
+
+
+def _resolve_project_path(
+    value: str | None,
+    *,
+    project_root: str | Path | None,
+) -> Path:
+    if not value:
+        raise RuntimeError("Configured path is empty.")
+    path = Path(value).expanduser()
     if not path.is_absolute():
         path = Path(project_root or Path.cwd()) / path
     return path.resolve()
@@ -174,6 +223,8 @@ def _dry_run_result(
         "requires_model_download": config.features.mode == "dinov2",
         "projection_method": config.projection.method,
         "k_neighbors": config.diagnostics.k_neighbors,
+        "id_estimation_enabled": config.id_estimation.enabled,
+        "id_estimation_config": config.id_estimation.config_path,
         "output_dir": config.output_dir,
     }
 

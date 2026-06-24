@@ -45,12 +45,17 @@ python experiments/image_diagnostics/build_explorer.py \
 The dry run should report 70,000 selected samples. The config reads the 2D and
 3D UMAP coordinates produced by
 `compute_mnist_reference_projections.py` from `data/umap_explorer_local/` and
-computes PCA during the build. Build all raw-pixel views:
+computes PCA during the build. It then estimates intrinsic dimension in the
+raw-pixel feature space and writes
+`explorer/explorer_data_with_raw_id.parquet`. Build everything with:
 
 ```bash
 python experiments/image_diagnostics/build_explorer.py \
   --config configs/image_diagnostics/mnist_raw_umap_full.yaml
 ```
+
+ID estimation is enabled by default for this config. To rebuild only the
+projection explorer, add `--no-id-estimation`.
 
 Launch it:
 
@@ -221,7 +226,9 @@ python experiments/image_diagnostics/build_explorer.py \
 The first build downloads DINOv2 Base, computes one normalized `70000x768`
 feature matrix, then computes 2D and 3D UMAP from that shared matrix. The model
 download is approximately 346 MB; full feature extraction and both projections
-are substantially more expensive than the raw-pixel build.
+are substantially more expensive than the raw-pixel build. Intrinsic-dimension
+estimation in DINOv2 feature space runs afterward and writes
+`explorer/explorer_data_with_id.parquet`.
 
 Launch all existing compatible views:
 

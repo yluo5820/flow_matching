@@ -127,6 +127,12 @@ class ExplorerConfig:
 
 
 @dataclass(frozen=True)
+class IDEstimationPostprocessConfig:
+    enabled: bool = False
+    config_path: str | None = None
+
+
+@dataclass(frozen=True)
 class DiagnosticsRunConfig:
     explorer_name: str
     input: InputConfig = field(default_factory=InputConfig)
@@ -135,6 +141,9 @@ class DiagnosticsRunConfig:
     diagnostics: LocalDiagnosticsConfig = field(default_factory=LocalDiagnosticsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     explorer: ExplorerConfig = field(default_factory=ExplorerConfig)
+    id_estimation: IDEstimationPostprocessConfig = field(
+        default_factory=IDEstimationPostprocessConfig
+    )
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -163,6 +172,9 @@ def diagnostics_config_from_dict(raw: dict[str, Any]) -> DiagnosticsRunConfig:
         diagnostics=LocalDiagnosticsConfig(**_section(raw, "diagnostics")),
         output=_output_config(_section(raw, "output")),
         explorer=ExplorerConfig(**_section(raw, "explorer")),
+        id_estimation=IDEstimationPostprocessConfig(
+            **_section(raw, "id_estimation")
+        ),
         raw=_normalized_raw(raw, str(explorer_name)),
     )
     validate_diagnostics_config(config)
@@ -180,6 +192,7 @@ def apply_diagnostics_overrides(
     recompute_projection: bool = False,
     recompute_diagnostics: bool = False,
     no_explorer: bool = False,
+    no_id_estimation: bool = False,
 ) -> dict[str, Any]:
     """Apply CLI overrides without mutating the loaded YAML mapping."""
 
@@ -204,6 +217,9 @@ def apply_diagnostics_overrides(
         updated.setdefault("diagnostics", {})["skip_existing"] = False
     if no_explorer:
         updated.setdefault("explorer", {})["enabled"] = False
+        updated.setdefault("id_estimation", {})["enabled"] = False
+    if no_id_estimation:
+        updated.setdefault("id_estimation", {})["enabled"] = False
     return updated
 
 
@@ -299,6 +315,16 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
         raise ConfigError("explorer.preview_mode must be original or map.")
     if config.explorer.projection_diagnostics_k < 1:
         raise ConfigError("explorer.projection_diagnostics_k must be positive.")
+    if config.id_estimation.enabled and not config.id_estimation.config_path:
+        raise ConfigError(
+            "id_estimation.config_path is required when ID estimation is enabled."
+        )
+    if config.id_estimation.enabled and (
+        not config.explorer.enabled or not config.output.save_explorer_data
+    ):
+        raise ConfigError(
+            "ID estimation requires explorer.enabled and output.save_explorer_data."
+        )
     for name in (
         "height",
         "sidebar_width",

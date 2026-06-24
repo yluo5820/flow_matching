@@ -72,3 +72,7 @@ explorer:
   show_workspace: false
   compute_projection_diagnostics: true
   projection_diagnostics_k: 15
+
+id_estimation:
+  enabled: true
+  config_path: configs/image_diagnostics/id_estimation_mnist_raw.yaml

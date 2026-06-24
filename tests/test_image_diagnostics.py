@@ -29,6 +29,7 @@ from fm_lab.image_diagnostics.explorer_merge import (
     load_discovered_explorer_group,
 )
 from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
+from fm_lab.image_diagnostics.id_config import id_config_from_dict
 from fm_lab.image_diagnostics.label_store import load_manual_labels, save_manual_label
 from fm_lab.image_diagnostics.local_diagnostics import compute_local_diagnostics
 from fm_lab.image_diagnostics.metadata_loader import load_image_metadata
@@ -763,6 +764,67 @@ def test_mnist_dry_run_requires_no_model(tmp_path: Path) -> None:
     assert result["feature_mode"] == "raw"
     assert result["requires_model_download"] is False
     assert not (tmp_path / "outputs").exists()
+
+
+def test_build_runs_configured_id_estimation(tmp_path: Path, monkeypatch) -> None:
+    mnist_root = tmp_path / "mnist"
+    images = np.arange(4 * 28 * 28, dtype=np.uint8).reshape(4, 28, 28)
+    labels = np.asarray([0, 1, 2, 3], dtype=np.uint8)
+    _write_mnist_split(mnist_root, images, labels, split="test")
+    raw = _raw_config(str(mnist_root))
+    raw["output"]["root_dir"] = str(tmp_path / "outputs")
+    raw["projection"] = {
+        "method": "pca",
+        "also_compute_pca": False,
+    }
+    raw["diagnostics"] = {"enabled": False}
+    raw["id_estimation"] = {
+        "enabled": True,
+        "config_path": "configs/id.yaml",
+    }
+    captured = {}
+    fake_id_config = id_config_from_dict(
+        {
+            "id_estimation_name": "test_id",
+            "input": {
+                "diagnostics_dir": "unused",
+                "embedding_source": "features/raw_pixels_features.npy",
+                "source_type": "npy",
+            },
+        }
+    )
+
+    def fake_load(path: Path):
+        captured["config_path"] = path
+        return fake_id_config
+
+    def fake_run(config, *, project_root):
+        captured["config"] = config
+        captured["project_root"] = project_root
+        return {"merged_explorer_path": "explorer_data_with_id.parquet"}
+
+    monkeypatch.setattr(
+        "fm_lab.image_diagnostics.runner.load_id_config",
+        fake_load,
+    )
+    monkeypatch.setattr(
+        "fm_lab.image_diagnostics.runner.run_id_estimation",
+        fake_run,
+    )
+
+    result = run_diagnostics_build(
+        diagnostics_config_from_dict(raw),
+        project_root=tmp_path,
+    )
+
+    assert captured["config_path"] == tmp_path / "configs" / "id.yaml"
+    assert captured["config"].input.diagnostics_dir == str(
+        (tmp_path / "outputs" / "test_explorer").resolve()
+    )
+    assert captured["project_root"] == tmp_path
+    assert result["id_estimation"]["merged_explorer_path"].endswith(
+        "explorer_data_with_id.parquet"
+    )
 
 
 def test_sprite_atlas_packs_and_tints_mnist_thumbnails(tmp_path: Path) -> None:
