@@ -19,13 +19,17 @@ from fm_lab.data import (
     GaussianMixture2D,
     GaussianMixture3D,
     HelixMixture,
+    LineSegment3D,
     MNISTImages,
+    MoebiusStrip,
     MultiSwissRoll,
     MultiTorus,
     NestedSphericalShells,
+    PlanarDisk,
     SphericalShell,
     SwissRoll,
     Torus,
+    TrefoilKnot,
     TwoMoons,
 )
 from fm_lab.models import (
@@ -136,6 +140,45 @@ def build_target(config: dict[str, Any]):
             pitch=float(data_config.get("pitch", 1.8)),
             separation=float(data_config.get("separation", 1.5)),
             noise=float(data_config.get("noise", 0.03)),
+        )
+    if name == "helix":
+        return HelixMixture(
+            n_helixes=1,
+            turns=float(data_config.get("turns", 3.0)),
+            radius=float(data_config.get("radius", 0.6)),
+            pitch=float(data_config.get("pitch", 2.4)),
+            separation=0.0,
+            noise=float(data_config.get("noise", 0.0)),
+        )
+    if name in {"moebius_strip", "mobius_strip"}:
+        return MoebiusStrip(
+            major_radius=float(data_config.get("major_radius", 1.2)),
+            half_width=float(data_config.get("half_width", 0.35)),
+            noise=float(data_config.get("noise", 0.0)),
+        )
+    if name in {"line_segment_3d", "line_segment", "line"}:
+        return LineSegment3D(
+            length=float(data_config.get("length", 3.0)),
+            direction=tuple(
+                float(value)
+                for value in data_config.get("direction", [1.0, 0.5, 0.25])
+            ),
+            center=tuple(
+                float(value)
+                for value in data_config.get("center", [0.0, 0.0, 0.0])
+            ),
+            noise=float(data_config.get("noise", 0.0)),
+        )
+    if name in {"planar_disk", "disk"}:
+        return PlanarDisk(
+            radius=float(data_config.get("radius", 1.2)),
+            height=float(data_config.get("height", 0.0)),
+            noise=float(data_config.get("noise", 0.0)),
+        )
+    if name in {"trefoil_knot", "trefoil"}:
+        return TrefoilKnot(
+            scale=float(data_config.get("scale", 0.55)),
+            noise=float(data_config.get("noise", 0.0)),
         )
     raise ValueError(f"Unsupported target distribution: {name}")
 

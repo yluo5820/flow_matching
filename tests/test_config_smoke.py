@@ -71,6 +71,16 @@ def test_3d_linear_toy_configs_build_matching_components() -> None:
         "configs/toy/gaussian_to_multi_torus_linear_3d.yaml",
         "configs/toy/gaussian_to_helix_mixture_linear_3d.yaml",
         "configs/toy/gaussian_to_nested_spherical_shells_linear_3d.yaml",
+        "configs/toy/gaussian_to_uniform_sphere_surface_linear_3d.yaml",
+        "configs/toy/gaussian_to_moebius_strip_linear_3d.yaml",
+        "configs/toy/gaussian_to_disjoint_tori_surface_linear_3d.yaml",
+        "configs/toy/gaussian_to_line_segment_linear_3d.yaml",
+        "configs/toy/gaussian_to_helix_linear_3d.yaml",
+        "configs/toy/gaussian_to_planar_disk_linear_3d.yaml",
+        "configs/toy/gaussian_to_circle_linear_3d.yaml",
+        "configs/toy/gaussian_to_trefoil_knot_linear_3d.yaml",
+        "configs/toy/gaussian_to_torus_surface_linear_3d.yaml",
+        "configs/toy/gaussian_to_swiss_roll_surface_linear_3d.yaml",
     )
 
     for config_path in config_paths:

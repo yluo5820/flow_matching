@@ -74,6 +74,43 @@ Available 3D toy targets:
 | Helix mixture | `configs/toy/gaussian_to_helix_mixture_linear_3d.yaml` | Thin curved 1D structures in 3D. |
 | Nested spherical shells | `configs/toy/gaussian_to_nested_spherical_shells_linear_3d.yaml` | Multiple radial shells and radial ambiguity. |
 
+Exact lower-dimensional manifold targets use `noise: 0.0`. These are singular
+with respect to 3D volume: the target has no ordinary 3D density, even though
+samples are represented by three coordinates.
+
+| Intrinsic dimension | Target | Config | Structural control |
+|---|---|---|---|
+| 2 | Uniform sphere surface | `configs/toy/gaussian_to_uniform_sphere_surface_linear_3d.yaml` | Compact, connected, no boundary. |
+| 2 | Möbius strip | `configs/toy/gaussian_to_moebius_strip_linear_3d.yaml` | Connected, non-orientable, with boundary. |
+| 2 | Three disjoint torus surfaces | `configs/toy/gaussian_to_disjoint_tori_surface_linear_3d.yaml` | Disconnected components with holes. |
+| 1 | Line segment | `configs/toy/gaussian_to_line_segment_linear_3d.yaml` | Flat manifold with endpoints. |
+| 1 | Helix | `configs/toy/gaussian_to_helix_linear_3d.yaml` | Open curved manifold. |
+| 2 | Planar disk | `configs/toy/gaussian_to_planar_disk_linear_3d.yaml` | Flat manifold with boundary. |
+| 1 | Circle | `configs/toy/gaussian_to_circle_linear_3d.yaml` | Compact connected curve. |
+| 1 | Trefoil knot | `configs/toy/gaussian_to_trefoil_knot_linear_3d.yaml` | Compact knotted curve. |
+| 2 | Torus surface | `configs/toy/gaussian_to_torus_surface_linear_3d.yaml` | Compact surface with a hole. |
+| 2 | Swiss-roll surface | `configs/toy/gaussian_to_swiss_roll_surface_linear_3d.yaml` | Curved sheet with boundary. |
+
+The sphere sampler is uniform with respect to surface area. The other
+parametric targets use uniform latent parameters, which is intentional and
+does not generally imply uniform surface-area density.
+
+Run a short visual smoke test by overriding the full training budget:
+
+```bash
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/toy/gaussian_to_moebius_strip_linear_3d.yaml \
+  --steps 1000 \
+  --n-samples 2048 \
+  --n-trajectories 64 \
+  --nfe 32 \
+  --output-dir runs/moebius_smoke \
+  --device auto
+```
+
+Replace the config path with any row in the table. Remove the overrides for
+the full run.
+
 ## Image Runs
 
 MNIST is represented as flattened 784D image vectors, with `image_shape` metadata used

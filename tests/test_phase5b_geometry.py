@@ -3,12 +3,16 @@ import torch
 from fm_lab.data import (
     GaussianMixture3D,
     HelixMixture,
+    LineSegment3D,
+    MoebiusStrip,
     MultiSwissRoll,
     MultiTorus,
     NestedSphericalShells,
+    PlanarDisk,
     SphericalShell,
     SwissRoll,
     Torus,
+    TrefoilKnot,
 )
 from fm_lab.diagnostics import radial_deviation, radial_tangent_velocity_2d
 from fm_lab.sources import SphericalShellSource
@@ -27,6 +31,10 @@ def test_harder_3d_toy_shapes() -> None:
         Torus(),
         MultiTorus(n_tori=2),
         HelixMixture(n_helixes=3),
+        MoebiusStrip(),
+        LineSegment3D(),
+        PlanarDisk(),
+        TrefoilKnot(),
         NestedSphericalShells(radii=(0.5, 1.0), noise=0.0),
     ]
 
@@ -36,6 +44,36 @@ def test_harder_3d_toy_shapes() -> None:
         assert samples.shape == (32, 3)
         assert torch.isfinite(samples).all()
         assert distribution.metadata()["dim"] == 3
+
+
+def test_exact_manifold_targets_respect_intrinsic_geometry() -> None:
+    sphere = SphericalShell(dim=3, radius=1.3, noise=0.0).sample(256)
+    assert torch.allclose(sphere.norm(dim=1), torch.full((256,), 1.3), atol=1e-5)
+
+    line_distribution = LineSegment3D(
+        length=2.0,
+        direction=(1.0, 2.0, -1.0),
+        center=(0.5, -0.25, 0.75),
+        noise=0.0,
+    )
+    line = line_distribution.sample(256)
+    direction = torch.tensor(line_distribution.direction)
+    direction = direction / direction.norm()
+    centered = line - torch.tensor(line_distribution.center)
+    residual = centered - (centered @ direction)[:, None] * direction
+    assert residual.norm(dim=1).max() < 1e-5
+
+    disk = PlanarDisk(radius=1.1, height=0.4, noise=0.0).sample(256)
+    assert torch.allclose(disk[:, 2], torch.full((256,), 0.4))
+    assert disk[:, :2].norm(dim=1).max() <= 1.1
+
+
+def test_manifold_metadata_reports_intrinsic_dimension() -> None:
+    assert SphericalShell(dim=3).metadata()["intrinsic_dim"] == 2
+    assert MoebiusStrip().metadata()["intrinsic_dim"] == 2
+    assert LineSegment3D().metadata()["intrinsic_dim"] == 1
+    assert PlanarDisk().metadata()["intrinsic_dim"] == 2
+    assert TrefoilKnot().metadata()["intrinsic_dim"] == 1
 
 
 def test_gaussian_mixture_3d_log_prob_shape() -> None:

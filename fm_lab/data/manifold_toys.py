@@ -32,7 +32,13 @@ class SphericalShell:
         return None
 
     def metadata(self) -> dict:
-        return {"name": self.name, "dim": self.dim, "radius": self.radius, "noise": self.noise}
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": self.dim - 1,
+            "radius": self.radius,
+            "noise": self.noise,
+        }
 
 
 @dataclass
@@ -62,6 +68,7 @@ class NestedSphericalShells:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": self.dim - 1,
             "radii": list(self.radii),
             "noise": self.noise,
         }
@@ -88,7 +95,13 @@ class SwissRoll:
         return None
 
     def metadata(self) -> dict:
-        return {"name": self.name, "dim": self.dim, "noise": self.noise, "scale": self.scale}
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": 2,
+            "noise": self.noise,
+            "scale": self.scale,
+        }
 
 
 @dataclass
@@ -133,6 +146,7 @@ class MultiSwissRoll:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": 2,
             "n_rolls": self.n_rolls,
             "noise": self.noise,
             "scale": self.scale,
@@ -180,6 +194,7 @@ class GaussianMixture3D:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": 3,
             "n_modes": self.n_modes,
             "radius": self.radius,
             "std": self.std,
@@ -211,6 +226,7 @@ class Torus:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": 2,
             "major_radius": self.major_radius,
             "minor_radius": self.minor_radius,
             "noise": self.noise,
@@ -253,6 +269,7 @@ class MultiTorus:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": 2,
             "n_tori": self.n_tori,
             "major_radius": self.major_radius,
             "minor_radius": self.minor_radius,
@@ -304,11 +321,175 @@ class HelixMixture:
         return {
             "name": self.name,
             "dim": self.dim,
+            "intrinsic_dim": 1,
             "n_helixes": self.n_helixes,
             "turns": self.turns,
             "radius": self.radius,
             "pitch": self.pitch,
             "separation": self.separation,
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class MoebiusStrip:
+    major_radius: float = 1.2
+    half_width: float = 0.35
+    noise: float = 0.0
+    name: str = "moebius_strip"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.major_radius <= 0:
+            raise ValueError("MoebiusStrip major_radius must be positive.")
+        if self.half_width <= 0:
+            raise ValueError("MoebiusStrip half_width must be positive.")
+        device = _resolve_device(device)
+        theta = 2 * math.pi * torch.rand(n, device=device)
+        width = self.half_width * (2 * torch.rand(n, device=device) - 1)
+        half_theta = 0.5 * theta
+        radial = self.major_radius + width * torch.cos(half_theta)
+        samples = torch.stack(
+            [
+                radial * torch.cos(theta),
+                radial * torch.sin(theta),
+                width * torch.sin(half_theta),
+            ],
+            dim=1,
+        )
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": 2,
+            "major_radius": self.major_radius,
+            "half_width": self.half_width,
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class LineSegment3D:
+    length: float = 3.0
+    direction: tuple[float, float, float] = (1.0, 0.5, 0.25)
+    center: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    noise: float = 0.0
+    name: str = "line_segment_3d"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.length <= 0:
+            raise ValueError("LineSegment3D length must be positive.")
+        if len(self.direction) != 3 or len(self.center) != 3:
+            raise ValueError("LineSegment3D direction and center must have length 3.")
+        device = _resolve_device(device)
+        direction = torch.tensor(self.direction, dtype=torch.float32, device=device)
+        norm = direction.norm()
+        if float(norm) <= 0:
+            raise ValueError("LineSegment3D direction must be nonzero.")
+        direction = direction / norm
+        center = torch.tensor(self.center, dtype=torch.float32, device=device)
+        coordinate = self.length * (torch.rand(n, device=device) - 0.5)
+        samples = center + coordinate[:, None] * direction
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": 1,
+            "length": self.length,
+            "direction": list(self.direction),
+            "center": list(self.center),
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class PlanarDisk:
+    radius: float = 1.2
+    height: float = 0.0
+    noise: float = 0.0
+    name: str = "planar_disk"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.radius <= 0:
+            raise ValueError("PlanarDisk radius must be positive.")
+        device = _resolve_device(device)
+        radius = self.radius * torch.sqrt(torch.rand(n, device=device))
+        angle = 2 * math.pi * torch.rand(n, device=device)
+        samples = torch.stack(
+            [
+                radius * torch.cos(angle),
+                radius * torch.sin(angle),
+                torch.full_like(radius, self.height),
+            ],
+            dim=1,
+        )
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": 2,
+            "radius": self.radius,
+            "height": self.height,
+            "noise": self.noise,
+        }
+
+
+@dataclass
+class TrefoilKnot:
+    scale: float = 0.55
+    noise: float = 0.0
+    name: str = "trefoil_knot"
+    dim: int = 3
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        if self.scale <= 0:
+            raise ValueError("TrefoilKnot scale must be positive.")
+        device = _resolve_device(device)
+        theta = 2 * math.pi * torch.rand(n, device=device)
+        samples = self.scale * torch.stack(
+            [
+                torch.sin(theta) + 2 * torch.sin(2 * theta),
+                torch.cos(theta) - 2 * torch.cos(2 * theta),
+                -torch.sin(3 * theta),
+            ],
+            dim=1,
+        )
+        if self.noise > 0:
+            samples = samples + self.noise * torch.randn_like(samples)
+        return samples
+
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
+        return None
+
+    def metadata(self) -> dict:
+        return {
+            "name": self.name,
+            "dim": self.dim,
+            "intrinsic_dim": 1,
+            "scale": self.scale,
             "noise": self.noise,
         }
 
