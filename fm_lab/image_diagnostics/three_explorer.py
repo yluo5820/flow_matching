@@ -403,23 +403,18 @@ for (const name of DATA.projections) {{
 }}
 
 function loadAssets() {{
-  const imagePromise = Promise.all(DATA.atlases.map(source => new Promise((resolve, reject) => {{
-    const image = new Image();
-    image.onload = () => {{ atlasImages.push(image); resolve(); }};
-    image.onerror = reject;
-    image.src = source;
-  }})));
   const textureLoader = new THREE.TextureLoader();
-  const texturePromise = Promise.all(DATA.atlases.map(source => new Promise((resolve, reject) => {{
+  statusElement.textContent = `Loading ${{DATA.points.length.toLocaleString()}} samples...`;
+  return Promise.all(DATA.atlases.map((source, atlas) => new Promise((resolve, reject) => {{
     textureLoader.load(source, texture => {{
       texture.flipY = false;
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.magFilter = THREE.NearestFilter;
       texture.minFilter = THREE.LinearFilter;
+      atlasImages[atlas] = texture.image;
       resolve(texture);
     }}, undefined, reject);
   }})));
-  return Promise.all([imagePromise, texturePromise]).then(values => values[1]);
 }}
 
 function buildPointClouds(textures) {{

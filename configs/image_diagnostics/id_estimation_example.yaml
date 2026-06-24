@@ -1,10 +1,10 @@
 id_estimation_name: mnist_dinov2_id
 
 input:
-  diagnostics_dir: outputs/dataset_explorer/mnist_dinov2_umap_2d
+  diagnostics_dir: outputs/dataset_explorer/mnist_dinov2_umap_full
   explorer_data_path: explorer/explorer_data.parquet
-  embedding_source: outputs/dataset_explorer/mnist_dinov2_shared/features/dinov2_base_cls_features.npy
-  embedding_metadata: outputs/dataset_explorer/mnist_dinov2_shared/features/dinov2_base_cls_metadata.parquet
+  embedding_source: features/dinov2_base_cls_features.npy
+  embedding_metadata: features/dinov2_base_cls_metadata.parquet
   feature_space_name: dinov2_base_cls
   source_type: npy
   image_path_column: image_path

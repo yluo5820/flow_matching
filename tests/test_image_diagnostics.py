@@ -70,6 +70,10 @@ def test_config_defaults_to_raw_features_without_model_download() -> None:
     assert raw["input"]["dataset_root"] == "data/mnist"
 
 
+def test_input_config_does_not_sample_by_default() -> None:
+    assert InputConfig().max_samples is None
+
+
 def test_mnist_loader_selects_vectors_labels_and_thumbnails(tmp_path: Path) -> None:
     mnist_root = tmp_path / "mnist"
     images = np.zeros((6, 28, 28), dtype=np.uint8)
@@ -907,6 +911,9 @@ def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
     assert '"coordinates":{"UMAP 2D":[0.0,0.0,0.0],"UMAP 3D":[0.0,0.0,0.0]}' in html
     assert '"details":{"mle_lid_k15":2.5}' in html
     assert "texture2D(textureAtlas" in html
+    assert "atlasImages[atlas] = texture.image" in html
+    assert "Loading ${DATA.points.length.toLocaleString()} samples..." in html
+    assert "new Image()" not in html
 
 
 def _raw_config(dataset_root: str) -> dict:

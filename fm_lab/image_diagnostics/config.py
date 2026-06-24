@@ -17,7 +17,7 @@ class InputConfig:
     split: str = "test"
     order: str = "source"
     thumbnail_mode: str = "files"
-    max_samples: int | None = 2000
+    max_samples: int | None = None
     sample_seed: int = 42
     download: bool = False
     data_path: str = ""

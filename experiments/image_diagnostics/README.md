@@ -29,7 +29,7 @@ using `features.mode: dinov2`:
 python -m pip install -e ".[image-diagnostics,image-embeddings]"
 ```
 
-## MNIST Demo
+## Full MNIST Raw-Pixel Explorer
 
 The repository already contains MNIST under `data/mnist`, so no download is
 needed.
@@ -38,28 +38,30 @@ Validate the run:
 
 ```bash
 python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/mnist_umap_example.yaml \
+  --config configs/image_diagnostics/mnist_raw_umap_full.yaml \
   --dry-run
 ```
 
-Build the raw-pixel UMAP explorer:
+The dry run should report 70,000 selected samples. The config reads the 2D and
+3D UMAP coordinates produced by
+`compute_mnist_reference_projections.py` from `data/umap_explorer_local/` and
+computes PCA during the build. Build all raw-pixel views:
 
 ```bash
 python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/mnist_umap_example.yaml
+  --config configs/image_diagnostics/mnist_raw_umap_full.yaml
 ```
 
 Launch it:
 
 ```bash
-streamlit run experiments/image_diagnostics/explorer_app.py -- \
-  --data outputs/dataset_explorer/mnist_umap/explorer/explorer_data.parquet
+streamlit run experiments/image_diagnostics/explorer_app.py
 ```
 
-The example selects 2,000 test digits deterministically, exports small grayscale
-thumbnails, treats each normalized `28x28` image as a 784-dimensional feature
-vector, computes UMAP/PCA and local diagnostics, and colors points by digit.
-Selecting a point displays the digit and its nearest raw-pixel neighbors.
+The config uses all 60,000 training digits and 10,000 test digits. One build
+flattens each `28x28` image into a 784-dimensional raw-pixel vector and
+computes UMAP 2D, PCA 2D, and UMAP 3D. The explorer discovers the output
+automatically and places all three views in one projection selector.
 
 The primary visualization follows the same broad architecture and interaction
 style as
@@ -77,9 +79,8 @@ The canvas supports:
 - reset-to-fit
 - a responsive sidebar and compact mobile layout
 
-Streamlit serves the Python application and retains the diagnostics table and
-manual-label controls in a secondary workspace below the canvas. The canvas is
-implemented locally without React; the optional 3D renderer uses Three.js.
+Streamlit serves the Python application. The canvas is implemented locally
+without React; the 3D renderer uses Three.js.
 
 The reference project is MIT-licensed. This implementation is an independent
 Python/Canvas version; it uses the reference's public interaction ideas rather
@@ -113,10 +114,6 @@ JSON files into `data/umap_explorer_reference/`. They total about 9 MB and are
 coordinates only: no CLIP, DINOv2, diffusion model, or embedding model is
 downloaded. The digit images come from the repository's local MNIST IDX files,
 whose ordering was checked byte-for-byte against the original sprite sheets.
-
-The smaller `mnist_umap_example.yaml` remains the better iteration config. It
-computes a fresh UMAP/PCA over 2,000 test digits and includes local diagnostics;
-the full reference config favors fidelity and disables those extra diagnostics.
 
 ### Compute The Full Projections Locally
 
@@ -178,21 +175,9 @@ match the historical coordinates exactly.
 
 ## 3D UMAP
 
-The explorer also supports a true three-component UMAP rendered with a
-perspective Three.js camera. The existing 2D configs are unchanged.
-
-Build the 2,000-digit example directly:
-
-```bash
-python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/mnist_umap_3d_example.yaml
-
-streamlit run experiments/image_diagnostics/explorer_app.py -- \
-  --data outputs/dataset_explorer/mnist_umap_3d_example/explorer/explorer_data.parquet
-```
-
-For all 70,000 digits, compute the 3D coordinates once and then build the
-full explorer:
+`mnist_raw_umap_full.yaml` computes its 3D UMAP directly alongside the 2D
+views. To reproduce the original-project ordering through separately stored
+coordinate files instead, run:
 
 ```bash
 python experiments/image_diagnostics/compute_mnist_reference_projections.py \
@@ -214,11 +199,11 @@ The first 3D launch caches the pinned Three.js `0.159.0` browser runtime under
 the explorer output directory. This is approximately 650 KB and is not an
 embedding model.
 
-## MNIST With DINOv2 Features
+## Full MNIST With DINOv2 Features
 
-The matching DINOv2 examples use the same deterministic 2,000 MNIST test
-digits as the raw-pixel examples, but replace each flattened 784-value image
-with the 768-dimensional CLS token from `facebook/dinov2-base`.
+The DINOv2 config uses the same 70,000 MNIST rows and ordering as the raw-pixel
+config, but replaces each flattened 784-value image with the 768-dimensional
+CLS token from `facebook/dinov2-base`.
 
 Install the learned-image dependencies:
 
@@ -226,39 +211,22 @@ Install the learned-image dependencies:
 python -m pip install -e ".[image-diagnostics,image-embeddings]"
 ```
 
-Build the 2D explorer first:
+Build both DINOv2 UMAP views in one run:
 
 ```bash
 python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/mnist_dinov2_umap_2d.yaml
+  --config configs/image_diagnostics/mnist_dinov2_umap_full.yaml
 ```
 
-Then build the 3D explorer:
+The first build downloads DINOv2 Base, computes one normalized `70000x768`
+feature matrix, then computes 2D and 3D UMAP from that shared matrix. The model
+download is approximately 346 MB; full feature extraction and both projections
+are substantially more expensive than the raw-pixel build.
+
+Launch all existing compatible views:
 
 ```bash
-python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/mnist_dinov2_umap_3d.yaml
-```
-
-Both configs use:
-
-```text
-outputs/dataset_explorer/mnist_dinov2_shared/features/
-```
-
-as their feature cache. The first build downloads DINOv2 Base and computes a
-single `2000x768` normalized feature matrix. The second build validates and
-reuses that matrix, then computes only its own UMAP. The first download is
-approximately 346 MB.
-
-Launch the outputs:
-
-```bash
-streamlit run experiments/image_diagnostics/explorer_app.py -- \
-  --data outputs/dataset_explorer/mnist_dinov2_umap_2d/explorer/explorer_data.parquet
-
-streamlit run experiments/image_diagnostics/explorer_app.py -- \
-  --data outputs/dataset_explorer/mnist_dinov2_umap_3d/explorer/explorer_data.parquet
+streamlit run experiments/image_diagnostics/explorer_app.py
 ```
 
 DINOv2 was trained on natural RGB imagery rather than handwritten digits.
@@ -277,8 +245,7 @@ Launch it without specifying files:
 
 By default it scans `outputs/dataset_explorer`. Compatible raw-pixel and
 DINOv2 2D/3D views appear in one projection selector. If the directory
-contains incompatible sample sets, such as a 2,000-sample test subset and a
-70,000-sample full dataset, an in-app dataset selector is shown.
+contains incompatible sample sets, an in-app dataset selector is shown.
 
 Automatic loading validates stable sample keys such as `dataset`, `split`,
 and `source_index`. It does not load DINOv2 or recompute embeddings or UMAP.
@@ -457,7 +424,7 @@ features:
 ## Outputs
 
 ```text
-outputs/dataset_explorer/mnist_umap/
+outputs/dataset_explorer/mnist_raw_umap_full/
   config_used.yaml
   run_log.txt
   dataset_index.parquet
@@ -468,10 +435,9 @@ outputs/dataset_explorer/mnist_umap/
     raw_pixels_features.npy
     raw_pixels_metadata.parquet
   projections/
-    raw_pixels_umap.csv
-    raw_pixels_pca.csv
-  diagnostics/
-    raw_pixels_local_diagnostics.csv
+    raw_pixels_umap_2d.csv
+    raw_pixels_pca_2d.csv
+    raw_pixels_umap_3d.csv
   explorer/
     explorer_data.parquet
     manual_labels.csv

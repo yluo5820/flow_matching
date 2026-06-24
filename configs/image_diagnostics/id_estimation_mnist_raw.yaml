@@ -1,7 +1,7 @@
 id_estimation_name: mnist_raw_pixels_id
 
 input:
-  diagnostics_dir: outputs/dataset_explorer/mnist_umap
+  diagnostics_dir: outputs/dataset_explorer/mnist_raw_umap_full
   explorer_data_path: explorer/explorer_data.parquet
   embedding_source: features/raw_pixels_features.npy
   embedding_metadata: features/raw_pixels_metadata.parquet

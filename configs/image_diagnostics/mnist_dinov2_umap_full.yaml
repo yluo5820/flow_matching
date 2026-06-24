@@ -1,19 +1,18 @@
-explorer_name: mnist_dinov2_umap_3d
+explorer_name: mnist_dinov2_umap_full
 
 input:
   type: mnist
   dataset_root: data/mnist
-  split: test
-  order: source
+  split: all
+  order: mldata
   thumbnail_mode: atlas
-  max_samples: 2000
+  max_samples: null
   sample_seed: 42
   download: false
 
 features:
   mode: dinov2
   name: dinov2_base_cls
-  cache_dir: outputs/dataset_explorer/mnist_dinov2_shared
   repo_id: facebook/dinov2-base
   normalize: true
   batch_size: 16
@@ -24,6 +23,14 @@ features:
 projection:
   skip_existing: true
   variants:
+    - name: DINOv2 UMAP 2D
+      key: dinov2_umap_2d
+      method: umap
+      n_components: 2
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: cosine
+      random_state: 42
     - name: DINOv2 UMAP 3D
       key: dinov2_umap_3d
       method: umap
@@ -49,13 +56,16 @@ explorer:
   renderer: three3d
   height: 760
   sidebar_width: 300
-  point_size: 18
+  point_size: 14
   hover_size: 56
   atlas_tile_size: 28
   atlas_size: 2048
   selector_label: Projection
   preview_mode: original
   show_metrics: true
+  show_legend: false
+  show_view_controls: true
+  show_instructions: false
   show_workspace: false
   compute_projection_diagnostics: true
   projection_diagnostics_k: 15

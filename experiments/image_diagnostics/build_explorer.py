@@ -79,8 +79,7 @@ def main() -> None:
         if result["explorer_data"] is not None:
             print("Launch explorer:")
             print(
-                "  streamlit run experiments/image_diagnostics/explorer_app.py -- "
-                f"--data {result['explorer_data']}"
+                "  streamlit run experiments/image_diagnostics/explorer_app.py"
             )
 
 
