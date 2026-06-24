@@ -16,7 +16,7 @@ source:
 
 coupling:
   name: minibatch_ot
-  max_exact_size: 1024
+  max_exact_size: 256
 
 path:
   name: linear

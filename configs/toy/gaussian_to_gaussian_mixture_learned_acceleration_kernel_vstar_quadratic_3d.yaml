@@ -1,7 +1,7 @@
 experiment:
-  name: gaussian_to_gaussian_mixture_learned_acceleration_3d
+  name: gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_quadratic_3d
   seed: 0
-  output_dir: runs/gaussian_to_gaussian_mixture_learned_acceleration_3d
+  output_dir: runs/gaussian_to_gaussian_mixture_learned_acceleration_kernel_vstar_quadratic_3d
 
 data:
   name: gaussian_mixture_3d
@@ -19,7 +19,7 @@ coupling:
 
 path:
   name: learned_acceleration
-  basis: endpoint_bump
+  basis: quadratic
   hidden_dim: 128
   depth: 3
   activation: silu
@@ -39,6 +39,13 @@ objective:
     sample_size: 256
   interpolant_acceleration:
     weight: 1.0e-3
+  learned_interpolant:
+    mode: kernel_vstar
+    estimator_size: 256
+    query_size: 64
+    bandwidth: median
+    bandwidth_scale: 1.0
+    min_bandwidth: 1.0e-3
 
 training:
   batch_size: 512
