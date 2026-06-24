@@ -1,0 +1,38 @@
+explorer_name: numpy_dataset_umap
+
+input:
+  type: numpy
+  data_path: path/to/samples.npy
+  labels_path: null
+  image_shape: null
+  value_range: null
+  max_samples: 5000
+  sample_seed: 42
+
+features:
+  mode: raw
+  name: input_vectors
+  normalize: false
+  skip_existing: true
+
+projection:
+  method: umap
+  n_neighbors: 15
+  min_dist: 0.1
+  metric: euclidean
+  random_state: 42
+  also_compute_pca: true
+  skip_existing: true
+
+diagnostics:
+  k_neighbors: 15
+  metric: euclidean
+  covariance_eigenvalues: 5
+  skip_existing: true
+
+output:
+  root_dir: outputs/dataset_explorer
+
+explorer:
+  enabled: true
+  default_color_by: label

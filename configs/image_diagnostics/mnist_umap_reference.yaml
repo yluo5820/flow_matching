@@ -1,0 +1,84 @@
+explorer_name: mnist_umap_reference
+
+input:
+  type: mnist
+  dataset_root: data/mnist
+  split: all
+  order: mldata
+  thumbnail_mode: atlas
+  max_samples: null
+  sample_seed: 42
+  download: false
+
+features:
+  mode: raw
+  name: raw_pixels
+  normalize: false
+  skip_existing: true
+
+projection:
+  skip_existing: true
+  variants:
+    - name: UMAP
+      key: umap
+      method: umap
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+      source_path: data/umap_explorer_reference/mnist_embeddings.json
+      source_url: https://raw.githubusercontent.com/GrantCuster/umap-explorer/master/public/mnist_embeddings.json
+      download: true
+    - name: T-SNE
+      key: tsne
+      method: tsne
+      metric: euclidean
+      random_state: 0
+      perplexity: 30.0
+      init: random
+      learning_rate: 200.0
+      source_path: data/umap_explorer_reference/tsne_mnist_embeddings.json
+      source_url: https://raw.githubusercontent.com/GrantCuster/umap-explorer/master/public/tsne_mnist_embeddings.json
+      download: true
+    - name: UMAP min_dist=0.8
+      key: umap_min_dist_0_8
+      method: umap
+      n_neighbors: 15
+      min_dist: 0.8
+      metric: euclidean
+      random_state: 42
+      source_path: data/umap_explorer_reference/md08_umap_mnist_embeddings.json
+      source_url: https://raw.githubusercontent.com/GrantCuster/umap-explorer/master/public/md08_umap_mnist_embeddings.json
+      download: true
+
+diagnostics:
+  enabled: false
+
+output:
+  root_dir: outputs/dataset_explorer
+  save_features: false
+  save_projection: true
+  save_diagnostics: false
+  save_explorer_data: true
+
+explorer:
+  enabled: true
+  app_type: streamlit
+  height: 760
+  sidebar_width: 300
+  point_size: 28
+  hover_size: 56
+  transition_ms: 1000
+  transition_easing: linear
+  scale_point_size_with_zoom: false
+  atlas_tile_size: 28
+  atlas_size: 2048
+  selector_label: Algorithm
+  preview_mode: original
+  show_metrics: true
+  show_legend: false
+  show_view_controls: false
+  show_instructions: false
+  show_workspace: false
+  compute_projection_diagnostics: true
+  projection_diagnostics_k: 15

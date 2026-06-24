@@ -1,0 +1,559 @@
+from __future__ import annotations
+
+import gzip
+import json
+import struct
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from PIL import Image
+
+from fm_lab.image_diagnostics.canvas_explorer import (
+    build_canvas_html,
+    prepare_sprite_atlases,
+)
+from fm_lab.image_diagnostics.config import (
+    FeatureConfig,
+    InputConfig,
+    LocalDiagnosticsConfig,
+    ProjectionConfig,
+    apply_diagnostics_overrides,
+    diagnostics_config_from_dict,
+)
+from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
+from fm_lab.image_diagnostics.explorer_data import build_explorer_data
+from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
+from fm_lab.image_diagnostics.label_store import load_manual_labels, save_manual_label
+from fm_lab.image_diagnostics.local_diagnostics import compute_local_diagnostics
+from fm_lab.image_diagnostics.metadata_loader import load_image_metadata
+from fm_lab.image_diagnostics.mnist_reference_projections import (
+    compute_mnist_reference_projections,
+)
+from fm_lab.image_diagnostics.projection_diagnostics import (
+    compute_projection_diagnostics,
+)
+from fm_lab.image_diagnostics.projections import (
+    compute_or_load_projections,
+    compute_projection,
+    projection_variants,
+)
+from fm_lab.image_diagnostics.runner import run_diagnostics_build
+
+
+def test_config_defaults_to_raw_features_without_model_download() -> None:
+    raw = _raw_config("data/mnist")
+    updated = apply_diagnostics_overrides(
+        raw,
+        input_path="other/mnist",
+        feature_mode="raw",
+        recompute_features=True,
+        recompute_projection=True,
+        recompute_diagnostics=True,
+        no_explorer=True,
+    )
+    config = diagnostics_config_from_dict(updated)
+
+    assert config.explorer_name == "test_explorer"
+    assert config.input.dataset_root == "other/mnist"
+    assert config.features.mode == "raw"
+    assert config.features.skip_existing is False
+    assert config.projection.skip_existing is False
+    assert config.diagnostics.skip_existing is False
+    assert config.explorer.enabled is False
+    assert raw["input"]["dataset_root"] == "data/mnist"
+
+
+def test_mnist_loader_selects_vectors_labels_and_thumbnails(tmp_path: Path) -> None:
+    mnist_root = tmp_path / "mnist"
+    images = np.zeros((6, 28, 28), dtype=np.uint8)
+    for index in range(6):
+        images[index, 3 + index : 8 + index, 4:12] = 255
+    labels = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.uint8)
+    _write_mnist_split(mnist_root, images, labels, split="test")
+
+    bundle = load_dataset(
+        InputConfig(
+            type="mnist",
+            dataset_root=str(mnist_root),
+            split="test",
+            max_samples=4,
+            sample_seed=7,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "thumbnails",
+    )
+
+    assert bundle.vectors is not None
+    assert bundle.vectors.shape == (4, 784)
+    assert bundle.metadata["label"].map(type).eq(str).all()
+    assert bundle.metadata["image_path"].map(lambda value: Path(value).is_file()).all()
+    assert bundle.total_rows == 6
+
+
+def test_mnist_loader_recreates_fetch_mldata_order(tmp_path: Path) -> None:
+    mnist_root = tmp_path / "mnist"
+    train_images = np.arange(4 * 28 * 28, dtype=np.uint8).reshape(4, 28, 28)
+    train_labels = np.asarray([2, 0, 1, 0], dtype=np.uint8)
+    test_images = np.arange(3 * 28 * 28, dtype=np.uint8).reshape(3, 28, 28)
+    test_labels = np.asarray([1, 0, 1], dtype=np.uint8)
+    _write_mnist_split(
+        mnist_root,
+        train_images,
+        train_labels,
+        split="train",
+    )
+    _write_mnist_split(
+        mnist_root,
+        test_images,
+        test_labels,
+        split="test",
+    )
+
+    bundle = load_dataset(
+        InputConfig(
+            type="mnist",
+            dataset_root=str(mnist_root),
+            split="all",
+            order="mldata",
+            thumbnail_mode="atlas",
+            max_samples=None,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "assets" / "thumbnails",
+    )
+
+    assert bundle.metadata["label"].tolist() == ["0", "0", "1", "2", "0", "1", "1"]
+    assert bundle.metadata["split"].tolist() == [
+        "train",
+        "train",
+        "train",
+        "train",
+        "test",
+        "test",
+        "test",
+    ]
+    assert bundle.metadata["original_index"].tolist() == [1, 3, 2, 0, 5, 4, 6]
+    assert bundle.metadata["source_index"].tolist() == list(range(7))
+    atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
+    with Image.open(atlas_path) as atlas:
+        assert atlas.size == (2048, 2048)
+
+
+def test_numpy_loader_supports_vectors_and_image_preview(tmp_path: Path) -> None:
+    data_path = tmp_path / "digits.npy"
+    labels_path = tmp_path / "labels.npy"
+    np.save(data_path, np.arange(5 * 16, dtype=np.float32).reshape(5, 16))
+    np.save(labels_path, np.asarray([0, 1, 0, 1, 2]))
+
+    bundle = load_dataset(
+        InputConfig(
+            type="numpy",
+            data_path=str(data_path),
+            labels_path=str(labels_path),
+            image_shape=(4, 4),
+            max_samples=3,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "previews",
+    )
+
+    assert bundle.vectors is not None
+    assert bundle.vectors.shape == (3, 16)
+    assert len(bundle.metadata) == 3
+    assert bundle.metadata["image_path"].map(lambda value: Path(value).is_file()).all()
+
+
+def test_metadata_loader_filters_resolves_and_deduplicates(tmp_path: Path) -> None:
+    experiment = tmp_path / "outputs" / "run"
+    image_path = experiment / "images" / "p1" / "image.png"
+    image_path.parent.mkdir(parents=True)
+    Image.new("RGB", (8, 8), color="red").save(image_path)
+    metadata_path = experiment / "metadata" / "per_image_metadata.jsonl"
+    metadata_path.parent.mkdir()
+    valid = {
+        "output_path": str(image_path.relative_to(tmp_path)),
+        "prompt_id": "p1",
+        "family": "color",
+        "status": "success",
+    }
+    metadata_path.write_text(
+        "\n".join(
+            [
+                json.dumps(valid),
+                json.dumps(valid),
+                json.dumps({**valid, "output_path": "missing.png"}),
+                json.dumps({**valid, "status": "failed"}),
+                "{bad json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = load_image_metadata(
+        InputConfig(
+            type="image_metadata",
+            experiment_dir=str(experiment),
+        ),
+        project_root=tmp_path,
+    )
+
+    assert len(result.frame) == 1
+    assert result.frame.iloc[0]["image_path"] == str(image_path.resolve())
+    assert result.duplicate_rows == 1
+    assert result.missing_images == 1
+    assert result.malformed_rows == 1
+
+
+def test_raw_feature_runner_uses_dataset_vectors_without_model(tmp_path: Path) -> None:
+    vectors = np.asarray([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+    metadata = pd.DataFrame(
+        {
+            "row_id": [0, 1],
+            "image_path": ["", ""],
+            "label": ["a", "b"],
+        }
+    )
+    bundle = DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id="test-source",
+        source_description="test vectors",
+        total_rows=2,
+    )
+
+    result = compute_or_load_features(
+        config=FeatureConfig(mode="raw", name="input_vectors"),
+        dataset=bundle,
+        output_dir=tmp_path / "explorer",
+        save=False,
+        model_loader=lambda _: (_ for _ in ()).throw(AssertionError("model loaded")),
+    )
+
+    assert np.array_equal(result.features, vectors)
+    assert result.metadata["feature_mode"].tolist() == ["raw", "raw"]
+    assert not (tmp_path / "explorer" / "features").exists()
+
+
+def test_projection_and_local_diagnostics_handle_small_dataset() -> None:
+    features = np.asarray(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.9, 0.1, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.9, 0.1],
+        ],
+        dtype=np.float32,
+    )
+    metadata = pd.DataFrame(
+        {
+            "row_id": range(6),
+            "image_path": [f"{index}.png" for index in range(6)],
+            "label": ["0", "0", "1", "1", "2", "2"],
+            "prompt_id": ["a", "a", "b", "b", "c", "c"],
+            "family": ["x", "x", "x", "x", "y", "y"],
+            "status": ["success"] * 6,
+        }
+    )
+
+    projection = compute_projection(
+        features,
+        ProjectionConfig(method="pca"),
+        method="pca",
+    )
+    diagnostics = compute_local_diagnostics(
+        features,
+        metadata,
+        LocalDiagnosticsConfig(k_neighbors=15),
+    )
+
+    assert projection.shape == (6, 2)
+    assert diagnostics["knn_radius_k15"].notna().all()
+    assert diagnostics["participation_ratio_k15"].between(1, 5).all()
+    assert diagnostics["distance_to_label_centroid"].gt(0).all()
+    assert diagnostics["outlier_score"].notna().all()
+
+
+def test_projection_diagnostics_follow_each_projection() -> None:
+    metadata = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2, 3],
+            "label": ["a", "a", "b", "b"],
+        }
+    )
+    projections = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2, 3],
+            "umap_x": [0.0, 0.1, 10.0, 10.1],
+            "umap_y": [0.0, 0.0, 0.0, 0.0],
+            "tsne_x": [0.0, 10.0, 0.1, 10.1],
+            "tsne_y": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+    diagnostics = compute_projection_diagnostics(
+        projections,
+        metadata,
+        k_neighbors=1,
+    )
+
+    assert diagnostics["umap_label_agreement_k1"].tolist() == [1.0] * 4
+    assert diagnostics["tsne_label_agreement_k1"].tolist() == [0.0] * 4
+    assert diagnostics["umap_nearest_row_id"].tolist() == [1, 0, 3, 2]
+
+
+def test_named_projection_variants_load_precomputed_coordinates(tmp_path: Path) -> None:
+    coordinates = [[-1.0, 2.0], [0.0, 1.0], [1.0, 0.0]]
+    projection_path = tmp_path / "reference.json"
+    projection_path.write_text(json.dumps(coordinates), encoding="utf-8")
+    config = diagnostics_config_from_dict(
+        {
+            "explorer_name": "variants",
+            "input": {
+                "type": "numpy",
+                "data_path": "unused.npy",
+            },
+            "projection": {
+                "variants": [
+                    {
+                        "name": "UMAP min_dist=0.8",
+                        "key": "umap_min_dist_0_8",
+                        "method": "umap",
+                        "min_dist": 0.8,
+                        "source_path": str(projection_path),
+                    }
+                ]
+            },
+        }
+    )
+
+    variants = projection_variants(config.projection)
+    result = compute_or_load_projections(
+        np.zeros((3, 4), dtype=np.float32),
+        pd.Series([0, 1, 2]),
+        config.projection,
+        tmp_path / "output",
+        feature_name="raw",
+        save=False,
+        project_root=tmp_path,
+    )
+
+    assert variants[0].name == "UMAP min_dist=0.8"
+    assert result["umap_min_dist_0_8_x"].tolist() == [-1.0, 0.0, 1.0]
+
+
+def test_local_reference_projection_writer_uses_mldata_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mnist_root = tmp_path / "mnist"
+    images = np.zeros((4, 28, 28), dtype=np.uint8)
+    _write_mnist_split(
+        mnist_root,
+        images,
+        np.asarray([2, 0, 1, 0], dtype=np.uint8),
+        split="train",
+    )
+    _write_mnist_split(
+        mnist_root,
+        images,
+        np.asarray([1, 0, 2, 1], dtype=np.uint8),
+        split="test",
+    )
+
+    def fake_projection(pixels, *, method, n_jobs):
+        del n_jobs
+        assert method == "umap"
+        assert pixels.shape == (8, 784)
+        return np.column_stack(
+            [np.arange(len(pixels)), -np.arange(len(pixels))]
+        ).astype(np.float32)
+
+    monkeypatch.setattr(
+        "fm_lab.image_diagnostics.mnist_reference_projections._compute_method",
+        fake_projection,
+    )
+    output_dir = tmp_path / "coordinates"
+    manifest = compute_mnist_reference_projections(
+        dataset_root=mnist_root,
+        output_dir=output_dir,
+        methods=["umap"],
+    )
+
+    labels = json.loads((output_dir / "mnist_labels.json").read_text())
+    coordinates = json.loads((output_dir / "mnist_embeddings.json").read_text())
+    assert labels == [0, 0, 1, 2, 0, 1, 1, 2]
+    assert coordinates[-1] == [7.0, -7.0]
+    assert manifest["samples"] == 8
+
+
+def test_labels_merge_into_explorer_data(tmp_path: Path) -> None:
+    labels_path = tmp_path / "manual_labels.csv"
+    save_manual_label(
+        labels_path,
+        row_id=1,
+        manual_label="outlier",
+        manual_notes="between clusters",
+    )
+    metadata = pd.DataFrame(
+        [
+            {"row_id": 0, "image_path": "a.png"},
+            {"row_id": 1, "image_path": "b.png"},
+        ]
+    )
+    projections = pd.DataFrame(
+        {"row_id": [0, 1], "umap_x": [0.0, 1.0], "umap_y": [1.0, 0.0]}
+    )
+    diagnostics = pd.DataFrame({"row_id": [0, 1], "outlier_score": [1.0, 2.0]})
+
+    explorer = build_explorer_data(
+        metadata,
+        projections,
+        diagnostics,
+        labels_path=labels_path,
+    )
+
+    assert explorer.loc[0, "manual_label"] == "unlabeled"
+    assert explorer.loc[1, "manual_label"] == "outlier"
+    assert len(load_manual_labels(labels_path)) == 1
+
+
+def test_mnist_dry_run_requires_no_model(tmp_path: Path) -> None:
+    mnist_root = tmp_path / "mnist"
+    images = np.zeros((4, 28, 28), dtype=np.uint8)
+    labels = np.asarray([0, 1, 2, 3], dtype=np.uint8)
+    _write_mnist_split(mnist_root, images, labels, split="test")
+    config = diagnostics_config_from_dict(_raw_config(str(mnist_root)))
+
+    result = run_diagnostics_build(config, project_root=tmp_path, dry_run=True)
+
+    assert result["input_type"] == "mnist"
+    assert result["selected_samples"] == 4
+    assert result["feature_mode"] == "raw"
+    assert result["requires_model_download"] is False
+    assert not (tmp_path / "outputs").exists()
+
+
+def test_sprite_atlas_packs_and_tints_mnist_thumbnails(tmp_path: Path) -> None:
+    image_paths = []
+    for index in range(3):
+        path = tmp_path / f"digit_{index}.png"
+        pixels = np.zeros((8, 8), dtype=np.uint8)
+        pixels[2:6, 3:5] = 255
+        Image.fromarray(pixels, mode="L").save(path)
+        image_paths.append(str(path))
+    frame = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2],
+            "source_index": [10, 11, 12],
+            "image_path": image_paths,
+            "dataset": ["mnist"] * 3,
+            "label": ["0", "1", "2"],
+            "umap_x": [0.0, 1.0, 2.0],
+            "umap_y": [2.0, 1.0, 0.0],
+            "pca_x": [1.0, 0.0, -1.0],
+            "pca_y": [0.0, 1.0, 0.0],
+        }
+    )
+
+    bundle = prepare_sprite_atlases(
+        frame,
+        output_dir=tmp_path / "atlases",
+        tile_size=8,
+        max_atlas_size=32,
+    )
+
+    assert len(bundle.atlas_paths) == 1
+    assert bundle.frame["atlas_column"].tolist() == [0, 1, 2]
+    with Image.open(bundle.atlas_paths[0]) as atlas:
+        assert atlas.mode == "RGBA"
+        assert atlas.getpixel((3, 2))[3] == 255
+        assert atlas.getpixel((0, 0))[3] == 0
+
+
+def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
+    path = tmp_path / "digit.png"
+    Image.fromarray(np.full((8, 8), 255, dtype=np.uint8), mode="L").save(path)
+    frame = pd.DataFrame(
+        {
+            "row_id": [0],
+            "source_index": [7],
+            "image_path": [str(path)],
+            "dataset": ["mnist"],
+            "label": ["4"],
+            "umap_x": [0.0],
+            "umap_y": [0.0],
+            "pca_x": [1.0],
+            "pca_y": [1.0],
+        }
+    )
+    bundle = prepare_sprite_atlases(frame, output_dir=tmp_path / "atlases")
+
+    html = build_canvas_html(
+        bundle,
+        height=600,
+        config=diagnostics_config_from_dict(
+            {
+                "explorer_name": "canvas",
+                "input": {"type": "numpy", "data_path": "unused.npy"},
+                "explorer": {
+                    "preview_mode": "original",
+                    "compute_projection_diagnostics": True,
+                    "show_workspace": False,
+                },
+            }
+        ).explorer,
+    )
+
+    assert 'id="plot"' in html
+    assert 'id="preview"' in html
+    assert "pointermove" in html
+    assert 'addEventListener("wheel"' in html
+    assert '"projections":["UMAP","PCA"]' in html
+    assert "data:image/png;base64," in html
+    assert '"previewMode":"original"' in html
+    assert "projectionDiagnostics" in html
+    assert "previewTileContext.getImageData" in html
+
+
+def _raw_config(dataset_root: str) -> dict:
+    return {
+        "explorer_name": "test_explorer",
+        "input": {
+            "type": "mnist",
+            "dataset_root": dataset_root,
+            "split": "test",
+            "max_samples": 10,
+        },
+        "features": {
+            "mode": "raw",
+            "name": "raw_pixels",
+            "normalize": False,
+        },
+        "projection": {"method": "pca"},
+        "output": {"root_dir": "outputs"},
+    }
+
+
+def _write_mnist_split(
+    root: Path,
+    images: np.ndarray,
+    labels: np.ndarray,
+    *,
+    split: str,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    if split == "test":
+        image_name = "t10k-images-idx3-ubyte.gz"
+        label_name = "t10k-labels-idx1-ubyte.gz"
+    else:
+        image_name = "train-images-idx3-ubyte.gz"
+        label_name = "train-labels-idx1-ubyte.gz"
+    with gzip.open(root / image_name, "wb") as handle:
+        handle.write(struct.pack(">IIII", 2051, len(images), 28, 28))
+        handle.write(np.asarray(images, dtype=np.uint8).tobytes())
+    with gzip.open(root / label_name, "wb") as handle:
+        handle.write(struct.pack(">II", 2049, len(labels)))
+        handle.write(np.asarray(labels, dtype=np.uint8).tobytes())
