@@ -279,6 +279,15 @@ def _html_template(
   .control {{ display: grid; grid-template-columns: 88px 1fr; align-items: center; gap: 10px; }}
   label, .muted {{ color: #c8c8c8; font-size: 14px; }}
   select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
+  .class-menu {{ position: relative; min-width: 0; }}
+  .class-menu summary {{ height: 32px; display: flex; align-items: center; padding: 0 8px; background: #f3f3f3; color: #111; border-radius: 2px; cursor: pointer; list-style: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .class-menu summary::-webkit-details-marker {{ display: none; }}
+  .class-menu summary::after {{ content: "▾"; margin-left: auto; padding-left: 8px; color: #555; }}
+  .class-options {{ position: absolute; z-index: 20; top: 36px; left: 0; right: 0; max-height: 250px; overflow-y: auto; padding: 6px; background: #f3f3f3; color: #111; border: 1px solid #bbb; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }}
+  .class-option {{ min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 2px 4px; color: #111; font-size: 12px; cursor: pointer; }}
+  .class-option:hover {{ background: #ddd; }}
+  .class-option input {{ margin: 0; }}
+  .class-count {{ margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }}
   #preview-wrap {{ width: 100%; aspect-ratio: 1; background: #191919; display: grid; place-items: center; }}
   #preview {{ width: 100%; height: 100%; image-rendering: pixelated; }}
   #sample-info {{ min-height: 88px; display: grid; gap: 5px; align-content: start; }}
@@ -298,8 +307,11 @@ def _html_template(
   #view-controls button:hover {{ background: #292929; }}
   @media (max-width: 760px) {{
     #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 230px; }}
-    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 100px 120px minmax(0, 1fr); gap: 10px; padding: 10px; overflow: hidden; }}
-    #preview-wrap {{ grid-row: 1 / span 3; }}
+    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 100px 140px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
+    #sidebar > .control:nth-of-type(1) {{ grid-column: 2; grid-row: 1; }}
+    #sidebar > .control:nth-of-type(2) {{ grid-column: 2; grid-row: 2; }}
+    #preview-wrap {{ grid-column: 1; grid-row: 1 / span 2; }}
+    #sample-info {{ grid-column: 3; grid-row: 1 / span 2; }}
     #main {{ grid-row: 1; }}
     .control {{ grid-template-columns: 1fr; gap: 4px; align-content: start; }}
     #sample-label {{ font-size: 20px; }}
@@ -315,6 +327,13 @@ def _html_template(
     <div class="control">
       <label for="projection">{config.selector_label}</label>
       <select id="projection"></select>
+    </div>
+    <div class="control">
+      <span class="muted">Class</span>
+      <details id="class-filter" class="class-menu">
+        <summary id="class-filter-summary">All classes</summary>
+        <div id="class-options" class="class-options"></div>
+      </details>
     </div>
     <div id="preview-wrap"><canvas id="preview"></canvas></div>
     <div id="sample-info">
@@ -354,6 +373,8 @@ previewTile.width = DATA.tileSize;
 previewTile.height = DATA.tileSize;
 const previewTileContext = previewTile.getContext("2d");
 const projectionSelect = document.getElementById("projection");
+const classFilterSummary = document.getElementById("class-filter-summary");
+const classOptions = document.getElementById("class-options");
 const labelElement = document.getElementById("sample-label");
 const indexElement = document.getElementById("sample-index");
 const metricsElement = document.getElementById("metrics");
@@ -383,6 +404,9 @@ let projection = DATA.projections[0];
 let radius = 52;
 let theta = 0.7;
 let phi = 1.05;
+let focusX = 0;
+let focusY = 0;
+let focusZ = 0;
 let panX = 0;
 let panY = 0;
 let dragging = false;
@@ -392,12 +416,81 @@ let pointerY = 0;
 let hoverIndex = null;
 let pinnedIndex = null;
 let renderRequested = false;
+let loadedTextures = [];
+let visibleIndices = DATA.points.map((_, index) => index);
+let selectedLabels = new Set(DATA.points.map(point => point.label));
 
 for (const name of DATA.projections) {{
   const option = document.createElement("option");
   option.value = name;
   option.textContent = name;
   projectionSelect.appendChild(option);
+}}
+
+function initializeClassFilter() {{
+  const counts = new Map();
+  for (const point of DATA.points) {{
+    counts.set(point.label, (counts.get(point.label) || 0) + 1);
+  }}
+  const labels = Array.from(counts.keys()).sort((left, right) =>
+    left.localeCompare(right, undefined, {{ numeric: true, sensitivity: "base" }})
+  );
+  selectedLabels = new Set(labels);
+  const allInput = document.createElement("input");
+  allInput.type = "checkbox";
+  allInput.checked = true;
+  classOptions.appendChild(createClassOption(allInput, "All classes", DATA.points.length));
+  const classInputs = labels.map(label => {{
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = label;
+    input.checked = true;
+    classOptions.appendChild(createClassOption(input, label || "(empty)", counts.get(label)));
+    input.addEventListener("change", () => {{
+      allInput.checked = classInputs.every(value => value.checked);
+      syncClassFilter(classInputs);
+    }});
+    return input;
+  }});
+  allInput.addEventListener("change", () => {{
+    for (const input of classInputs) input.checked = allInput.checked;
+    syncClassFilter(classInputs);
+  }});
+}}
+
+function createClassOption(input, text, count) {{
+  const row = document.createElement("label");
+  row.className = "class-option";
+  const name = document.createElement("span");
+  name.textContent = text;
+  const total = document.createElement("span");
+  total.className = "class-count";
+  total.textContent = count.toLocaleString();
+  row.append(input, name, total);
+  return row;
+}}
+
+function syncClassFilter(classInputs) {{
+  selectedLabels = new Set(
+    classInputs.filter(input => input.checked).map(input => input.value)
+  );
+  visibleIndices = DATA.points
+    .map((point, index) => selectedLabels.has(point.label) ? index : -1)
+    .filter(index => index >= 0);
+  const selectedCount = selectedLabels.size;
+  const totalCount = classInputs.length;
+  classFilterSummary.textContent = selectedCount === totalCount
+    ? "All classes"
+    : selectedCount === 0
+      ? "No classes"
+      : selectedCount === 1
+        ? Array.from(selectedLabels)[0] || "(empty)"
+        : `${{selectedCount}} classes`;
+  hoverIndex = null;
+  pinnedIndex = null;
+  showPoint(null);
+  if (loadedTextures.length) buildPointClouds(loadedTextures);
+  resetView();
 }}
 
 function loadAssets() {{
@@ -416,12 +509,17 @@ function loadAssets() {{
 }}
 
 function buildPointClouds(textures) {{
+  for (const cloud of group.children) {{
+    cloud.geometry.dispose();
+    cloud.material.dispose();
+  }}
   group.clear();
   for (let atlas = 0; atlas < textures.length; atlas++) {{
     const indices = [];
-    for (let index = 0; index < DATA.points.length; index++) {{
+    for (const index of visibleIndices) {{
       if (DATA.points[index].atlas === atlas) indices.push(index);
     }}
+    if (!indices.length) continue;
     const positions = new Float32Array(indices.length * 3);
     const offsets = new Float32Array(indices.length * 2);
     for (let local = 0; local < indices.length; local++) {{
@@ -498,19 +596,42 @@ function updateCamera() {{
     return;
   }}
   camera.position.set(
-    radius * Math.sin(phi) * Math.cos(theta),
-    radius * Math.cos(phi),
-    radius * Math.sin(phi) * Math.sin(theta)
+    focusX + radius * Math.sin(phi) * Math.cos(theta),
+    focusY + radius * Math.cos(phi),
+    focusZ + radius * Math.sin(phi) * Math.sin(theta)
   );
-  camera.lookAt(0, 0, 0);
+  camera.lookAt(focusX, focusY, focusZ);
 }}
 
 function resetView() {{
-  radius = 52;
+  if (!visibleIndices.length) {{
+    focusX = 0;
+    focusY = 0;
+    focusZ = 0;
+    radius = 52;
+  }} else {{
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const index of visibleIndices) {{
+      const coordinate = DATA.points[index].coordinates[projection];
+      minX = Math.min(minX, coordinate[0]);
+      maxX = Math.max(maxX, coordinate[0]);
+      minY = Math.min(minY, coordinate[1]);
+      maxY = Math.max(maxY, coordinate[1]);
+      minZ = Math.min(minZ, coordinate[2]);
+      maxZ = Math.max(maxZ, coordinate[2]);
+    }}
+    focusX = (minX + maxX) / 2;
+    focusY = (minY + maxY) / 2;
+    focusZ = (minZ + maxZ) / 2;
+    const span = Math.max(1, maxX - minX, maxY - minY, maxZ - minZ);
+    radius = Math.max(6, Math.min(140, span * 1.45));
+  }}
   theta = 0.7;
   phi = 1.05;
-  panX = 0;
-  panY = 0;
+  panX = focusX;
+  panY = focusY;
   updateCamera();
   requestRender();
 }}
@@ -540,7 +661,7 @@ function render() {{
   renderer.render(scene, camera);
   updateHighlight();
   const dimensions = DATA.projectionDimensions[projection];
-  statusElement.textContent = `${{dimensions}}D · ${{DATA.points.length.toLocaleString()}} samples`;
+  statusElement.textContent = `${{dimensions}}D · ${{visibleIndices.length.toLocaleString()}} samples`;
 }}
 
 function pick(event) {{
@@ -704,13 +825,13 @@ renderer.domElement.addEventListener("pointerleave", () => {{
 }});
 renderer.domElement.addEventListener("wheel", event => {{
   event.preventDefault();
-  radius = Math.max(18, Math.min(140, radius * Math.exp(event.deltaY * 0.001)));
+  radius = Math.max(4, Math.min(140, radius * Math.exp(event.deltaY * 0.001)));
   updateCamera();
   requestRender();
 }}, {{ passive: false }});
 renderer.domElement.addEventListener("dblclick", resetView);
 document.getElementById("zoom-in").addEventListener("click", () => {{
-  radius = Math.max(18, radius / 1.3);
+  radius = Math.max(4, radius / 1.3);
   updateCamera();
   requestRender();
 }});
@@ -722,8 +843,10 @@ document.getElementById("zoom-out").addEventListener("click", () => {{
 document.getElementById("reset").addEventListener("click", resetView);
 window.addEventListener("resize", resize);
 
+initializeClassFilter();
 loadAssets().then(textures => {{
-  buildPointClouds(textures);
+  loadedTextures = textures;
+  buildPointClouds(loadedTextures);
   resetView();
   resize();
   showPoint(null);

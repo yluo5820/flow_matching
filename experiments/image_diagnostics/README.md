@@ -316,7 +316,9 @@ Single-file mode remains available:
 The unified Three.js renderer uses a front-facing flat camera for 2D
 projections and switches to orbit controls for 3D projections. The same
 projection selector, preview, and live diagnostics panel are used in both
-modes.
+modes. The Class menu filters one or more labels entirely in the browser,
+updates the visible sample count, and refits the current 2D or 3D view without
+rerunning Python.
 
 ## Intrinsic Dimension Estimation
 

@@ -1019,6 +1019,11 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
     assert "previewTileContext.getImageData" in html
     assert '"mle_lid_k15":2.5' in html
     assert '"pca_dim_95_k15":3.0' in html
+    assert 'id="class-filter"' in html
+    assert "All classes" in html
+    assert "syncClassFilter" in html
+    assert "for (const index of visibleIndices)" in html
+    assert "${visibleIndices.length.toLocaleString()} samples" in html
 
 
 def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
@@ -1084,6 +1089,11 @@ def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
     assert "atlasImages[atlas] = texture.image" in html
     assert "Loading ${DATA.points.length.toLocaleString()} samples..." in html
     assert "new Image()" not in html
+    assert 'id="class-filter"' in html
+    assert "All classes" in html
+    assert "syncClassFilter" in html
+    assert "if (loadedTextures.length) buildPointClouds(loadedTextures)" in html
+    assert "${visibleIndices.length.toLocaleString()} samples" in html
 
 
 def _raw_config(dataset_root: str) -> dict:

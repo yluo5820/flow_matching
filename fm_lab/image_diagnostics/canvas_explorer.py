@@ -547,6 +547,15 @@ def _html_template(
   .control {{ display: grid; grid-template-columns: 88px 1fr; align-items: center; gap: 10px; }}
   label, .muted {{ color: #c8c8c8; font-size: 14px; }}
   select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
+  .class-menu {{ position: relative; min-width: 0; }}
+  .class-menu summary {{ height: 32px; display: flex; align-items: center; padding: 0 8px; background: #f3f3f3; color: #111; border-radius: 2px; cursor: pointer; list-style: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .class-menu summary::-webkit-details-marker {{ display: none; }}
+  .class-menu summary::after {{ content: "▾"; margin-left: auto; padding-left: 8px; color: #555; }}
+  .class-options {{ position: absolute; z-index: 20; top: 36px; left: 0; right: 0; max-height: 250px; overflow-y: auto; padding: 6px; background: #f3f3f3; color: #111; border: 1px solid #bbb; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }}
+  .class-option {{ min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 2px 4px; color: #111; font-size: 12px; cursor: pointer; }}
+  .class-option:hover {{ background: #ddd; }}
+  .class-option input {{ margin: 0; }}
+  .class-count {{ margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }}
   #preview-wrap {{ width: 100%; aspect-ratio: 1; background: #191919; display: grid; place-items: center; }}
   #preview {{ width: 100%; height: 100%; image-rendering: pixelated; }}
   #sample-info {{ min-height: 88px; display: grid; gap: 5px; align-content: start; }}
@@ -569,8 +578,11 @@ def _html_template(
   #view-controls button:hover {{ background: #292929; }}
   @media (max-width: 760px) {{
     #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 150px; }}
-    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 120px 1fr 1fr; gap: 10px; padding: 10px; overflow: hidden; }}
-    #preview-wrap {{ grid-row: 1 / span 3; }}
+    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 120px 140px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
+    #sidebar > .control:nth-of-type(1) {{ grid-column: 2; grid-row: 1; }}
+    #sidebar > .control:nth-of-type(2) {{ grid-column: 2; grid-row: 2; }}
+    #preview-wrap {{ grid-column: 1; grid-row: 1 / span 2; }}
+    #sample-info {{ grid-column: 3; grid-row: 1 / span 2; overflow-y: auto; }}
     #legend, #sidebar-footer {{ display: none; }}
     #main {{ grid-row: 1; }}
     .control {{ grid-template-columns: 1fr; gap: 4px; align-content: start; }}
@@ -584,6 +596,13 @@ def _html_template(
     <div class="control">
       <label for="projection">{config.selector_label}</label>
       <select id="projection"></select>
+    </div>
+    <div class="control">
+      <span class="muted">Class</span>
+      <details id="class-filter" class="class-menu">
+        <summary id="class-filter-summary">All classes</summary>
+        <div id="class-options" class="class-options"></div>
+      </details>
     </div>
     <div id="preview-wrap"><canvas id="preview"></canvas></div>
     <div id="sample-info">
@@ -630,6 +649,8 @@ previewTile.height = DATA.tileSize;
 const previewTileContext = previewTile.getContext("2d");
 const main = document.getElementById("main");
 const projectionSelect = document.getElementById("projection");
+const classFilterSummary = document.getElementById("class-filter-summary");
+const classOptions = document.getElementById("class-options");
 const labelElement = document.getElementById("sample-label");
 const indexElement = document.getElementById("sample-index");
 const metricsElement = document.getElementById("metrics");
@@ -653,6 +674,8 @@ let hoverIndex = null;
 let pinnedIndex = null;
 let projection = DATA.projections[0];
 let currentCoordinates = DATA.points.map(point => point.coordinates[projection].slice());
+let visibleIndices = DATA.points.map((_, index) => index);
+let selectedLabels = new Set(DATA.points.map(point => point.label));
 let animation = null;
 let frameRequested = false;
 
@@ -672,6 +695,76 @@ for (const [label, color] of Object.entries(DATA.palette)) {{
   text.textContent = label;
   item.append(swatch, text);
   document.getElementById("legend").appendChild(item);
+}}
+
+function initializeClassFilter() {{
+  const counts = new Map();
+  for (const point of DATA.points) {{
+    counts.set(point.label, (counts.get(point.label) || 0) + 1);
+  }}
+  const labels = Array.from(counts.keys()).sort((left, right) =>
+    left.localeCompare(right, undefined, {{ numeric: true, sensitivity: "base" }})
+  );
+  selectedLabels = new Set(labels);
+  const allInput = document.createElement("input");
+  allInput.type = "checkbox";
+  allInput.checked = true;
+  const allRow = createClassOption(allInput, "All classes", DATA.points.length);
+  classOptions.appendChild(allRow);
+  const classInputs = labels.map(label => {{
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = label;
+    input.checked = true;
+    classOptions.appendChild(createClassOption(input, label || "(empty)", counts.get(label)));
+    input.addEventListener("change", () => {{
+      allInput.checked = classInputs.every(value => value.checked);
+      syncClassFilter(classInputs);
+    }});
+    return input;
+  }});
+  allInput.addEventListener("change", () => {{
+    for (const input of classInputs) input.checked = allInput.checked;
+    syncClassFilter(classInputs);
+  }});
+}}
+
+function createClassOption(input, text, count) {{
+  const row = document.createElement("label");
+  row.className = "class-option";
+  const name = document.createElement("span");
+  name.textContent = text;
+  const total = document.createElement("span");
+  total.className = "class-count";
+  total.textContent = count.toLocaleString();
+  row.append(input, name, total);
+  return row;
+}}
+
+function syncClassFilter(classInputs) {{
+  selectedLabels = new Set(
+    classInputs.filter(input => input.checked).map(input => input.value)
+  );
+  visibleIndices = DATA.points
+    .map((point, index) => selectedLabels.has(point.label) ? index : -1)
+    .filter(index => index >= 0);
+  const selectedCount = selectedLabels.size;
+  const totalCount = classInputs.length;
+  classFilterSummary.textContent = selectedCount === totalCount
+    ? "All classes"
+    : selectedCount === 0
+      ? "No classes"
+      : selectedCount === 1
+        ? Array.from(selectedLabels)[0] || "(empty)"
+        : `${{selectedCount}} classes`;
+  animation = null;
+  currentCoordinates = DATA.points.map(
+    point => point.coordinates[projection].slice()
+  );
+  hoverIndex = null;
+  pinnedIndex = null;
+  showPoint(null);
+  fitView();
 }}
 
 function loadAtlases() {{
@@ -698,7 +791,15 @@ function resize() {{
 }}
 
 function fitView() {{
-  const coordinates = DATA.points.map(point => point.coordinates[projection]);
+  const coordinates = visibleIndices.map(index => currentCoordinates[index]);
+  if (!coordinates.length) {{
+    centerX = 0;
+    centerY = 0;
+    fitScale = 1;
+    scale = 1;
+    requestDraw();
+    return;
+  }}
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const coordinate of coordinates) {{
     minX = Math.min(minX, coordinate[0]);
@@ -745,14 +846,14 @@ function draw() {{
   context.fillStyle = "#111";
   context.fillRect(0, 0, width, height);
   const size = pointSize();
-  for (let index = 0; index < DATA.points.length; index++) {{
+  for (const index of visibleIndices) {{
     const point = DATA.points[index];
     const screen = worldToScreen(currentCoordinates[index]);
     if (screen[0] < -size || screen[0] > width + size || screen[1] < -size || screen[1] > height + size) continue;
     drawTile(context, point, screen[0] - size / 2, screen[1] - size / 2, size);
   }}
   const selectedIndex = pinnedIndex !== null ? pinnedIndex : hoverIndex;
-  if (selectedIndex !== null) {{
+  if (selectedIndex !== null && selectedLabels.has(DATA.points[selectedIndex].label)) {{
     const screen = worldToScreen(currentCoordinates[selectedIndex]);
     const highlightSize = Math.max(DATA.options.hoverSize, size * 2.0);
     context.strokeStyle = "#fff";
@@ -771,7 +872,7 @@ function draw() {{
       highlightSize
     );
   }}
-  statusElement.textContent = `${{DATA.points.length.toLocaleString()}} samples`;
+  statusElement.textContent = `${{visibleIndices.length.toLocaleString()}} samples`;
   if (animation) requestAnimationFrame(stepAnimation);
 }}
 
@@ -838,7 +939,7 @@ function nearestPoint(mouseX, mouseY) {{
   const threshold = Math.max(10, pointSize() * 0.75);
   let best = null;
   let bestDistance = threshold * threshold;
-  for (let index = 0; index < currentCoordinates.length; index++) {{
+  for (const index of visibleIndices) {{
     const screen = worldToScreen(currentCoordinates[index]);
     const dx = screen[0] - mouseX;
     const dy = screen[1] - mouseY;
@@ -1014,6 +1115,7 @@ zoomInButton.addEventListener("click", () => zoomBy(1.5));
 zoomOutButton.addEventListener("click", () => zoomBy(1 / 1.5));
 window.addEventListener("resize", resize);
 
+initializeClassFilter();
 loadAtlases().then(() => {{
   resize();
   showPoint(null);
