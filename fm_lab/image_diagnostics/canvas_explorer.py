@@ -19,6 +19,9 @@ from PIL import Image
 from fm_lab.image_diagnostics.config import ExplorerConfig
 from fm_lab.image_diagnostics.palette import LABEL_PALETTE
 
+ATLAS_COMPACTION_THRESHOLD = 32 * 1024 * 1024
+ATLAS_WEBP_QUALITY = 90
+
 
 @dataclass(frozen=True)
 class AtlasBundle:
@@ -75,7 +78,7 @@ def prepare_sprite_atlases(
         raise ValueError("tile_size must be positive.")
     prepacked = _prepacked_atlas_bundle(frame)
     if prepacked is not None:
-        return prepacked
+        return _compact_atlas_bundle(prepacked)
     atlas_columns = max(1, max_atlas_size // tile_size)
     atlas_capacity = atlas_columns * atlas_columns
     prepared = frame.reset_index(drop=True).copy()
@@ -140,10 +143,7 @@ def build_canvas_html(
     if not projections:
         raise ValueError("Explorer data contains no UMAP, PCA, or t-SNE coordinates.")
     points = _point_payload(bundle.frame, projections)
-    atlases = [
-        f"data:image/png;base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
-        for path in bundle.atlas_paths
-    ]
+    atlases = [atlas_data_url(path) for path in bundle.atlas_paths]
     payload = {
         "points": points,
         "atlases": atlases,
@@ -429,6 +429,67 @@ def _prepacked_atlas_bundle(frame: pd.DataFrame) -> AtlasBundle | None:
         tile_size=int(prepared["sprite_tile_size"].iloc[0]),
         atlas_columns=int(prepared["sprite_atlas_columns"].iloc[0]),
     )
+
+
+def _compact_atlas_bundle(
+    bundle: AtlasBundle,
+    *,
+    threshold_bytes: int = ATLAS_COMPACTION_THRESHOLD,
+) -> AtlasBundle:
+    total_bytes = sum(path.stat().st_size for path in bundle.atlas_paths)
+    if total_bytes <= threshold_bytes:
+        return bundle
+    compact_paths = [
+        _compact_atlas_path(path)
+        for path in bundle.atlas_paths
+    ]
+    return AtlasBundle(
+        frame=bundle.frame,
+        atlas_paths=compact_paths,
+        palette=bundle.palette,
+        tile_size=bundle.tile_size,
+        atlas_columns=bundle.atlas_columns,
+    )
+
+
+def _compact_atlas_path(path: Path) -> Path:
+    if path.suffix.lower() == ".webp":
+        return path
+    compact_path = path.with_name(f"{path.stem}_q{ATLAS_WEBP_QUALITY}.webp")
+    if (
+        compact_path.exists()
+        and compact_path.stat().st_mtime_ns >= path.stat().st_mtime_ns
+    ):
+        return compact_path
+    temporary = compact_path.with_name(f".{compact_path.name}.tmp")
+    try:
+        with Image.open(path) as image:
+            image.save(
+                temporary,
+                format="WEBP",
+                quality=ATLAS_WEBP_QUALITY,
+                method=6,
+                exact=True,
+            )
+        temporary.replace(compact_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return compact_path
+
+
+def atlas_data_url(path: Path) -> str:
+    """Return an image atlas as a MIME-correct data URL."""
+
+    mime_type = {
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(path.suffix.lower())
+    if mime_type is None:
+        raise ValueError(f"Unsupported sprite atlas format: {path.suffix}")
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _projection_display_name(key: str) -> str:

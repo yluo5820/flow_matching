@@ -257,7 +257,9 @@ intrinsic dimension:
 
 The 32x32 RGB images are packed directly into sprite atlases, so the explorer
 shows the original color image for every point without exporting 60,000
-individual PNG files.
+individual PNG files. Large RGB atlas sets are automatically cached as
+quality-90 WebP files when the explorer first loads, keeping the embedded
+browser document below Streamlit's default message-size limit.
 
 To build the matching DINOv2 2D/3D views and DINOv2-space ID estimates:
 

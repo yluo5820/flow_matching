@@ -17,6 +17,7 @@ from PIL import Image
 
 from fm_lab.image_diagnostics.canvas_explorer import (
     AtlasBundle,
+    atlas_data_url,
     prepare_sprite_atlases,
     sample_metric_columns,
 )
@@ -73,10 +74,7 @@ def build_three_html(
     atlas_size = _atlas_size(bundle)
     payload = {
         "points": _point_payload(bundle.frame, projections),
-        "atlases": [
-            f"data:image/png;base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
-            for path in bundle.atlas_paths
-        ],
+        "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
         "projections": list(projections),
         "projectionDimensions": {
             name: len(columns) for name, columns in projections.items()

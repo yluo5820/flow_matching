@@ -10,6 +10,9 @@ import pandas as pd
 from PIL import Image
 
 from fm_lab.image_diagnostics.canvas_explorer import (
+    AtlasBundle,
+    _compact_atlas_bundle,
+    atlas_data_url,
     build_canvas_html,
     prepare_sprite_atlases,
 )
@@ -188,6 +191,30 @@ def test_cifar10_loader_preserves_rgb_images_and_class_names(tmp_path: Path) -> 
     atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
     with Image.open(atlas_path) as atlas:
         assert atlas.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_large_prepacked_atlases_are_compacted_to_webp(tmp_path: Path) -> None:
+    source = tmp_path / "atlas.png"
+    pixels = np.zeros((64, 64, 4), dtype=np.uint8)
+    pixels[..., :3] = [120, 40, 200]
+    pixels[..., 3] = 255
+    Image.fromarray(pixels, mode="RGBA").save(source)
+    bundle = AtlasBundle(
+        frame=pd.DataFrame({"row_id": [0]}),
+        atlas_paths=[source],
+        palette={},
+        tile_size=32,
+        atlas_columns=2,
+    )
+
+    compact = _compact_atlas_bundle(bundle, threshold_bytes=0)
+
+    assert compact.atlas_paths[0].suffix == ".webp"
+    assert compact.atlas_paths[0].is_file()
+    assert compact.atlas_paths[0].stat().st_size < source.stat().st_size
+    assert atlas_data_url(compact.atlas_paths[0]).startswith(
+        "data:image/webp;base64,"
+    )
 
 
 def test_numpy_loader_supports_vectors_and_image_preview(tmp_path: Path) -> None:
