@@ -23,7 +23,11 @@ from fm_lab.image_diagnostics.config import (
 )
 from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
-from fm_lab.image_diagnostics.explorer_merge import combine_explorer_tables
+from fm_lab.image_diagnostics.explorer_merge import (
+    combine_explorer_tables,
+    discover_explorer_groups,
+    load_discovered_explorer_group,
+)
 from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
 from fm_lab.image_diagnostics.label_store import load_manual_labels, save_manual_label
 from fm_lab.image_diagnostics.local_diagnostics import compute_local_diagnostics
@@ -668,6 +672,77 @@ def test_combined_explorer_rejects_different_sample_sets(tmp_path: Path) -> None
             align_on=["source_index"],
             project_root=tmp_path,
         )
+
+
+def test_auto_explorer_discovers_compatible_views_and_prefers_id_table(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dataset_explorer"
+    first_dir = root / "raw_2d" / "explorer"
+    second_dir = root / "learned_3d" / "explorer"
+    incompatible_dir = root / "other_samples" / "explorer"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    incompatible_dir.mkdir(parents=True)
+    metadata = {
+        "row_id": [0, 1, 2],
+        "dataset": ["mnist"] * 3,
+        "split": ["test"] * 3,
+        "source_index": [10, 20, 30],
+        "label": ["1", "2", "3"],
+        "sprite_atlas_path": ["atlas.webp"] * 3,
+        "sprite_atlas_index": [0, 1, 2],
+        "sprite_atlas_column": [0, 1, 2],
+        "sprite_atlas_row": [0, 0, 0],
+        "sprite_tile_size": [28] * 3,
+        "sprite_atlas_columns": [3] * 3,
+    }
+    pd.DataFrame(
+        metadata
+        | {
+            "umap_x": [0.0, 1.0, 2.0],
+            "umap_y": [2.0, 1.0, 0.0],
+        }
+    ).to_parquet(first_dir / "explorer_data.parquet", index=False)
+    pd.DataFrame(
+        metadata
+        | {
+            "umap_x": [0.0, 1.0, 2.0],
+            "umap_y": [2.0, 1.0, 0.0],
+            "mle_lid_k15": [1.0, 2.0, 3.0],
+        }
+    ).to_parquet(first_dir / "explorer_data_with_id.parquet", index=False)
+    pd.DataFrame(
+        metadata
+        | {
+            "umap_3d_x": [1.0, 2.0, 3.0],
+            "umap_3d_y": [3.0, 2.0, 1.0],
+            "umap_3d_z": [0.5, 0.0, -0.5],
+        }
+    ).iloc[::-1].to_parquet(second_dir / "explorer_data.parquet", index=False)
+    pd.DataFrame(
+        {
+            **metadata,
+            "source_index": [11, 21, 31],
+            "pca_x": [0.0, 1.0, 2.0],
+            "pca_y": [0.0, 1.0, 2.0],
+        }
+    ).to_parquet(incompatible_dir / "explorer_data.parquet", index=False)
+
+    groups = discover_explorer_groups(root)
+    compatible = next(group for group in groups if group.projection_count == 2)
+    loaded = load_discovered_explorer_group(compatible)
+
+    assert len(groups) == 2
+    assert compatible.sample_count == 3
+    assert len(loaded.projection_names) == 2
+    assert loaded.explorer_config.renderer == "three3d"
+    assert loaded.frame["mle_lid_k15"].tolist() == [1.0, 2.0, 3.0]
+    assert loaded.data_path == first_dir / "explorer_data_with_id.parquet"
+    assert any(
+        path.name == "explorer_data_with_id.parquet"
+        for path in loaded.source_paths
+    )
 
 
 def test_mnist_dry_run_requires_no_model(tmp_path: Path) -> None:

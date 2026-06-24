@@ -265,23 +265,40 @@ DINOv2 was trained on natural RGB imagery rather than handwritten digits.
 These views are useful as a representation comparison, but DINOv2 is not
 expected to be intrinsically better than raw pixels for MNIST.
 
-## Combined Raw And DINOv2 Explorer
+## Automatic Explorer Loading
 
-The precomputed 2D and 3D outputs can be merged into one row-aligned explorer:
+The explorer automatically discovers existing outputs, groups views with the
+same sample rows, and merges their precomputed projection columns in memory.
+Launch it without specifying files:
 
 ```bash
-python experiments/image_diagnostics/combine_explorers.py \
-  --config configs/image_diagnostics/mnist_raw_dinov2_all_views.yaml
-
-streamlit run experiments/image_diagnostics/explorer_app.py \
-  --server.port 8518 -- \
-  --data outputs/dataset_explorer/mnist_raw_dinov2_all_views/explorer/explorer_data.parquet
+.conda/fm_lab/bin/streamlit run experiments/image_diagnostics/explorer_app.py
 ```
 
-The comparison config combines raw-pixel UMAP and PCA in 2D, raw-pixel UMAP
-in 3D, and DINOv2 UMAP in both 2D and 3D. It validates the `split` and
-`source_index` sample keys before merging and recomputes only projection-space
-diagnostics. It does not load DINOv2 or recompute any feature vectors.
+By default it scans `outputs/dataset_explorer`. Compatible raw-pixel and
+DINOv2 2D/3D views appear in one projection selector. If the directory
+contains incompatible sample sets, such as a 2,000-sample test subset and a
+70,000-sample full dataset, an in-app dataset selector is shown.
+
+Automatic loading validates stable sample keys such as `dataset`, `split`,
+and `source_index`. It does not load DINOv2 or recompute embeddings or UMAP.
+Projection-space diagnostics are calculated for the merged in-memory table.
+Generated combined-output directories are ignored to avoid duplicate views,
+and `explorer_data_with_id.parquet` is preferred when available.
+
+To scan a different output root:
+
+```bash
+.conda/fm_lab/bin/streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data-dir path/to/dataset_explorer
+```
+
+Single-file mode remains available:
+
+```bash
+.conda/fm_lab/bin/streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data path/to/explorer_data.parquet
+```
 
 The unified Three.js renderer uses a front-facing flat camera for 2D
 projections and switches to orbit controls for 3D projections. The same

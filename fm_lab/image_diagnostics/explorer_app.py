@@ -12,6 +12,10 @@ from sklearn.metrics import pairwise_distances
 
 from fm_lab.image_diagnostics.canvas_explorer import render_thumbnail_canvas
 from fm_lab.image_diagnostics.config import ExplorerConfig, diagnostics_config_from_dict
+from fm_lab.image_diagnostics.explorer_merge import (
+    discover_explorer_groups,
+    load_discovered_explorer_group,
+)
 from fm_lab.image_diagnostics.label_store import MANUAL_LABELS, save_manual_label
 from fm_lab.image_diagnostics.projections import projection_variants
 from fm_lab.image_diagnostics.save_utils import read_parquet
@@ -22,14 +26,77 @@ from fm_lab.utils.config import load_config
 def run_explorer(data_path: str | Path) -> None:
     """Render the Streamlit explorer for a built diagnostics dataset."""
 
+    st = _streamlit()
+    path = Path(data_path).expanduser().resolve()
+    _configure_page(st)
+    if not path.exists():
+        st.error(f"Explorer data does not exist: {path}")
+        st.stop()
+    frame = read_parquet(path)
+    frame = _merge_latest_labels(frame, path.parent / "manual_labels.csv")
+    explorer_config, projection_names = _explorer_settings(path)
+    _render_explorer(
+        st,
+        frame,
+        data_path=path,
+        explorer_config=explorer_config,
+        projection_names=projection_names,
+    )
+
+
+def run_auto_explorer(data_dir: str | Path) -> None:
+    """Discover compatible explorer outputs and merge their views at startup."""
+
+    st = _streamlit()
+    root = Path(data_dir).expanduser().resolve()
+    _configure_page(st)
+    try:
+        groups = discover_explorer_groups(root)
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+    if not groups:
+        st.error(f"No explorer outputs were found under: {root}")
+        st.stop()
+    if len(groups) == 1:
+        selected_group = groups[0]
+    else:
+        labels = {group.key: group.label for group in groups}
+        selected_key = st.selectbox(
+            "Dataset",
+            list(labels),
+            format_func=labels.__getitem__,
+        )
+        selected_group = next(group for group in groups if group.key == selected_key)
+    try:
+        loaded = load_discovered_explorer_group(selected_group)
+    except Exception as exc:
+        st.error(f"Could not combine discovered explorer views: {exc}")
+        st.stop()
+    frame = _merge_latest_labels(
+        loaded.frame,
+        loaded.data_path.parent / "manual_labels.csv",
+    )
+    _render_explorer(
+        st,
+        frame,
+        data_path=loaded.data_path,
+        explorer_config=loaded.explorer_config,
+        projection_names=loaded.projection_names,
+    )
+
+
+def _streamlit():
     try:
         import streamlit as st
     except ImportError as exc:
         raise RuntimeError(
             'The explorer requires streamlit. Install ".[image-diagnostics]".'
         ) from exc
+    return st
 
-    path = Path(data_path).expanduser().resolve()
+
+def _configure_page(st) -> None:
     st.set_page_config(
         page_title="Dataset Projection Explorer",
         layout="wide",
@@ -46,24 +113,27 @@ def run_explorer(data_path: str | Path) -> None:
         """,
         unsafe_allow_html=True,
     )
-    if not path.exists():
-        st.error(f"Explorer data does not exist: {path}")
-        st.stop()
 
-    frame = read_parquet(path)
-    frame = _merge_latest_labels(frame, path.parent / "manual_labels.csv")
-    explorer_config, projection_names = _explorer_settings(path)
+
+def _render_explorer(
+    st,
+    frame: pd.DataFrame,
+    *,
+    data_path: Path,
+    explorer_config: ExplorerConfig,
+    projection_names: dict[str, str],
+) -> None:
     if explorer_config.renderer == "three3d":
         render_thumbnail_three(
             frame,
-            data_path=path,
+            data_path=data_path,
             config=explorer_config,
             projection_names=projection_names,
         )
     else:
         render_thumbnail_canvas(
             frame,
-            data_path=path,
+            data_path=data_path,
             config=explorer_config,
             projection_names=projection_names,
         )
@@ -84,8 +154,8 @@ def run_explorer(data_path: str | Path) -> None:
         selected = filtered[
             filtered["row_id"].astype(int) == int(selected_row_id)
         ].iloc[0]
-        _render_image_details(st, selected, path)
-        _render_neighbors(st, selected, frame, path)
+        _render_image_details(st, selected, data_path)
+        _render_neighbors(st, selected, frame, data_path)
         st.dataframe(_display_frame(filtered), width="stretch", hide_index=True)
 
 
