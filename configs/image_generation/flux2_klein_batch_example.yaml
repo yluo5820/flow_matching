@@ -1,0 +1,58 @@
+experiment_name: flux2_klein_batch_001
+
+model:
+  repo_id: black-forest-labs/FLUX.2-klein-4B
+  dtype: bfloat16
+  device: cpu
+  cpu_offload: false
+  device_map: null
+  torch_compile: false
+
+generation:
+  width: 1024
+  height: 1024
+  num_inference_steps: 20
+  guidance_scale: 3.5
+  num_images_per_prompt: 1
+  batch_size: 1
+  max_sequence_length: 512
+  text_encoder_out_layers: [9, 18, 27]
+  caption_upsample_temperature: null
+
+seeds:
+  mode: range
+  start: 0
+  count: 8
+  explicit: []
+  master_seed: 123
+
+prompts:
+  source: data/prompts/example_flux_prompts.jsonl
+  format: jsonl
+  id_field: prompt_id
+  text_field: prompt
+  negative_prompt_field: negative_prompt
+  tag_field: tags
+  family_field: family
+  notes_field: notes
+  max_prompts: null
+  include_tags: []
+  exclude_tags: []
+  include_families: []
+  exclude_families: []
+
+output:
+  root_dir: outputs/image_generation
+  save_individual_images: true
+  save_prompt_grids: true
+  save_family_grids: true
+  save_metadata_jsonl: true
+  save_summary_csv: true
+  skip_existing: true
+  grid_tile_size: 256
+  family_grid_max_images: 64
+
+runtime:
+  dry_run: false
+  continue_on_error: true
+  log_every: 1

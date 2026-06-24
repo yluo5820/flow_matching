@@ -13,7 +13,10 @@ venv/
 build/
 dist/
 runs/
-/data/
+/data/*
+!/data/prompts/
+!/data/prompts/**
+outputs/
 artifacts/
 checkpoints/
 *.pt

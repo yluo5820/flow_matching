@@ -27,6 +27,24 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.5",
 ]
+image-generation = [
+  "accelerate>=1.0",
+  "diffusers",
+  "Pillow>=10.0",
+  "protobuf>=4.25",
+  "safetensors>=0.4",
+  "sentencepiece>=0.2",
+  "transformers>=4.50",
+]
+image-diagnostics = [
+  "Pillow>=10.0",
+  "pyarrow>=16.0",
+  "streamlit>=1.58",
+  "umap-learn>=0.5.6",
+]
+image-embeddings = [
+  "transformers>=4.50",
+]
 
 [project.scripts]
 fm-lab-diagnostics = "fm_lab.experiments.run_diagnostics:main"

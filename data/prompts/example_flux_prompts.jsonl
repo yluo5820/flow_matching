@@ -1,0 +1,11 @@
+{"prompt_id": "rare_animal_001", "family": "rare_animals", "prompt": "A pangolin curled around the handle of a violin bow on a chessboard.", "tags": ["rare_object", "composition", "contact"]}
+{"prompt_id": "rare_animal_002", "family": "rare_animals", "prompt": "An axolotl wearing a transparent bubble helmet underwater, close-up portrait.", "tags": ["rare_object", "transparent", "animal"]}
+{"prompt_id": "rare_animal_003", "family": "rare_animals", "prompt": "A saola calf standing behind wet leaves, viewed through a transparent glass wall.", "tags": ["rare_object", "occlusion", "transparent"]}
+{"prompt_id": "transparent_001", "family": "transparent_objects", "prompt": "Two human hands holding a transparent glass cube and a thin circular glass disc against a gray background.", "tags": ["hands", "transparent", "contact"]}
+{"prompt_id": "transparent_002", "family": "transparent_objects", "prompt": "A human hand holding a transparent dodecahedron with exactly five visible fingertips.", "tags": ["hands", "transparent", "counting"]}
+{"prompt_id": "composition_001", "family": "multi_object_composition", "prompt": "A violin, a cactus, and a glass teapot arranged on a chessboard under warm studio lighting.", "tags": ["composition", "multi_object"]}
+{"prompt_id": "composition_002", "family": "multi_object_composition", "prompt": "A red fox sleeping inside a transparent washing machine next to a blue bicycle.", "tags": ["composition", "transparent", "rare_relation"]}
+{"prompt_id": "occlusion_001", "family": "contact_occlusion", "prompt": "A metal spoon partially hidden behind a folded navy umbrella on a wooden table.", "tags": ["occlusion", "contact"]}
+{"prompt_id": "occlusion_002", "family": "contact_occlusion", "prompt": "A bird seen through a glass bottle, with the bottle distorting the bird's body.", "tags": ["occlusion", "transparent", "distortion"]}
+{"prompt_id": "counting_001", "family": "counting_relations", "prompt": "Three ceramic masks arranged in a row, each with exactly two blue feathers attached.", "tags": ["counting", "composition"]}
+{"prompt_id": "counting_002", "family": "counting_relations", "prompt": "Two hands interlocking fingers around a transparent cube, with exactly five visible fingertips on the left hand.", "tags": ["hands", "counting", "contact"]}
