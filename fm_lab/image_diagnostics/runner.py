@@ -53,10 +53,15 @@ def run_diagnostics_build(
     started = time.perf_counter()
 
     write_parquet(dataset.metadata, output_dir / "dataset_index.parquet")
+    feature_output_dir = _feature_output_dir(
+        config,
+        project_root=project_root,
+        default=output_dir,
+    )
     feature_result: FeatureResult = compute_or_load_features(
         config=config.features,
         dataset=dataset,
-        output_dir=output_dir,
+        output_dir=feature_output_dir,
         save=config.output.save_features,
         model_loader=model_loader,
     )
@@ -136,6 +141,20 @@ def run_diagnostics_build(
         "manual_labels": labels_path,
         "runtime_seconds": elapsed,
     }
+
+
+def _feature_output_dir(
+    config: DiagnosticsRunConfig,
+    *,
+    project_root: str | Path | None,
+    default: Path,
+) -> Path:
+    if not config.features.cache_dir:
+        return default
+    path = Path(config.features.cache_dir).expanduser()
+    if not path.is_absolute():
+        path = Path(project_root or Path.cwd()) / path
+    return path.resolve()
 
 
 def _dry_run_result(

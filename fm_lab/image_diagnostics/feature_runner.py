@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,15 +49,25 @@ def compute_or_load_features(
         metadata = read_parquet(metadata_path)
         if _cache_matches(features, metadata, dataset, config):
             LOGGER.info("Loaded cached %s features: %s", config.name, feature_path)
-            return FeatureResult(config.name, features, metadata, True)
+            return FeatureResult(
+                config.name,
+                features,
+                _current_metadata(metadata, dataset.metadata),
+                True,
+            )
         LOGGER.warning("Feature cache does not match the current dataset; recomputing.")
 
     if dataset.vectors is not None:
-        if config.mode != "raw":
-            raise ValueError("Vector datasets currently support features.mode=raw.")
-        features = np.asarray(dataset.vectors, dtype=np.float32)
-        metadata = dataset.metadata.reset_index(drop=True).copy()
-        skipped = 0
+        if config.mode == "raw":
+            features = np.asarray(dataset.vectors, dtype=np.float32)
+            metadata = dataset.metadata.reset_index(drop=True).copy()
+            skipped = 0
+        else:
+            features, metadata, skipped = _extract_vector_image_features(
+                config,
+                dataset,
+                model_loader=model_loader,
+            )
     else:
         features, metadata, skipped = _extract_image_features(
             config,
@@ -69,6 +81,7 @@ def compute_or_load_features(
     metadata["feature_mode"] = config.mode
     metadata["feature_source_id"] = dataset.source_id
     metadata["features_normalized"] = config.normalize
+    metadata["feature_fingerprint"] = _feature_fingerprint(config)
 
     if save:
         feature_path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +159,55 @@ def _extract_image_features(
     )
 
 
+def _extract_vector_image_features(
+    config: FeatureConfig,
+    dataset: DatasetBundle,
+    *,
+    model_loader: Callable[[FeatureConfig], ImageFeatureExtractor],
+) -> tuple[np.ndarray, pd.DataFrame, int]:
+    if dataset.image_shape is None:
+        raise ValueError(
+            "Learned image features require input.image_shape for vector datasets."
+        )
+    assert dataset.vectors is not None
+    from PIL import Image
+
+    extractor = model_loader(config)
+    low, high = dataset.value_range or (
+        float(np.nanmin(dataset.vectors)),
+        float(np.nanmax(dataset.vectors)),
+    )
+    scale = max(high - low, np.finfo(np.float32).eps)
+    vectors: list[np.ndarray] = []
+    for start in range(0, len(dataset.vectors), config.batch_size):
+        batch = np.asarray(
+            dataset.vectors[start : start + config.batch_size],
+            dtype=np.float32,
+        )
+        pixels = np.asarray(
+            np.round(
+                np.clip(
+                    (batch.reshape(-1, *dataset.image_shape) - low) / scale,
+                    0.0,
+                    1.0,
+                )
+                * 255.0
+            ),
+            dtype=np.uint8,
+        )
+        images = [Image.fromarray(image, mode="L").convert("RGB") for image in pixels]
+        try:
+            vectors.append(np.asarray(extractor.extract(images), dtype=np.float32))
+        finally:
+            for image in images:
+                image.close()
+    return (
+        np.concatenate(vectors, axis=0),
+        dataset.metadata.reset_index(drop=True).copy(),
+        0,
+    )
+
+
 def _cache_matches(
     features: np.ndarray,
     metadata: pd.DataFrame,
@@ -158,6 +220,7 @@ def _cache_matches(
         "feature_mode",
         "feature_source_id",
         "features_normalized",
+        "feature_fingerprint",
     }
     if features.ndim != 2 or len(features) != len(metadata):
         return False
@@ -171,11 +234,43 @@ def _cache_matches(
         return False
     if not (metadata["feature_source_id"].astype(str) == dataset.source_id).all():
         return False
+    if not (
+        metadata["feature_fingerprint"].astype(str) == _feature_fingerprint(config)
+    ).all():
+        return False
     normalized = metadata["features_normalized"].map(_as_bool)
     return bool((normalized == config.normalize).all())
+
+
+def _feature_fingerprint(config: FeatureConfig) -> str:
+    values = {
+        "mode": config.mode,
+        "name": config.name,
+        "normalize": config.normalize,
+        "image_size": list(config.image_size),
+        "repo_id": config.repo_id if config.mode == "dinov2" else None,
+    }
+    serialized = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes"}
     return bool(value)
+
+
+def _current_metadata(
+    cached: pd.DataFrame,
+    current: pd.DataFrame,
+) -> pd.DataFrame:
+    metadata = current.reset_index(drop=True).copy()
+    for column in (
+        "feature_name",
+        "feature_mode",
+        "feature_source_id",
+        "features_normalized",
+        "feature_fingerprint",
+    ):
+        metadata[column] = cached[column].to_numpy()
+    return metadata

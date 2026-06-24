@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from fm_lab.image_diagnostics.mnist_reference_projections import (  # noqa: E402
+    DEFAULT_METHODS,
     METHOD_FILENAMES,
     compute_mnist_reference_projections,
 )
@@ -38,8 +39,8 @@ def parse_args() -> argparse.Namespace:
         "--methods",
         nargs="+",
         choices=tuple(METHOD_FILENAMES),
-        default=list(METHOD_FILENAMES),
-        help="Projection methods to compute. Defaults to all three.",
+        default=list(DEFAULT_METHODS),
+        help="Projection methods to compute. Defaults to the original three 2D views.",
     )
     parser.add_argument(
         "--max-samples",

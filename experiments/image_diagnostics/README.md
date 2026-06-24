@@ -79,11 +79,11 @@ The canvas supports:
 
 Streamlit serves the Python application and retains the diagnostics table and
 manual-label controls in a secondary workspace below the canvas. The canvas is
-implemented locally without React or Three.js.
+implemented locally without React; the optional 3D renderer uses Three.js.
 
 The reference project is MIT-licensed. This implementation is an independent
 Python/Canvas version; it uses the reference's public interaction ideas rather
-than bundling its React or Three.js source.
+than bundling its React application source.
 
 ## Full Reference Configuration
 
@@ -175,6 +175,95 @@ The original repository used older releases of UMAP and scikit-learn. The local
 script records installed package versions and all parameters in `manifest.json`;
 the result should have comparable cluster structure but is not expected to
 match the historical coordinates exactly.
+
+## 3D UMAP
+
+The explorer also supports a true three-component UMAP rendered with a
+perspective Three.js camera. The existing 2D configs are unchanged.
+
+Build the 2,000-digit example directly:
+
+```bash
+python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/mnist_umap_3d_example.yaml
+
+streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data outputs/dataset_explorer/mnist_umap_3d_example/explorer/explorer_data.parquet
+```
+
+For all 70,000 digits, compute the 3D coordinates once and then build the
+full explorer:
+
+```bash
+python experiments/image_diagnostics/compute_mnist_reference_projections.py \
+  --methods umap-3d
+
+python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/mnist_umap_3d_local.yaml
+
+streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data outputs/dataset_explorer/mnist_umap_3d_local/explorer/explorer_data.parquet
+```
+
+Drag the scene to orbit, use the wheel or `+`/`-` controls to zoom, and
+double-click or use reset to restore the initial camera. Hovering or clicking
+a digit shows its original preview and diagnostics measured in the 3D UMAP
+space, including the displayed `x`, `y`, and `z` coordinates.
+
+The first 3D launch caches the pinned Three.js `0.159.0` browser runtime under
+the explorer output directory. This is approximately 650 KB and is not an
+embedding model.
+
+## MNIST With DINOv2 Features
+
+The matching DINOv2 examples use the same deterministic 2,000 MNIST test
+digits as the raw-pixel examples, but replace each flattened 784-value image
+with the 768-dimensional CLS token from `facebook/dinov2-base`.
+
+Install the learned-image dependencies:
+
+```bash
+python -m pip install -e ".[image-diagnostics,image-embeddings]"
+```
+
+Build the 2D explorer first:
+
+```bash
+python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/mnist_dinov2_umap_2d.yaml
+```
+
+Then build the 3D explorer:
+
+```bash
+python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/mnist_dinov2_umap_3d.yaml
+```
+
+Both configs use:
+
+```text
+outputs/dataset_explorer/mnist_dinov2_shared/features/
+```
+
+as their feature cache. The first build downloads DINOv2 Base and computes a
+single `2000x768` normalized feature matrix. The second build validates and
+reuses that matrix, then computes only its own UMAP. The first download is
+approximately 346 MB.
+
+Launch the outputs:
+
+```bash
+streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data outputs/dataset_explorer/mnist_dinov2_umap_2d/explorer/explorer_data.parquet
+
+streamlit run experiments/image_diagnostics/explorer_app.py -- \
+  --data outputs/dataset_explorer/mnist_dinov2_umap_3d/explorer/explorer_data.parquet
+```
+
+DINOv2 was trained on natural RGB imagery rather than handwritten digits.
+These views are useful as a representation comparison, but DINOv2 is not
+expected to be intrinsically better than raw pixels for MNIST.
 
 ## NumPy And Toy Data
 

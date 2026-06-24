@@ -43,6 +43,7 @@ image-diagnostics = [
   "umap-learn>=0.5.6",
 ]
 image-embeddings = [
+  "torchvision",
   "transformers>=4.50",
 ]
 

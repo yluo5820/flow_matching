@@ -39,6 +39,7 @@ from fm_lab.image_diagnostics.projections import (
     projection_variants,
 )
 from fm_lab.image_diagnostics.runner import run_diagnostics_build
+from fm_lab.image_diagnostics.three_explorer import build_three_html
 
 
 def test_config_defaults_to_raw_features_without_model_download() -> None:
@@ -235,6 +236,96 @@ def test_raw_feature_runner_uses_dataset_vectors_without_model(tmp_path: Path) -
     assert not (tmp_path / "explorer" / "features").exists()
 
 
+def test_dinov2_feature_runner_converts_mnist_vectors_to_rgb(tmp_path: Path) -> None:
+    vectors = np.zeros((3, 28 * 28), dtype=np.float32)
+    vectors[1, 100:200] = 1.0
+    vectors[2, 300:500] = 0.5
+    metadata = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2],
+            "image_path": ["", "", ""],
+            "label": ["0", "1", "2"],
+        }
+    )
+    bundle = DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id="mnist-source",
+        source_description="MNIST vectors",
+        total_rows=3,
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+    )
+
+    class FakeExtractor:
+        def extract(self, images):
+            assert all(image.mode == "RGB" for image in images)
+            assert all(image.size == (28, 28) for image in images)
+            return np.asarray(
+                [
+                    [np.asarray(image)[..., 0].mean(), index]
+                    for index, image in enumerate(images)
+                ],
+                dtype=np.float32,
+            )
+
+    result = compute_or_load_features(
+        config=FeatureConfig(
+            mode="dinov2",
+            name="dinov2_test",
+            batch_size=2,
+            normalize=False,
+        ),
+        dataset=bundle,
+        output_dir=tmp_path / "explorer",
+        save=False,
+        model_loader=lambda _: FakeExtractor(),
+    )
+
+    assert result.features.shape == (3, 2)
+    assert result.metadata["feature_mode"].tolist() == ["dinov2"] * 3
+
+
+def test_feature_cache_reattaches_current_dataset_metadata(tmp_path: Path) -> None:
+    vectors = np.asarray([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+    first = DatasetBundle(
+        metadata=pd.DataFrame(
+            {"row_id": [0, 1], "image_path": ["first-0.png", "first-1.png"]}
+        ),
+        vectors=vectors,
+        source_id="shared-source",
+        source_description="first",
+        total_rows=2,
+    )
+    second = DatasetBundle(
+        metadata=pd.DataFrame(
+            {"row_id": [0, 1], "image_path": ["second-0.png", "second-1.png"]}
+        ),
+        vectors=vectors,
+        source_id="shared-source",
+        source_description="second",
+        total_rows=2,
+    )
+    config = FeatureConfig(mode="raw", name="shared")
+
+    compute_or_load_features(
+        config=config,
+        dataset=first,
+        output_dir=tmp_path / "cache",
+    )
+    loaded = compute_or_load_features(
+        config=config,
+        dataset=second,
+        output_dir=tmp_path / "cache",
+    )
+
+    assert loaded.loaded_from_cache is True
+    assert loaded.metadata["image_path"].tolist() == [
+        "second-0.png",
+        "second-1.png",
+    ]
+
+
 def test_projection_and_local_diagnostics_handle_small_dataset() -> None:
     features = np.asarray(
         [
@@ -276,6 +367,42 @@ def test_projection_and_local_diagnostics_handle_small_dataset() -> None:
     assert diagnostics["outlier_score"].notna().all()
 
 
+def test_projection_runner_persists_three_components(tmp_path: Path) -> None:
+    features = np.arange(24, dtype=np.float32).reshape(6, 4)
+    config = ProjectionConfig(
+        variants=(
+            diagnostics_config_from_dict(
+                {
+                    "explorer_name": "three",
+                    "input": {"type": "numpy", "data_path": "unused.npy"},
+                    "projection": {
+                        "variants": [
+                            {
+                                "name": "PCA 3D",
+                                "key": "pca_3d",
+                                "method": "pca",
+                                "n_components": 3,
+                            }
+                        ]
+                    },
+                    "explorer": {"renderer": "three3d"},
+                }
+            ).projection.variants[0],
+        )
+    )
+
+    result = compute_or_load_projections(
+        features,
+        pd.Series(range(6)),
+        config,
+        tmp_path,
+        feature_name="raw",
+        save=False,
+    )
+
+    assert {"pca_3d_x", "pca_3d_y", "pca_3d_z"} <= set(result.columns)
+
+
 def test_projection_diagnostics_follow_each_projection() -> None:
     metadata = pd.DataFrame(
         {
@@ -302,6 +429,26 @@ def test_projection_diagnostics_follow_each_projection() -> None:
     assert diagnostics["umap_label_agreement_k1"].tolist() == [1.0] * 4
     assert diagnostics["tsne_label_agreement_k1"].tolist() == [0.0] * 4
     assert diagnostics["umap_nearest_row_id"].tolist() == [1, 0, 3, 2]
+
+
+def test_projection_diagnostics_include_z_distance() -> None:
+    metadata = pd.DataFrame({"row_id": [0, 1, 2], "label": ["a", "a", "b"]})
+    projections = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2],
+            "umap_3d_x": [0.0, 0.0, 0.0],
+            "umap_3d_y": [0.0, 0.0, 0.0],
+            "umap_3d_z": [0.0, 2.0, 10.0],
+        }
+    )
+
+    diagnostics = compute_projection_diagnostics(
+        projections,
+        metadata,
+        k_neighbors=1,
+    )
+
+    assert diagnostics["umap_3d_knn_radius_k1"].tolist() == [2.0, 2.0, 8.0]
 
 
 def test_named_projection_variants_load_precomputed_coordinates(tmp_path: Path) -> None:
@@ -516,6 +663,55 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
     assert '"previewMode":"original"' in html
     assert "projectionDiagnostics" in html
     assert "previewTileContext.getImageData" in html
+
+
+def test_three_html_contains_3d_camera_and_thumbnail_shader(tmp_path: Path) -> None:
+    path = tmp_path / "digit.png"
+    Image.fromarray(np.full((8, 8), 255, dtype=np.uint8), mode="L").save(path)
+    frame = pd.DataFrame(
+        {
+            "row_id": [0],
+            "source_index": [7],
+            "image_path": [str(path)],
+            "dataset": ["mnist"],
+            "label": ["4"],
+            "umap_3d_x": [1.0],
+            "umap_3d_y": [2.0],
+            "umap_3d_z": [3.0],
+        }
+    )
+    bundle = prepare_sprite_atlases(frame, output_dir=tmp_path / "atlases")
+    config = diagnostics_config_from_dict(
+        {
+            "explorer_name": "three",
+            "input": {"type": "numpy", "data_path": "unused.npy"},
+            "projection": {
+                "variants": [
+                    {
+                        "name": "UMAP 3D",
+                        "key": "umap_3d",
+                        "method": "umap",
+                        "n_components": 3,
+                    }
+                ]
+            },
+            "explorer": {"renderer": "three3d"},
+        }
+    )
+
+    html = build_three_html(
+        bundle,
+        height=600,
+        config=config.explorer,
+        projection_names={"umap_3d": "UMAP 3D"},
+        three_source="window.THREE = {};",
+    )
+
+    assert "THREE.PerspectiveCamera" in html
+    assert "THREE.WebGLRenderer" in html
+    assert "Map Z" in html
+    assert '"coordinates":{"UMAP 3D":[0.0,0.0,0.0]}' in html
+    assert "texture2D(textureAtlas" in html
 
 
 def _raw_config(dataset_root: str) -> dict:

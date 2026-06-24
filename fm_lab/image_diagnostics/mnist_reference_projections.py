@@ -20,9 +20,11 @@ LOGGER = logging.getLogger("fm_lab.image_diagnostics.reference_projections")
 
 METHOD_FILENAMES = {
     "umap": "mnist_embeddings.json",
+    "umap-3d": "mnist_embeddings_3d.json",
     "tsne": "tsne_mnist_embeddings.json",
     "umap-min-dist-0.8": "md08_umap_mnist_embeddings.json",
 }
+DEFAULT_METHODS = ("umap", "tsne", "umap-min-dist-0.8")
 
 
 def compute_mnist_reference_projections(
@@ -87,6 +89,13 @@ def compute_mnist_reference_projections(
                 "metric": "euclidean",
                 "random_state": 42,
             },
+            "umap-3d": {
+                "n_components": 3,
+                "n_neighbors": 15,
+                "min_dist": 0.1,
+                "metric": "euclidean",
+                "random_state": 42,
+            },
             "tsne": {
                 "n_components": 2,
                 "perplexity": 30.0,
@@ -126,7 +135,7 @@ def _compute_method(
     method: str,
     n_jobs: int,
 ) -> np.ndarray:
-    if method in {"umap", "umap-min-dist-0.8"}:
+    if method in {"umap", "umap-3d", "umap-min-dist-0.8"}:
         try:
             import umap
         except ImportError as exc:
@@ -134,7 +143,7 @@ def _compute_method(
                 'UMAP requires umap-learn. Install ".[image-diagnostics]".'
             ) from exc
         reducer = umap.UMAP(
-            n_components=2,
+            n_components=3 if method == "umap-3d" else 2,
             n_neighbors=15,
             min_dist=0.8 if method == "umap-min-dist-0.8" else 0.1,
             metric="euclidean",

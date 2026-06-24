@@ -34,6 +34,7 @@ class InputConfig:
 class FeatureConfig:
     mode: str = "raw"
     name: str = "raw_pixels"
+    cache_dir: str | None = None
     normalize: bool = False
     skip_existing: bool = True
     image_size: tuple[int, int] = (64, 64)
@@ -48,6 +49,7 @@ class ProjectionVariantConfig:
     name: str
     key: str
     method: str = "umap"
+    n_components: int = 2
     n_neighbors: int = 15
     min_dist: float = 0.1
     metric: str = "euclidean"
@@ -101,6 +103,7 @@ class OutputConfig:
 class ExplorerConfig:
     enabled: bool = True
     app_type: str = "streamlit"
+    renderer: str = "canvas2d"
     thumbnail_size: int = 160
     default_color_by: str = "label"
     height: int = 760
@@ -233,8 +236,14 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     features = config.features
     if features.mode not in {"raw", "dinov2"}:
         raise ConfigError(f"Unsupported features.mode: {features.mode}")
-    if features.mode == "dinov2" and input_config.type != "image_metadata":
-        raise ConfigError("DINOv2 features currently require input.type=image_metadata.")
+    if (
+        features.mode == "dinov2"
+        and input_config.type == "numpy"
+        and input_config.image_shape is None
+    ):
+        raise ConfigError(
+            "DINOv2 features on NumPy input require input.image_shape."
+        )
     if len(features.image_size) != 2 or min(features.image_size) < 1:
         raise ConfigError("features.image_size must contain two positive dimensions.")
     if features.batch_size < 1:
@@ -256,6 +265,10 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
             )
         if not variant.name.strip() or not variant.key.strip():
             raise ConfigError("Projection variants require non-empty name and key values.")
+        if variant.n_components not in {2, 3}:
+            raise ConfigError(
+                f"Projection {variant.name!r} n_components must be 2 or 3."
+            )
         if variant.key in projection_keys:
             raise ConfigError(f"Duplicate projection variant key: {variant.key}")
         projection_keys.add(variant.key)
@@ -275,6 +288,16 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
         raise ConfigError("diagnostics.covariance_eigenvalues must be positive.")
     if config.explorer.app_type != "streamlit":
         raise ConfigError("Only explorer.app_type=streamlit is currently supported.")
+    if config.explorer.renderer not in {"canvas2d", "three3d"}:
+        raise ConfigError("explorer.renderer must be canvas2d or three3d.")
+    if config.explorer.renderer == "three3d":
+        if not config.projection.variants:
+            raise ConfigError("explorer.renderer=three3d requires projection.variants.")
+        if any(variant.n_components != 3 for variant in config.projection.variants):
+            raise ConfigError(
+                "explorer.renderer=three3d requires every projection variant "
+                "to use n_components=3."
+            )
     if config.explorer.transition_easing not in {"ease", "linear"}:
         raise ConfigError("explorer.transition_easing must be ease or linear.")
     if config.explorer.preview_mode not in {"original", "map"}:

@@ -16,6 +16,7 @@ from fm_lab.image_diagnostics.config import ProjectionConfig, ProjectionVariantC
 from fm_lab.image_diagnostics.save_utils import OptionalDependencyError
 
 LOGGER = logging.getLogger("fm_lab.image_diagnostics")
+AXIS_NAMES = ("x", "y", "z")
 
 
 def compute_or_load_projections(
@@ -35,7 +36,12 @@ def compute_or_load_projections(
         path = output_dir / "projections" / f"{feature_name}_{variant.key}.csv"
         if save and config.skip_existing and path.exists():
             projected = pd.read_csv(path)
-            _validate_projection(projected, variant.key, row_ids)
+            _validate_projection(
+                projected,
+                variant.key,
+                row_ids,
+                n_components=variant.n_components,
+            )
             LOGGER.info("Loaded cached %s projection: %s", variant.name, path)
         else:
             coordinates = _compute_projection_variant(
@@ -44,10 +50,10 @@ def compute_or_load_projections(
                 project_root=project_root,
             )
             projected = pd.DataFrame(
-                {
-                    "row_id": row_ids.to_numpy(),
-                    f"{variant.key}_x": coordinates[:, 0],
-                    f"{variant.key}_y": coordinates[:, 1],
+                {"row_id": row_ids.to_numpy()}
+                | {
+                    f"{variant.key}_{axis}": coordinates[:, index]
+                    for index, axis in enumerate(AXIS_NAMES[: variant.n_components])
                 }
             )
             if save:
@@ -64,7 +70,7 @@ def compute_projection(
     *,
     method: str | None = None,
 ) -> np.ndarray:
-    """Compute a two-dimensional UMAP, PCA, or t-SNE representation."""
+    """Compute a low-dimensional UMAP, PCA, or t-SNE representation."""
 
     selected = method or config.method
     variant = ProjectionVariantConfig(
@@ -117,13 +123,13 @@ def _compute_projection_variant(
         )
     selected = variant.method
     if len(embeddings) == 0:
-        return np.empty((0, 2), dtype=np.float32)
+        return np.empty((0, variant.n_components), dtype=np.float32)
     if selected == "pca":
-        return _pca(embeddings, variant.random_state)
+        return _pca(embeddings, variant.random_state, variant.n_components)
     if selected == "umap":
         if len(embeddings) < 3:
             LOGGER.warning("Fewer than three samples; using PCA coordinates for UMAP output.")
-            return _pca(embeddings, variant.random_state)
+            return _pca(embeddings, variant.random_state, variant.n_components)
         try:
             import umap
         except ImportError as exc:
@@ -131,7 +137,7 @@ def _compute_projection_variant(
                 'UMAP requires umap-learn. Install ".[image-diagnostics]".'
             ) from exc
         reducer = umap.UMAP(
-            n_components=2,
+            n_components=variant.n_components,
             n_neighbors=min(variant.n_neighbors, len(embeddings) - 1),
             min_dist=variant.min_dist,
             metric=variant.metric,
@@ -141,7 +147,7 @@ def _compute_projection_variant(
     if selected == "tsne":
         if len(embeddings) < 3:
             LOGGER.warning("Fewer than three samples; using PCA coordinates for t-SNE output.")
-            return _pca(embeddings, variant.random_state)
+            return _pca(embeddings, variant.random_state, variant.n_components)
         from sklearn.manifold import TSNE
 
         perplexity = min(
@@ -149,7 +155,7 @@ def _compute_projection_variant(
             max(1.0, (len(embeddings) - 1) / 3),
         )
         return TSNE(
-            n_components=2,
+            n_components=variant.n_components,
             metric=variant.metric,
             perplexity=perplexity,
             init=variant.init,
@@ -181,12 +187,16 @@ def _load_precomputed_projection(
         with path.open(encoding="utf-8") as handle:
             coordinates = np.asarray(json.load(handle), dtype=np.float32)
     else:
-        coordinates = pd.read_csv(path).iloc[:, -2:].to_numpy(dtype=np.float32)
+        coordinates = (
+            pd.read_csv(path)
+            .iloc[:, -variant.n_components :]
+            .to_numpy(dtype=np.float32)
+        )
     coordinates = np.asarray(coordinates, dtype=np.float32)
-    if coordinates.shape != (expected_rows, 2):
+    if coordinates.shape != (expected_rows, variant.n_components):
         raise ValueError(
             f"Projection {variant.name!r} has shape {coordinates.shape}; "
-            f"expected ({expected_rows}, 2)."
+            f"expected ({expected_rows}, {variant.n_components})."
         )
     if not np.isfinite(coordinates).all():
         raise ValueError(f"Projection {variant.name!r} contains non-finite coordinates.")
@@ -206,13 +216,19 @@ def _download_projection(url: str, path: Path) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def _pca(embeddings: np.ndarray, random_state: int) -> np.ndarray:
+def _pca(
+    embeddings: np.ndarray,
+    random_state: int,
+    n_components: int = 2,
+) -> np.ndarray:
     if len(embeddings) == 1:
-        return np.zeros((1, 2), dtype=np.float32)
-    components = min(2, len(embeddings), embeddings.shape[1])
+        return np.zeros((1, n_components), dtype=np.float32)
+    components = min(n_components, len(embeddings), embeddings.shape[1])
     coordinates = PCA(n_components=components, random_state=random_state).fit_transform(embeddings)
-    if components == 1:
-        coordinates = np.column_stack([coordinates[:, 0], np.zeros(len(coordinates))])
+    if components < n_components:
+        coordinates = np.column_stack(
+            [coordinates, np.zeros((len(coordinates), n_components - components))]
+        )
     return np.asarray(coordinates, dtype=np.float32)
 
 
@@ -220,8 +236,12 @@ def _validate_projection(
     frame: pd.DataFrame,
     method: str,
     expected_row_ids: pd.Series,
+    n_components: int = 2,
 ) -> None:
-    required = {"row_id", f"{method}_x", f"{method}_y"}
+    required = {
+        "row_id",
+        *(f"{method}_{axis}" for axis in AXIS_NAMES[:n_components]),
+    }
     missing = required - set(frame.columns)
     if missing:
         raise RuntimeError(

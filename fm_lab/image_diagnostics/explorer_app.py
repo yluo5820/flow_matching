@@ -15,6 +15,7 @@ from fm_lab.image_diagnostics.config import ExplorerConfig, diagnostics_config_f
 from fm_lab.image_diagnostics.label_store import MANUAL_LABELS, save_manual_label
 from fm_lab.image_diagnostics.projections import projection_variants
 from fm_lab.image_diagnostics.save_utils import read_parquet
+from fm_lab.image_diagnostics.three_explorer import render_thumbnail_three
 from fm_lab.utils.config import load_config
 
 
@@ -52,12 +53,20 @@ def run_explorer(data_path: str | Path) -> None:
     frame = read_parquet(path)
     frame = _merge_latest_labels(frame, path.parent / "manual_labels.csv")
     explorer_config, projection_names = _explorer_settings(path)
-    render_thumbnail_canvas(
-        frame,
-        data_path=path,
-        config=explorer_config,
-        projection_names=projection_names,
-    )
+    if explorer_config.renderer == "three3d":
+        render_thumbnail_three(
+            frame,
+            data_path=path,
+            config=explorer_config,
+            projection_names=projection_names,
+        )
+    else:
+        render_thumbnail_canvas(
+            frame,
+            data_path=path,
+            config=explorer_config,
+            projection_names=projection_names,
+        )
     if not explorer_config.show_workspace:
         return
 

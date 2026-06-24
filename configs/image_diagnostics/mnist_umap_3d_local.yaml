@@ -1,0 +1,57 @@
+explorer_name: mnist_umap_3d_local
+
+input:
+  type: mnist
+  dataset_root: data/mnist
+  split: all
+  order: mldata
+  thumbnail_mode: atlas
+  max_samples: null
+  sample_seed: 42
+  download: false
+
+features:
+  mode: raw
+  name: raw_pixels
+  normalize: false
+  skip_existing: true
+
+projection:
+  skip_existing: true
+  variants:
+    - name: UMAP 3D
+      key: umap_3d
+      method: umap
+      n_components: 3
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+      source_path: data/umap_explorer_local/mnist_embeddings_3d.json
+
+diagnostics:
+  enabled: false
+
+output:
+  root_dir: outputs/dataset_explorer
+  save_features: false
+  save_projection: true
+  save_diagnostics: false
+  save_explorer_data: true
+
+explorer:
+  enabled: true
+  app_type: streamlit
+  renderer: three3d
+  height: 760
+  sidebar_width: 300
+  point_size: 14
+  hover_size: 56
+  atlas_tile_size: 28
+  atlas_size: 2048
+  selector_label: Projection
+  preview_mode: original
+  show_metrics: true
+  show_workspace: false
+  compute_projection_diagnostics: true
+  projection_diagnostics_k: 15

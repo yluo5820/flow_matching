@@ -24,6 +24,8 @@ class DatasetBundle:
     source_description: str
     total_rows: int
     skipped_rows: int = 0
+    image_shape: tuple[int, int] | None = None
+    value_range: tuple[float, float] | None = None
 
 
 def load_dataset(
@@ -102,6 +104,8 @@ def _load_mnist(
             f"MNIST {config.split} split at {dataset_root} ({config.order} order)"
         ),
         total_rows=len(images),
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
     )
 
 
@@ -260,6 +264,8 @@ def _load_numpy(
         source_id=_files_source_id(source_files, extra=str(indices.tolist())),
         source_description=f"NumPy array {data_path}",
         total_rows=len(vectors),
+        image_shape=config.image_shape,
+        value_range=config.value_range,
     )
 
 
