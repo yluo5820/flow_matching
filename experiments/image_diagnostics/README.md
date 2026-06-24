@@ -240,6 +240,43 @@ DINOv2 was trained on natural RGB imagery rather than handwritten digits.
 These views are useful as a representation comparison, but DINOv2 is not
 expected to be intrinsically better than raw pixels for MNIST.
 
+## Full CIFAR-10 Explorer
+
+CIFAR-10 support uses the official binary archive from the
+[University of Toronto dataset page](https://www.cs.toronto.edu/~kriz/cifar.html).
+The loader verifies the published MD5 checksum before extracting the 50,000
+training and 10,000 test images. No torchvision dataset dependency is required.
+
+Download CIFAR-10, build raw-pixel UMAP/PCA in 2D and UMAP in 3D, and estimate
+intrinsic dimension:
+
+```bash
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/cifar10_raw_umap_full.yaml
+```
+
+The 32x32 RGB images are packed directly into sprite atlases, so the explorer
+shows the original color image for every point without exporting 60,000
+individual PNG files.
+
+To build the matching DINOv2 2D/3D views and DINOv2-space ID estimates:
+
+```bash
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/cifar10_dinov2_umap_full.yaml
+```
+
+Both outputs use identical train-then-test row ordering, so automatic loading
+places their compatible views in one projection selector. Launch all available
+datasets with:
+
+```bash
+.conda/fm_lab/bin/streamlit run experiments/image_diagnostics/explorer_app.py
+```
+
+The raw-pixel and DINOv2 builds are computationally independent. Use
+`--no-id-estimation` when iterating on projections without recomputing ID.
+
 ## Automatic Explorer Loading
 
 The explorer automatically discovers existing outputs, groups views with the

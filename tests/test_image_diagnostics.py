@@ -151,6 +151,45 @@ def test_mnist_loader_recreates_fetch_mldata_order(tmp_path: Path) -> None:
         assert atlas.size == (2048, 2048)
 
 
+def test_cifar10_loader_preserves_rgb_images_and_class_names(tmp_path: Path) -> None:
+    cifar_root = tmp_path / "cifar10"
+    data_dir = cifar_root / "cifar-10-batches-bin"
+    data_dir.mkdir(parents=True)
+    images = np.zeros((4, 32, 32, 3), dtype=np.uint8)
+    images[0, :, :, 0] = 255
+    images[1, :, :, 1] = 128
+    images[2, :, :, 2] = 64
+    images[3] = np.asarray([12, 34, 56], dtype=np.uint8)
+    labels = np.asarray([0, 3, 8, 9], dtype=np.uint8)
+    _write_cifar10_batch(data_dir / "test_batch.bin", images, labels)
+
+    bundle = load_dataset(
+        InputConfig(
+            type="cifar10",
+            dataset_root=str(cifar_root),
+            split="test",
+            thumbnail_mode="atlas",
+            max_samples=None,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "assets" / "thumbnails",
+    )
+
+    assert bundle.vectors is not None
+    assert bundle.vectors.shape == (4, 32 * 32 * 3)
+    assert bundle.image_shape == (32, 32, 3)
+    assert bundle.value_range == (0.0, 255.0)
+    assert bundle.metadata["label"].tolist() == [
+        "airplane",
+        "cat",
+        "ship",
+        "truck",
+    ]
+    atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
+    with Image.open(atlas_path) as atlas:
+        assert atlas.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+
+
 def test_numpy_loader_supports_vectors_and_image_preview(tmp_path: Path) -> None:
     data_path = tmp_path / "digits.npy"
     labels_path = tmp_path / "labels.npy"
@@ -294,6 +333,48 @@ def test_dinov2_feature_runner_converts_mnist_vectors_to_rgb(tmp_path: Path) -> 
 
     assert result.features.shape == (3, 2)
     assert result.metadata["feature_mode"].tolist() == ["dinov2"] * 3
+
+
+def test_dinov2_feature_runner_preserves_cifar_rgb_vectors(tmp_path: Path) -> None:
+    images = np.zeros((2, 32, 32, 3), dtype=np.uint8)
+    images[0] = np.asarray([255, 0, 0], dtype=np.uint8)
+    images[1] = np.asarray([0, 128, 255], dtype=np.uint8)
+    bundle = DatasetBundle(
+        metadata=pd.DataFrame(
+            {
+                "row_id": [0, 1],
+                "image_path": ["", ""],
+                "label": ["airplane", "ship"],
+            }
+        ),
+        vectors=images.reshape(2, -1),
+        source_id="cifar10-source",
+        source_description="CIFAR-10 vectors",
+        total_rows=2,
+        image_shape=(32, 32, 3),
+        value_range=(0.0, 255.0),
+    )
+
+    class FakeExtractor:
+        def extract(self, batch):
+            pixels = [np.asarray(image)[0, 0].tolist() for image in batch]
+            assert pixels == [[255, 0, 0], [0, 128, 255]]
+            return np.asarray(pixels, dtype=np.float32)
+
+    result = compute_or_load_features(
+        config=FeatureConfig(
+            mode="dinov2",
+            name="dinov2_test",
+            batch_size=2,
+            normalize=False,
+        ),
+        dataset=bundle,
+        output_dir=tmp_path / "explorer",
+        save=False,
+        model_loader=lambda _: FakeExtractor(),
+    )
+
+    assert result.features.tolist() == [[255.0, 0.0, 0.0], [0.0, 128.0, 255.0]]
 
 
 def test_feature_cache_reattaches_current_dataset_metadata(tmp_path: Path) -> None:
@@ -1017,3 +1098,13 @@ def _write_mnist_split(
     with gzip.open(root / label_name, "wb") as handle:
         handle.write(struct.pack(">II", 2049, len(labels)))
         handle.write(np.asarray(labels, dtype=np.uint8).tobytes())
+
+
+def _write_cifar10_batch(
+    path: Path,
+    images: np.ndarray,
+    labels: np.ndarray,
+) -> None:
+    pixels = images.transpose(0, 3, 1, 2).reshape(len(images), -1)
+    records = np.concatenate([labels.reshape(-1, 1), pixels], axis=1)
+    path.write_bytes(np.asarray(records, dtype=np.uint8).tobytes())

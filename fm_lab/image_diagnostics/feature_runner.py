@@ -195,7 +195,11 @@ def _extract_vector_image_features(
             ),
             dtype=np.uint8,
         )
-        images = [Image.fromarray(image, mode="L").convert("RGB") for image in pixels]
+        mode = "RGB" if len(dataset.image_shape) == 3 else "L"
+        images = [
+            Image.fromarray(image, mode=mode).convert("RGB")
+            for image in pixels
+        ]
         try:
             vectors.append(np.asarray(extractor.extract(images), dtype=np.float32))
         finally:
