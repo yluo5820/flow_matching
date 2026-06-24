@@ -265,6 +265,29 @@ DINOv2 was trained on natural RGB imagery rather than handwritten digits.
 These views are useful as a representation comparison, but DINOv2 is not
 expected to be intrinsically better than raw pixels for MNIST.
 
+## Combined Raw And DINOv2 Explorer
+
+The precomputed 2D and 3D outputs can be merged into one row-aligned explorer:
+
+```bash
+python experiments/image_diagnostics/combine_explorers.py \
+  --config configs/image_diagnostics/mnist_raw_dinov2_all_views.yaml
+
+streamlit run experiments/image_diagnostics/explorer_app.py \
+  --server.port 8518 -- \
+  --data outputs/dataset_explorer/mnist_raw_dinov2_all_views/explorer/explorer_data.parquet
+```
+
+The comparison config combines raw-pixel UMAP and PCA in 2D, raw-pixel UMAP
+in 3D, and DINOv2 UMAP in both 2D and 3D. It validates the `split` and
+`source_index` sample keys before merging and recomputes only projection-space
+diagnostics. It does not load DINOv2 or recompute any feature vectors.
+
+The unified Three.js renderer uses a front-facing flat camera for 2D
+projections and switches to orbit controls for 3D projections. The same
+projection selector, preview, and live diagnostics panel are used in both
+modes.
+
 ## NumPy And Toy Data
 
 Any two-dimensional NumPy array with shape `(samples, features)` can be used:

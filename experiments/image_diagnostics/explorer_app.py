@@ -1,4 +1,4 @@
-"""CLI entry point for the Streamlit dataset UMAP explorer."""
+"""CLI entry point for the Streamlit dataset projection explorer."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from fm_lab.image_diagnostics.explorer_app import run_explorer  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Explore a projected image or vector dataset.")
+    parser = argparse.ArgumentParser(
+        description="Explore a projected image or vector dataset."
+    )
     parser.add_argument("--data", required=True, help="Path to explorer_data.parquet.")
     return parser.parse_args()
 

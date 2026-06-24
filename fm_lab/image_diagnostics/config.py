@@ -293,11 +293,6 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     if config.explorer.renderer == "three3d":
         if not config.projection.variants:
             raise ConfigError("explorer.renderer=three3d requires projection.variants.")
-        if any(variant.n_components != 3 for variant in config.projection.variants):
-            raise ConfigError(
-                "explorer.renderer=three3d requires every projection variant "
-                "to use n_components=3."
-            )
     if config.explorer.transition_easing not in {"ease", "linear"}:
         raise ConfigError("explorer.transition_easing must be ease or linear.")
     if config.explorer.preview_mode not in {"original", "map"}:

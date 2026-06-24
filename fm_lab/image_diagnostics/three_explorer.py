@@ -1,4 +1,4 @@
-"""Three.js renderer for three-dimensional thumbnail projections."""
+"""Three.js renderer for mixed two- and three-dimensional projections."""
 
 # ruff: noqa: E501
 
@@ -34,7 +34,7 @@ def render_thumbnail_three(
     config: ExplorerConfig,
     projection_names: dict[str, str] | None = None,
 ) -> None:
-    """Render a projected dataset with a perspective Three.js camera."""
+    """Render flat and spatial projections with a Three.js camera."""
 
     import streamlit as st
 
@@ -64,11 +64,11 @@ def build_three_html(
     projection_names: dict[str, str] | None = None,
     three_source: str,
 ) -> str:
-    """Build a standalone Three.js document for one or more 3D projections."""
+    """Build a standalone Three.js document for 2D and 3D projections."""
 
     projections = _projection_columns(bundle.frame, projection_names=projection_names)
     if not projections:
-        raise ValueError("Three.js explorer data contains no x/y/z projection.")
+        raise ValueError("Three.js explorer data contains no x/y projection.")
     atlas_size = _atlas_size(bundle)
     payload = {
         "points": _point_payload(bundle.frame, projections),
@@ -77,6 +77,9 @@ def build_three_html(
             for path in bundle.atlas_paths
         ],
         "projections": list(projections),
+        "projectionDimensions": {
+            name: len(columns) for name, columns in projections.items()
+        },
         "projectionDiagnostics": _projection_diagnostics_payload(
             bundle.frame,
             projections,
@@ -103,27 +106,44 @@ def _projection_columns(
     frame: pd.DataFrame,
     *,
     projection_names: dict[str, str] | None,
-) -> dict[str, tuple[str, str, str]]:
-    projections: dict[str, tuple[str, str, str]] = {}
+) -> dict[str, tuple[str, ...]]:
+    projections: dict[str, tuple[str, ...]] = {}
     columns = set(frame.columns)
-    for x_column in (str(column) for column in frame.columns if str(column).endswith("_x")):
-        key = x_column[:-2]
+    discovered = [
+        str(column)[:-2]
+        for column in frame.columns
+        if str(column).endswith("_x")
+    ]
+    ordered_keys = [
+        *(
+            key
+            for key in (projection_names or {})
+            if f"{key}_x" in columns
+        ),
+        *(key for key in discovered if key not in (projection_names or {})),
+    ]
+    for key in ordered_keys:
+        x_column = f"{key}_x"
         y_column = f"{key}_y"
         z_column = f"{key}_z"
-        if y_column not in columns or z_column not in columns:
+        if y_column not in columns:
             continue
         display_name = (
             projection_names.get(key, key.replace("_", " ").title())
             if projection_names
             else key.replace("_", " ").title()
         )
-        projections[display_name] = (x_column, y_column, z_column)
+        projections[display_name] = (
+            (x_column, y_column, z_column)
+            if z_column in columns
+            else (x_column, y_column)
+        )
     return projections
 
 
 def _point_payload(
     frame: pd.DataFrame,
-    projections: dict[str, tuple[str, str, str]],
+    projections: dict[str, tuple[str, ...]],
 ) -> list[dict[str, Any]]:
     normalized = {
         name: _normalized_coordinates(frame, columns)
@@ -151,10 +171,11 @@ def _point_payload(
 
 def _projection_diagnostics_payload(
     frame: pd.DataFrame,
-    projections: dict[str, tuple[str, str, str]],
+    projections: dict[str, tuple[str, ...]],
 ) -> dict[str, dict[str, dict[str, str]]]:
     payload: dict[str, dict[str, dict[str, str]]] = {}
-    for name, (x_column, _, _) in projections.items():
+    for name, columns in projections.items():
+        x_column = columns[0]
         key = x_column[:-2]
         details: dict[str, dict[str, str]] = {}
         for prefix, label in (
@@ -191,14 +212,19 @@ def _float32_payload(series: pd.Series) -> dict[str, str]:
 
 def _normalized_coordinates(
     frame: pd.DataFrame,
-    columns: tuple[str, str, str],
+    columns: tuple[str, ...],
 ) -> np.ndarray:
     values = frame[list(columns)].to_numpy(dtype=np.float64, copy=True)
     values -= np.nanmean(values, axis=0, keepdims=True)
     maximum = float(np.nanmax(np.abs(values))) if values.size else 1.0
     if not np.isfinite(maximum) or maximum <= 0.0:
         maximum = 1.0
-    return np.nan_to_num(values / maximum * 20.0)
+    normalized = np.nan_to_num(values / maximum * 20.0)
+    if normalized.shape[1] == 2:
+        normalized = np.column_stack(
+            [normalized, np.zeros(len(normalized), dtype=normalized.dtype)]
+        )
+    return normalized
 
 
 def _atlas_size(bundle: AtlasBundle) -> int:
@@ -299,7 +325,7 @@ def _html_template(
     <div id="view-controls">
       <button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
       <button id="zoom-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
-      <button id="reset" title="Reset 3D view" aria-label="Reset 3D view">&#8634;</button>
+      <button id="reset" title="Reset view" aria-label="Reset view">&#8634;</button>
     </div>
     <div id="status"></div>
   </main>
@@ -353,6 +379,8 @@ let projection = DATA.projections[0];
 let radius = 52;
 let theta = 0.7;
 let phi = 1.05;
+let panX = 0;
+let panY = 0;
 let dragging = false;
 let moved = false;
 let pointerX = 0;
@@ -465,6 +493,11 @@ function updateProjection() {{
 }}
 
 function updateCamera() {{
+  if (DATA.projectionDimensions[projection] === 2) {{
+    camera.position.set(panX, panY, radius);
+    camera.lookAt(panX, panY, 0);
+    return;
+  }}
   camera.position.set(
     radius * Math.sin(phi) * Math.cos(theta),
     radius * Math.cos(phi),
@@ -477,6 +510,8 @@ function resetView() {{
   radius = 52;
   theta = 0.7;
   phi = 1.05;
+  panX = 0;
+  panY = 0;
   updateCamera();
   requestRender();
 }}
@@ -505,7 +540,8 @@ function render() {{
   renderRequested = false;
   renderer.render(scene, camera);
   updateHighlight();
-  statusElement.textContent = `3D · ${{DATA.points.length.toLocaleString()}} samples`;
+  const dimensions = DATA.projectionDimensions[projection];
+  statusElement.textContent = `${{dimensions}}D · ${{DATA.points.length.toLocaleString()}} samples`;
 }}
 
 function pick(event) {{
@@ -581,7 +617,7 @@ function showPoint(index) {{
   const coordinate = point.coordinates[projection];
   appendMetric("Map X", coordinate[0]);
   appendMetric("Map Y", coordinate[1]);
-  appendMetric("Map Z", coordinate[2]);
+  if (DATA.projectionDimensions[projection] === 3) appendMetric("Map Z", coordinate[2]);
   for (const [name, values] of Object.entries(DATA.projectionDiagnostics[projection] || {{}})) {{
     appendMetric(name, values[index]);
   }}
@@ -626,8 +662,14 @@ renderer.domElement.addEventListener("pointermove", event => {{
     const dx = event.clientX - pointerX;
     const dy = event.clientY - pointerY;
     if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
-    theta -= dx * 0.006;
-    phi = Math.max(0.12, Math.min(Math.PI - 0.12, phi + dy * 0.006));
+    if (DATA.projectionDimensions[projection] === 3) {{
+      theta -= dx * 0.006;
+      phi = Math.max(0.12, Math.min(Math.PI - 0.12, phi + dy * 0.006));
+    }} else {{
+      const worldPerPixel = radius * 0.0018;
+      panX -= dx * worldPerPixel;
+      panY += dy * worldPerPixel;
+    }}
     pointerX = event.clientX;
     pointerY = event.clientY;
     updateCamera();

@@ -23,6 +23,7 @@ from fm_lab.image_diagnostics.config import (
 )
 from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
+from fm_lab.image_diagnostics.explorer_merge import combine_explorer_tables
 from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
 from fm_lab.image_diagnostics.label_store import load_manual_labels, save_manual_label
 from fm_lab.image_diagnostics.local_diagnostics import compute_local_diagnostics
@@ -403,6 +404,34 @@ def test_projection_runner_persists_three_components(tmp_path: Path) -> None:
     assert {"pca_3d_x", "pca_3d_y", "pca_3d_z"} <= set(result.columns)
 
 
+def test_three_renderer_accepts_mixed_projection_dimensions() -> None:
+    config = diagnostics_config_from_dict(
+        {
+            "explorer_name": "mixed",
+            "input": {"type": "numpy", "data_path": "unused.npy"},
+            "projection": {
+                "variants": [
+                    {
+                        "name": "UMAP 2D",
+                        "key": "umap_2d",
+                        "method": "umap",
+                        "n_components": 2,
+                    },
+                    {
+                        "name": "UMAP 3D",
+                        "key": "umap_3d",
+                        "method": "umap",
+                        "n_components": 3,
+                    },
+                ]
+            },
+            "explorer": {"renderer": "three3d"},
+        }
+    )
+
+    assert [variant.n_components for variant in config.projection.variants] == [2, 3]
+
+
 def test_projection_diagnostics_follow_each_projection() -> None:
     metadata = pd.DataFrame(
         {
@@ -567,6 +596,80 @@ def test_labels_merge_into_explorer_data(tmp_path: Path) -> None:
     assert len(load_manual_labels(labels_path)) == 1
 
 
+def test_combined_explorer_aligns_and_renames_precomputed_projections(
+    tmp_path: Path,
+) -> None:
+    base = pd.DataFrame(
+        {
+            "row_id": [0, 1],
+            "split": ["test", "test"],
+            "source_index": [10, 20],
+            "label": ["1", "2"],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "row_id": [99, 98],
+            "split": ["test", "test"],
+            "source_index": [20, 10],
+            "label": ["2", "1"],
+            "umap_x": [2.0, 1.0],
+            "umap_y": [4.0, 3.0],
+            "umap_z": [6.0, 5.0],
+        }
+    )
+    source_path = tmp_path / "source.parquet"
+    source.to_parquet(source_path, index=False)
+
+    combined = combine_explorer_tables(
+        base,
+        [
+            {
+                "data_path": str(source_path),
+                "projections": {"umap": "raw_umap_3d"},
+            }
+        ],
+        align_on=["split", "source_index"],
+        project_root=tmp_path,
+    )
+
+    assert combined["raw_umap_3d_x"].tolist() == [1.0, 2.0]
+    assert combined["raw_umap_3d_y"].tolist() == [3.0, 4.0]
+    assert combined["raw_umap_3d_z"].tolist() == [5.0, 6.0]
+
+
+def test_combined_explorer_rejects_different_sample_sets(tmp_path: Path) -> None:
+    base = pd.DataFrame(
+        {
+            "row_id": [0, 1],
+            "source_index": [10, 20],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "row_id": [0, 1],
+            "source_index": [10, 30],
+            "umap_x": [0.0, 1.0],
+            "umap_y": [1.0, 0.0],
+        }
+    )
+    source_path = tmp_path / "source.parquet"
+    source.to_parquet(source_path, index=False)
+
+    with np.testing.assert_raises_regex(ValueError, "does not match base samples"):
+        combine_explorer_tables(
+            base,
+            [
+                {
+                    "data_path": str(source_path),
+                    "projections": {"umap": "raw_umap_2d"},
+                }
+            ],
+            align_on=["source_index"],
+            project_root=tmp_path,
+        )
+
+
 def test_mnist_dry_run_requires_no_model(tmp_path: Path) -> None:
     mnist_root = tmp_path / "mnist"
     images = np.zeros((4, 28, 28), dtype=np.uint8)
@@ -665,7 +768,9 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
     assert "previewTileContext.getImageData" in html
 
 
-def test_three_html_contains_3d_camera_and_thumbnail_shader(tmp_path: Path) -> None:
+def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "digit.png"
     Image.fromarray(np.full((8, 8), 255, dtype=np.uint8), mode="L").save(path)
     frame = pd.DataFrame(
@@ -675,6 +780,8 @@ def test_three_html_contains_3d_camera_and_thumbnail_shader(tmp_path: Path) -> N
             "image_path": [str(path)],
             "dataset": ["mnist"],
             "label": ["4"],
+            "umap_2d_x": [0.5],
+            "umap_2d_y": [1.5],
             "umap_3d_x": [1.0],
             "umap_3d_y": [2.0],
             "umap_3d_z": [3.0],
@@ -687,6 +794,12 @@ def test_three_html_contains_3d_camera_and_thumbnail_shader(tmp_path: Path) -> N
             "input": {"type": "numpy", "data_path": "unused.npy"},
             "projection": {
                 "variants": [
+                    {
+                        "name": "UMAP 2D",
+                        "key": "umap_2d",
+                        "method": "umap",
+                        "n_components": 2,
+                    },
                     {
                         "name": "UMAP 3D",
                         "key": "umap_3d",
@@ -703,14 +816,15 @@ def test_three_html_contains_3d_camera_and_thumbnail_shader(tmp_path: Path) -> N
         bundle,
         height=600,
         config=config.explorer,
-        projection_names={"umap_3d": "UMAP 3D"},
+        projection_names={"umap_2d": "UMAP 2D", "umap_3d": "UMAP 3D"},
         three_source="window.THREE = {};",
     )
 
     assert "THREE.PerspectiveCamera" in html
     assert "THREE.WebGLRenderer" in html
     assert "Map Z" in html
-    assert '"coordinates":{"UMAP 3D":[0.0,0.0,0.0]}' in html
+    assert '"projectionDimensions":{"UMAP 2D":2,"UMAP 3D":3}' in html
+    assert '"coordinates":{"UMAP 2D":[0.0,0.0,0.0],"UMAP 3D":[0.0,0.0,0.0]}' in html
     assert "texture2D(textureAtlas" in html
 
 

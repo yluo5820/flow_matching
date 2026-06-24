@@ -1,0 +1,82 @@
+explorer_name: mnist_raw_dinov2_all_views
+
+input:
+  type: mnist
+  dataset_root: data/mnist
+  split: test
+  order: source
+  thumbnail_mode: atlas
+  max_samples: 2000
+  sample_seed: 42
+  download: false
+
+features:
+  mode: raw
+  name: precomputed
+
+projection:
+  variants:
+    - name: Raw Pixels - UMAP 2D
+      key: raw_umap_2d
+      method: umap
+      n_components: 2
+    - name: Raw Pixels - PCA 2D
+      key: raw_pca_2d
+      method: pca
+      n_components: 2
+    - name: Raw Pixels - UMAP 3D
+      key: raw_umap_3d
+      method: umap
+      n_components: 3
+    - name: DINOv2 - UMAP 2D
+      key: dinov2_umap_2d
+      method: umap
+      n_components: 2
+      metric: cosine
+    - name: DINOv2 - UMAP 3D
+      key: dinov2_umap_3d
+      method: umap
+      n_components: 3
+      metric: cosine
+
+diagnostics:
+  enabled: false
+
+output:
+  root_dir: outputs/dataset_explorer
+  save_features: false
+  save_projection: false
+  save_diagnostics: false
+  save_explorer_data: true
+
+explorer:
+  enabled: true
+  app_type: streamlit
+  renderer: three3d
+  height: 760
+  sidebar_width: 300
+  point_size: 18
+  hover_size: 56
+  atlas_tile_size: 28
+  atlas_size: 2048
+  selector_label: Projection
+  preview_mode: original
+  show_metrics: true
+  show_workspace: false
+  compute_projection_diagnostics: true
+  projection_diagnostics_k: 15
+
+combine:
+  base_data: outputs/dataset_explorer/mnist_dinov2_umap_2d/explorer/explorer_data.parquet
+  align_on: [split, source_index]
+  sources:
+    - data_path: outputs/dataset_explorer/mnist_umap/explorer/explorer_data.parquet
+      projections:
+        umap: raw_umap_2d
+        pca: raw_pca_2d
+    - data_path: outputs/dataset_explorer/mnist_umap_3d_example/explorer/explorer_data.parquet
+      projections:
+        umap_3d: raw_umap_3d
+    - data_path: outputs/dataset_explorer/mnist_dinov2_umap_3d/explorer/explorer_data.parquet
+      projections:
+        dinov2_umap_3d: dinov2_umap_3d

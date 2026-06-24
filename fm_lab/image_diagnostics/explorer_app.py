@@ -31,7 +31,7 @@ def run_explorer(data_path: str | Path) -> None:
 
     path = Path(data_path).expanduser().resolve()
     st.set_page_config(
-        page_title="Dataset UMAP Explorer",
+        page_title="Dataset Projection Explorer",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
