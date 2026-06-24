@@ -264,17 +264,7 @@ def _point_payload(
         name: _normalized_coordinates(frame, x_column, y_column)
         for name, (x_column, y_column) in projections.items()
     }
-    diagnostic_columns = [
-        column
-        for column in (
-            "knn_radius_k15",
-            "participation_ratio_k15",
-            "two_nn_lid",
-            "outlier_score",
-            "distance_to_label_centroid",
-        )
-        if column in frame
-    ]
+    diagnostic_columns = sample_metric_columns(frame)
     points: list[dict[str, Any]] = []
     for position, row in frame.iterrows():
         details = {
@@ -301,6 +291,31 @@ def _point_payload(
             }
         )
     return points
+
+
+def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
+    """Return compact sample-level diagnostics suitable for hover display."""
+
+    prefixes = (
+        "knn_radius_k",
+        "knn_mean_distance_k",
+        "participation_ratio_k",
+        "mle_lid_k",
+        "pca_dim_",
+        "ball_scaling_dim_k",
+        "ball_scaling_r2_k",
+    )
+    exact = {
+        "two_nn_lid",
+        "two_nn_lid_local",
+        "outlier_score",
+        "distance_to_label_centroid",
+    }
+    return [
+        str(column)
+        for column in frame.columns
+        if str(column) in exact or str(column).startswith(prefixes)
+    ]
 
 
 def _projection_diagnostics_payload(

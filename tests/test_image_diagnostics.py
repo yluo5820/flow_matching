@@ -737,6 +737,8 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
             "umap_y": [0.0],
             "pca_x": [1.0],
             "pca_y": [1.0],
+            "mle_lid_k15": [2.5],
+            "pca_dim_95_k15": [3.0],
         }
     )
     bundle = prepare_sprite_atlases(frame, output_dir=tmp_path / "atlases")
@@ -766,6 +768,8 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
     assert '"previewMode":"original"' in html
     assert "projectionDiagnostics" in html
     assert "previewTileContext.getImageData" in html
+    assert '"mle_lid_k15":2.5' in html
+    assert '"pca_dim_95_k15":3.0' in html
 
 
 def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
@@ -785,6 +789,7 @@ def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
             "umap_3d_x": [1.0],
             "umap_3d_y": [2.0],
             "umap_3d_z": [3.0],
+            "mle_lid_k15": [2.5],
         }
     )
     bundle = prepare_sprite_atlases(frame, output_dir=tmp_path / "atlases")
@@ -825,6 +830,7 @@ def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
     assert "Map Z" in html
     assert '"projectionDimensions":{"UMAP 2D":2,"UMAP 3D":3}' in html
     assert '"coordinates":{"UMAP 2D":[0.0,0.0,0.0],"UMAP 3D":[0.0,0.0,0.0]}' in html
+    assert '"details":{"mle_lid_k15":2.5}' in html
     assert "texture2D(textureAtlas" in html
 
 

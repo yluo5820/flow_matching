@@ -18,6 +18,7 @@ from PIL import Image
 from fm_lab.image_diagnostics.canvas_explorer import (
     AtlasBundle,
     prepare_sprite_atlases,
+    sample_metric_columns,
 )
 from fm_lab.image_diagnostics.config import ExplorerConfig
 
@@ -149,6 +150,7 @@ def _point_payload(
         name: _normalized_coordinates(frame, columns)
         for name, columns in projections.items()
     }
+    diagnostic_columns = sample_metric_columns(frame)
     points: list[dict[str, Any]] = []
     for position, row in frame.iterrows():
         points.append(
@@ -163,6 +165,10 @@ def _point_payload(
                 "coordinates": {
                     name: [float(value) for value in normalized[name][position]]
                     for name in projections
+                },
+                "details": {
+                    column: _json_scalar(row.get(column))
+                    for column in diagnostic_columns
                 },
             }
         )
@@ -620,6 +626,11 @@ function showPoint(index) {{
   if (DATA.projectionDimensions[projection] === 3) appendMetric("Map Z", coordinate[2]);
   for (const [name, values] of Object.entries(DATA.projectionDiagnostics[projection] || {{}})) {{
     appendMetric(name, values[index]);
+  }}
+  if (Object.keys(point.details).length) appendMetricHeading("Sample");
+  for (const [name, value] of Object.entries(point.details)) {{
+    if (value === null) continue;
+    appendMetric(name.replaceAll("_", " "), value);
   }}
   requestRender();
 }}

@@ -288,6 +288,99 @@ projections and switches to orbit controls for 3D projections. The same
 projection selector, preview, and live diagnostics panel are used in both
 modes.
 
+## Intrinsic Dimension Estimation
+
+The regular intrinsic-dimension module estimates how many local degrees of
+freedom are visible in a selected representation. It does not use FLIPD,
+diffusion scores, UMAP coordinates, or t-SNE coordinates.
+
+Run the DINOv2 example:
+
+```bash
+python experiments/image_diagnostics/estimate_intrinsic_dimension.py \
+  --config configs/image_diagnostics/id_estimation_example.yaml
+```
+
+Inspect the plan without computing neighbors or estimators:
+
+```bash
+python experiments/image_diagnostics/estimate_intrinsic_dimension.py \
+  --config configs/image_diagnostics/id_estimation_example.yaml \
+  --dry-run
+```
+
+The raw-pixel MNIST comparison uses PCA preprocessing:
+
+```bash
+python experiments/image_diagnostics/estimate_intrinsic_dimension.py \
+  --config configs/image_diagnostics/id_estimation_mnist_raw.yaml
+```
+
+The feature loader supports aligned `.npy` matrices with optional Parquet
+metadata, raw pixels loaded from `image_path`, L2 normalization, and optional
+PCA preprocessing. Therefore CLIP, classifier, or other feature matrices can
+be analyzed without adding model-specific code.
+
+Local outputs are computed for every requested neighborhood size:
+
+- Covariance eigenvalues describe the local spectrum.
+- Participation ratio is a smooth effective-rank estimate.
+- PCA threshold dimension counts components required for 80%, 90%, 95%, or
+  99% local variance.
+- TWO-NN uses the ratio between the first two neighbor distances. Its
+  per-sample value is especially noisy.
+- kNN MLE LID estimates local distance-growth dimension and is sensitive to
+  the selected `k`.
+- Local ball scaling fits neighbor-count growth against radius and records
+  both slope and fit quality.
+
+Global and grouped outputs add full-group covariance estimates, aggregate
+TWO-NN and MLE, and correlation/ball-scaling slopes. Ball-scaling curve CSVs
+retain the radius and mass values so apparent dimension plateaus can be
+inspected instead of trusting only the fitted slope.
+
+Outputs are written under:
+
+```text
+outputs/image_diagnostics/<id_estimation_name>/
+  config_used.yaml
+  manifest.json
+  intrinsic_dimension/
+    local_id_<feature_space>.parquet
+    local_id_<feature_space>.csv
+    group_id_<feature_space>.parquet
+    group_id_<feature_space>.csv
+    id_curves/
+```
+
+When explorer merging is enabled, the original explorer table is preserved
+and `explorer_data_with_id.parquet` is created beside it. The merged columns
+include the feature-space name, representative MLE LID, participation ratio,
+PCA dimension, TWO-NN proxy, and neighborhood distances.
+
+Interpretation limits:
+
+1. ID is representation-dependent. DINOv2-space ID and pixel-space ID answer
+   different questions.
+2. Estimates depend on scale, neighborhood size, density, noise, and sample
+   count. Compare several estimators and several `k` values.
+3. UMAP or t-SNE separation is not an intrinsic-dimension estimate.
+4. Local estimates and small groups are noisy. Relative patterns are usually
+   more defensible than absolute dimensions.
+5. Duplicate points create zero distances. The module records unstable
+   estimates as `NaN` and continues.
+6. PCA preprocessing can stabilize noisy features but imposes an upper bound
+   on every subsequent estimate.
+7. Optional `scikit-dimension` estimators run only when the package is
+   installed; core outputs do not depend on it.
+
+For MNIST, raw pixels can produce cleaner class geometry than DINOv2. Digit
+identity is strongly tied to stroke-level pixel structure, while DINOv2 was
+trained for natural-image invariances and may suppress that variation. This
+does not make pixels universally better: DINOv2, CLIP, or classifier features
+are often more meaningful for natural images. No representation should be
+treated as the unique true manifold.
+
 ## NumPy And Toy Data
 
 Any two-dimensional NumPy array with shape `(samples, features)` can be used:
