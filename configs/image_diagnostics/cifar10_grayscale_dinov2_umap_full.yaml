@@ -24,7 +24,7 @@ features:
 projection:
   skip_existing: true
   variants:
-    - name: Grayscale DINOv2 UMAP 2D
+    - name: Grayscale DINOv2 UMAP 2D (k=15)
       key: grayscale_dinov2_umap_2d
       method: umap
       n_components: 2
@@ -32,11 +32,27 @@ projection:
       min_dist: 0.1
       metric: cosine
       random_state: 42
-    - name: Grayscale DINOv2 UMAP 3D
+    - name: Grayscale DINOv2 UMAP 2D (k=100)
+      key: grayscale_dinov2_umap_k100_2d
+      method: umap
+      n_components: 2
+      n_neighbors: 100
+      min_dist: 0.1
+      metric: cosine
+      random_state: 42
+    - name: Grayscale DINOv2 UMAP 3D (k=15)
       key: grayscale_dinov2_umap_3d
       method: umap
       n_components: 3
       n_neighbors: 15
+      min_dist: 0.1
+      metric: cosine
+      random_state: 42
+    - name: Grayscale DINOv2 UMAP 3D (k=100)
+      key: grayscale_dinov2_umap_k100_3d
+      method: umap
+      n_components: 3
+      n_neighbors: 100
       min_dist: 0.1
       metric: cosine
       random_state: 42

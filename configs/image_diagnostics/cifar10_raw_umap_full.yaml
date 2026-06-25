@@ -20,11 +20,19 @@ features:
 projection:
   skip_existing: true
   variants:
-    - name: UMAP 2D
+    - name: UMAP 2D (k=15)
       key: umap_2d
       method: umap
       n_components: 2
       n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: UMAP 2D (k=100)
+      key: umap_k100_2d
+      method: umap
+      n_components: 2
+      n_neighbors: 100
       min_dist: 0.1
       metric: euclidean
       random_state: 42
@@ -33,11 +41,19 @@ projection:
       method: pca
       n_components: 2
       random_state: 42
-    - name: UMAP 3D
+    - name: UMAP 3D (k=15)
       key: umap_3d
       method: umap
       n_components: 3
       n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: UMAP 3D (k=100)
+      key: umap_k100_3d
+      method: umap
+      n_components: 3
+      n_neighbors: 100
       min_dist: 0.1
       metric: euclidean
       random_state: 42

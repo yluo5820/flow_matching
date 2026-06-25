@@ -20,11 +20,19 @@ features:
 projection:
   skip_existing: true
   variants:
-    - name: Grayscale UMAP 2D
+    - name: Grayscale UMAP 2D (k=15)
       key: grayscale_umap_2d
       method: umap
       n_components: 2
       n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale UMAP 2D (k=100)
+      key: grayscale_umap_k100_2d
+      method: umap
+      n_components: 2
+      n_neighbors: 100
       min_dist: 0.1
       metric: euclidean
       random_state: 42
@@ -33,11 +41,19 @@ projection:
       method: pca
       n_components: 2
       random_state: 42
-    - name: Grayscale UMAP 3D
+    - name: Grayscale UMAP 3D (k=15)
       key: grayscale_umap_3d
       method: umap
       n_components: 3
       n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale UMAP 3D (k=100)
+      key: grayscale_umap_k100_3d
+      method: umap
+      n_components: 3
+      n_neighbors: 100
       min_dist: 0.1
       metric: euclidean
       random_state: 42

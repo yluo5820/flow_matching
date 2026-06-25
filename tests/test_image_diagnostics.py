@@ -28,6 +28,7 @@ from fm_lab.image_diagnostics.config import (
     ProjectionConfig,
     apply_diagnostics_overrides,
     diagnostics_config_from_dict,
+    load_diagnostics_config,
 )
 from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
@@ -81,6 +82,36 @@ def test_config_defaults_to_raw_features_without_model_download() -> None:
 
 def test_input_config_does_not_sample_by_default() -> None:
     assert InputConfig().max_samples is None
+
+
+def test_full_dataset_configs_compare_umap_k15_and_k100() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config_names = (
+        "mnist_raw_umap_full.yaml",
+        "mnist_dinov2_umap_full.yaml",
+        "fashion_mnist_raw_umap_full.yaml",
+        "fashion_mnist_dinov2_umap_full.yaml",
+        "cifar10_raw_umap_full.yaml",
+        "cifar10_dinov2_umap_full.yaml",
+        "cifar10_grayscale_raw_umap_full.yaml",
+        "cifar10_grayscale_dinov2_umap_full.yaml",
+    )
+    expected = {(2, 15), (2, 100), (3, 15), (3, 100)}
+
+    for config_name in config_names:
+        config = load_diagnostics_config(
+            root / "configs" / "image_diagnostics" / config_name
+        )
+        umap_variants = [
+            variant
+            for variant in config.projection.variants
+            if variant.method == "umap"
+        ]
+        assert {
+            (variant.n_components, variant.n_neighbors)
+            for variant in umap_variants
+        } == expected
+        assert len({variant.key for variant in umap_variants}) == 4
 
 
 def test_mnist_loader_selects_vectors_labels_and_thumbnails(tmp_path: Path) -> None:

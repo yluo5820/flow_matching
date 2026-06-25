@@ -131,6 +131,12 @@ datasets. Each full config builds aligned 2D and 3D projections, projection
 diagnostics, and intrinsic-dimension estimates. The Streamlit app discovers all
 compatible precomputed views automatically.
 
+Full dataset configs include UMAP views with `n_neighbors=15` and
+`n_neighbors=100` in both 2D and 3D. The selector labels show the neighbor count
+for direct comparison. Run the normal build command without
+`--recompute-projection`: cached `k=15` projections are reused and only missing
+`k=100` projections are computed.
+
 Fashion-MNIST uses the official 60,000 training and 10,000 test images. Its four
 IDX files are downloaded to `data/fashion_mnist` and checked against the official
 MD5 hashes. Raw-pixel builds do not require an embedding model. DINOv2 builds use
