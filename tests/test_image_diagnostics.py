@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import struct
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +16,7 @@ import fm_lab.image_diagnostics.dataset_loader as dataset_loader
 from fm_lab.image_diagnostics.canvas_explorer import (
     AtlasBundle,
     _compact_atlas_bundle,
+    _compact_atlas_path,
     atlas_data_url,
     build_canvas_html,
     prepare_sprite_atlases,
@@ -303,6 +307,37 @@ def test_large_prepacked_atlases_are_compacted_to_webp(tmp_path: Path) -> None:
     assert atlas_data_url(compact.atlas_paths[0]).startswith(
         "data:image/webp;base64,"
     )
+
+
+def test_atlas_compaction_is_safe_across_concurrent_renders(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "atlas.png"
+    Image.new("RGBA", (32, 32), (120, 40, 200, 255)).save(source)
+    legacy_temporary = tmp_path / ".atlas_q90.webp.tmp"
+    legacy_temporary.write_bytes(b"incomplete")
+    encoded = io.BytesIO()
+    Image.new("RGBA", (32, 32), (120, 40, 200, 255)).save(
+        encoded,
+        format="WEBP",
+    )
+    webp_bytes = encoded.getvalue()
+    barrier = threading.Barrier(2)
+
+    def synchronized_save(self, path, **kwargs):
+        del self, kwargs
+        Path(path).write_bytes(webp_bytes)
+        barrier.wait(timeout=5)
+
+    monkeypatch.setattr(Image.Image, "save", synchronized_save)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(_compact_atlas_path, [source, source]))
+
+    assert results[0] == results[1]
+    assert results[0].is_file()
+    assert not legacy_temporary.exists()
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_numpy_loader_supports_vectors_and_image_preview(tmp_path: Path) -> None:

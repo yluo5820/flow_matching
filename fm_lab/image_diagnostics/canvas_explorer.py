@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import math
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -461,7 +462,14 @@ def _compact_atlas_path(path: Path) -> Path:
         and compact_path.stat().st_mtime_ns >= path.stat().st_mtime_ns
     ):
         return compact_path
-    temporary = compact_path.with_name(f".{compact_path.name}.tmp")
+    compact_path.with_name(f".{compact_path.name}.tmp").unlink(missing_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{compact_path.name}.",
+        suffix=".tmp",
+        dir=compact_path.parent,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
     try:
         with Image.open(path) as image:
             image.save(
