@@ -124,6 +124,43 @@ image U-Net, and minibatch OT:
 | MNIST learned-acceleration image U-Net + OT | `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml` | Uses image U-Nets for both Eulerian velocity and learned interpolant coefficients. |
 | MNIST flat MLP | `configs/mnist/mnist_linear_baseline.yaml` | Deliberately naive flattened-pixel baseline. |
 
+## Dataset Explorers
+
+The image diagnostics explorer supports full MNIST, Fashion-MNIST, and CIFAR-10
+datasets. Each full config builds aligned 2D and 3D projections, projection
+diagnostics, and intrinsic-dimension estimates. The Streamlit app discovers all
+compatible precomputed views automatically.
+
+Fashion-MNIST uses the official 60,000 training and 10,000 test images. Its four
+IDX files are downloaded to `data/fashion_mnist` and checked against the official
+MD5 hashes. Raw-pixel builds do not require an embedding model. DINOv2 builds use
+`facebook/dinov2-base`.
+
+Validate the dataset download and sample count without computing projections:
+
+```bash
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/fashion_mnist_raw_umap_full.yaml \
+  --dry-run
+```
+
+Build both Fashion-MNIST feature views:
+
+```bash
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/fashion_mnist_raw_umap_full.yaml
+
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/fashion_mnist_dinov2_umap_full.yaml
+```
+
+Launch the automatic multi-dataset explorer:
+
+```bash
+.conda/fm_lab/bin/streamlit run \
+  experiments/image_diagnostics/explorer_app.py
+```
+
 ## Training Outputs
 
 ### `plots/generated_samples_nfe*.png`

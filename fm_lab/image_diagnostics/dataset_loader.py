@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
+import struct
 import tarfile
 import urllib.request
 from dataclasses import dataclass
@@ -35,6 +37,28 @@ CIFAR10_LABELS = (
     "ship",
     "truck",
 )
+FASHION_MNIST_URL_ROOT = (
+    "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
+    "master/data/fashion"
+)
+FASHION_MNIST_FILES = {
+    "train-images-idx3-ubyte.gz": "8d4fb7e6c68d591d4c3dfef9ec88bf0d",
+    "train-labels-idx1-ubyte.gz": "25c81989df183df01b3e8a0aad5dffbe",
+    "t10k-images-idx3-ubyte.gz": "bef4ecab320f06d8554ea6380940ec79",
+    "t10k-labels-idx1-ubyte.gz": "bb300cfdad3c16e7a12a480ee83cd310",
+}
+FASHION_MNIST_LABELS = (
+    "T-shirt/top",
+    "Trouser",
+    "Pullover",
+    "Dress",
+    "Coat",
+    "Sandal",
+    "Shirt",
+    "Sneaker",
+    "Bag",
+    "Ankle boot",
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +84,8 @@ def load_dataset(
     root = Path(project_root or Path.cwd()).expanduser().resolve()
     if config.type == "mnist":
         return _load_mnist(config, root, thumbnail_dir)
+    if config.type == "fashion_mnist":
+        return _load_fashion_mnist(config, root, thumbnail_dir)
     if config.type == "cifar10":
         return _load_cifar10(config, root, thumbnail_dir)
     if config.type == "numpy":
@@ -83,10 +109,11 @@ def _load_mnist(
     image_paths = [""] * len(indices)
     atlas_metadata: dict[str, object] = {}
     if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
-        atlas_metadata = _export_mnist_sprite_atlases(
+        atlas_metadata = _export_grayscale_sprite_atlases(
             vectors,
             selected_labels,
             output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="mnist_reference",
         )
     elif config.thumbnail_mode == "files":
         image_paths = _export_grayscale_thumbnails(
@@ -125,6 +152,85 @@ def _load_mnist(
         ),
         source_description=(
             f"MNIST {config.split} split at {dataset_root} ({config.order} order)"
+        ),
+        total_rows=len(images),
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+    )
+
+
+def _load_fashion_mnist(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    source_files = _ensure_fashion_mnist(
+        dataset_root,
+        split=config.split,
+        download=config.download,
+    )
+    images, labels, split_values, original_indices = _load_fashion_mnist_arrays(
+        config,
+        dataset_root,
+    )
+    indices = _sample_indices(len(images), config.max_samples, config.sample_seed)
+    vectors = (
+        np.asarray(images[indices], dtype=np.float32).reshape(len(indices), -1)
+        / 255.0
+    )
+    selected_labels = labels[indices].astype(int)
+    label_names = np.asarray(
+        [FASHION_MNIST_LABELS[value] for value in selected_labels],
+        dtype=object,
+    )
+    image_paths = [""] * len(indices)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_grayscale_sprite_atlases(
+            vectors,
+            selected_labels,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="fashion_mnist",
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_grayscale_thumbnails(
+            vectors,
+            image_shape=(28, 28),
+            value_range=(0.0, 1.0),
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix="fashion_mnist",
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(indices)),
+            "image_path": image_paths,
+            "dataset": "fashion_mnist",
+            "split": split_values[indices],
+            "label": label_names,
+            "label_id": selected_labels,
+            "family": label_names,
+            "prompt_id": [f"fashion_mnist_{value}" for value in selected_labels],
+            "prompt": [f"Fashion-MNIST {value}" for value in label_names],
+            "tags": [["fashion_mnist", str(value)] for value in label_names],
+            "source_index": indices,
+            "original_index": original_indices[indices],
+            "sample_type": "dataset",
+            "status": "success",
+            **atlas_metadata,
+        }
+    )
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{config.order}:{indices.tolist()}",
+        ),
+        source_description=(
+            f"Fashion-MNIST {config.split} split at {dataset_root} "
+            f"({config.order} order)"
         ),
         total_rows=len(images),
         image_shape=(28, 28),
@@ -200,6 +306,139 @@ def _load_cifar10(
         image_shape=(32, 32, 3),
         value_range=(0.0, 255.0),
     )
+
+
+def _ensure_fashion_mnist(
+    dataset_root: Path,
+    *,
+    split: str,
+    download: bool,
+) -> list[Path]:
+    expected = _fashion_mnist_paths(dataset_root, split)
+    invalid = [
+        path
+        for path in expected
+        if not path.is_file() or _file_md5(path) != FASHION_MNIST_FILES[path.name]
+    ]
+    if not invalid:
+        return expected
+    if not download:
+        raise ConfigError(
+            f"Fashion-MNIST does not exist or failed checksum under {dataset_root}. "
+            "Set input.download: true to fetch it."
+        )
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    for destination in invalid:
+        checksum = FASHION_MNIST_FILES[destination.name]
+        if destination.exists():
+            destination.unlink()
+        partial = Path(f"{destination}.part")
+        if partial.exists() and _file_md5(partial) == checksum:
+            partial.replace(destination)
+            continue
+        LOGGER.info("Downloading Fashion-MNIST file %s", destination.name)
+        _download_resumable(
+            f"{FASHION_MNIST_URL_ROOT}/{destination.name}",
+            partial,
+        )
+        if _file_md5(partial) != checksum:
+            partial.unlink(missing_ok=True)
+            _download_resumable(
+                f"{FASHION_MNIST_URL_ROOT}/{destination.name}",
+                partial,
+            )
+        if _file_md5(partial) != checksum:
+            partial.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Downloaded Fashion-MNIST file failed MD5 checksum: "
+                f"{destination.name}"
+            )
+        partial.replace(destination)
+    return expected
+
+
+def _fashion_mnist_paths(dataset_root: Path, split: str) -> list[Path]:
+    names = []
+    if split in {"train", "all"}:
+        names.extend(
+            (
+                "train-images-idx3-ubyte.gz",
+                "train-labels-idx1-ubyte.gz",
+            )
+        )
+    if split in {"test", "all"}:
+        names.extend(
+            (
+                "t10k-images-idx3-ubyte.gz",
+                "t10k-labels-idx1-ubyte.gz",
+            )
+        )
+    return [dataset_root / name for name in names]
+
+
+def _load_fashion_mnist_arrays(
+    config: InputConfig,
+    dataset_root: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    splits = ("train", "test") if config.split == "all" else (config.split,)
+    image_parts = []
+    label_parts = []
+    split_parts = []
+    index_parts = []
+    offset = 0
+    for split in splits:
+        prefix = "train" if split == "train" else "t10k"
+        images = _read_idx_images(
+            dataset_root / f"{prefix}-images-idx3-ubyte.gz"
+        )
+        labels = _read_idx_labels(
+            dataset_root / f"{prefix}-labels-idx1-ubyte.gz"
+        )
+        if len(images) != len(labels):
+            raise ConfigError(
+                f"Fashion-MNIST {split} image and label counts do not match."
+            )
+        order = (
+            np.argsort(labels, kind="stable")
+            if config.order == "mldata"
+            else np.arange(len(images))
+        )
+        image_parts.append(images[order])
+        label_parts.append(labels[order])
+        split_parts.append(np.asarray([split] * len(order), dtype=object))
+        index_parts.append(np.arange(offset, offset + len(order), dtype=int)[order])
+        offset += len(order)
+    return (
+        np.concatenate(image_parts),
+        np.concatenate(label_parts),
+        np.concatenate(split_parts),
+        np.concatenate(index_parts),
+    )
+
+
+def _read_idx_images(path: Path) -> np.ndarray:
+    with gzip.open(path, "rb") as handle:
+        header = handle.read(16)
+        if len(header) != 16:
+            raise ConfigError(f"Malformed IDX image header: {path}")
+        magic, count, rows, columns = struct.unpack(">IIII", header)
+        pixels = handle.read()
+    expected = count * rows * columns
+    if magic != 2051 or len(pixels) != expected:
+        raise ConfigError(f"Malformed IDX image file: {path}")
+    return np.frombuffer(pixels, dtype=np.uint8).reshape(count, rows, columns)
+
+
+def _read_idx_labels(path: Path) -> np.ndarray:
+    with gzip.open(path, "rb") as handle:
+        header = handle.read(8)
+        if len(header) != 8:
+            raise ConfigError(f"Malformed IDX label header: {path}")
+        magic, count = struct.unpack(">II", header)
+        labels = handle.read()
+    if magic != 2049 or len(labels) != count:
+        raise ConfigError(f"Malformed IDX label file: {path}")
+    return np.frombuffer(labels, dtype=np.uint8)
 
 
 def _ensure_cifar10(
@@ -350,11 +589,12 @@ def _load_mnist_arrays(
     )
 
 
-def _export_mnist_sprite_atlases(
+def _export_grayscale_sprite_atlases(
     vectors: np.ndarray,
     labels: np.ndarray,
     *,
     output_dir: str | Path,
+    prefix: str,
     tile_size: int = 28,
     atlas_size: int = 2048,
 ) -> dict[str, object]:
@@ -370,15 +610,16 @@ def _export_mnist_sprite_atlases(
     atlas_rows = positions % capacity // columns
     digest = hashlib.sha256()
     digest.update(b"grayscale-alpha-v2")
+    digest.update(prefix.encode())
     digest.update(np.asarray(labels, dtype=np.uint8).tobytes())
     digest.update(str(len(vectors)).encode())
-    prefix = f"mnist_reference_{digest.hexdigest()[:12]}"
+    stem = f"{prefix}_{digest.hexdigest()[:12]}"
     atlas_paths = [
-        directory / f"{prefix}_{index:02d}.png"
+        directory / f"{stem}_{index:02d}.png"
         for index in range(max(1, int(atlas_indices.max()) + 1 if len(vectors) else 1))
     ]
     if not all(path.exists() for path in atlas_paths):
-        for path in directory.glob("mnist_reference_*.png"):
+        for path in directory.glob(f"{prefix}_*.png"):
             if path not in atlas_paths:
                 path.unlink()
         pixels = np.asarray(np.round(vectors.reshape(-1, tile_size, tile_size) * 255.0))

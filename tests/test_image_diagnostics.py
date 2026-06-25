@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+import fm_lab.image_diagnostics.dataset_loader as dataset_loader
 from fm_lab.image_diagnostics.canvas_explorer import (
     AtlasBundle,
     _compact_atlas_bundle,
@@ -150,6 +151,55 @@ def test_mnist_loader_recreates_fetch_mldata_order(tmp_path: Path) -> None:
     assert bundle.metadata["original_index"].tolist() == [1, 3, 2, 0, 5, 4, 6]
     assert bundle.metadata["source_index"].tolist() == list(range(7))
     atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
+    with Image.open(atlas_path) as atlas:
+        assert atlas.size == (2048, 2048)
+
+
+def test_fashion_mnist_loader_uses_named_classes_and_grayscale_atlas(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset_root = tmp_path / "fashion_mnist"
+    images = np.zeros((4, 28, 28), dtype=np.uint8)
+    images[0, 4:12, 5:20] = 255
+    images[1, 6:24, 9:18] = 180
+    images[2, 12:21, 3:25] = 120
+    images[3, 3:25, 8:21] = 220
+    labels = np.asarray([0, 1, 5, 9], dtype=np.uint8)
+    _write_mnist_split(dataset_root, images, labels, split="test")
+    for path in dataset_root.glob("*.gz"):
+        monkeypatch.setitem(
+            dataset_loader.FASHION_MNIST_FILES,
+            path.name,
+            dataset_loader._file_md5(path),
+        )
+
+    bundle = load_dataset(
+        InputConfig(
+            type="fashion_mnist",
+            dataset_root=str(dataset_root),
+            split="test",
+            thumbnail_mode="atlas",
+            max_samples=None,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "assets" / "thumbnails",
+    )
+
+    assert bundle.vectors is not None
+    assert bundle.vectors.shape == (4, 784)
+    assert bundle.image_shape == (28, 28)
+    assert bundle.value_range == (0.0, 1.0)
+    assert bundle.metadata["dataset"].unique().tolist() == ["fashion_mnist"]
+    assert bundle.metadata["label"].tolist() == [
+        "T-shirt/top",
+        "Trouser",
+        "Sandal",
+        "Ankle boot",
+    ]
+    assert bundle.metadata["label_id"].tolist() == [0, 1, 5, 9]
+    atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
+    assert atlas_path.name.startswith("fashion_mnist_")
     with Image.open(atlas_path) as atlas:
         assert atlas.size == (2048, 2048)
 
@@ -1092,6 +1142,7 @@ def test_three_html_contains_mixed_dimensions_and_thumbnail_shader(
     assert 'id="class-filter"' in html
     assert "All classes" in html
     assert "syncClassFilter" in html
+    assert '"fashion_mnist"' in html
     assert "if (loadedTextures.length) buildPointClouds(loadedTextures)" in html
     assert "${visibleIndices.length.toLocaleString()} samples" in html
 

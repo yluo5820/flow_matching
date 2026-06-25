@@ -201,7 +201,7 @@ def apply_diagnostics_overrides(
     input_type = str(input_values.get("type", "image_metadata"))
     selected_path = input_path or experiment_dir
     if selected_path is not None:
-        if input_type in {"mnist", "cifar10"}:
+        if input_type in {"mnist", "fashion_mnist", "cifar10"}:
             input_values["dataset_root"] = selected_path
         elif input_type == "numpy":
             input_values["data_path"] = selected_path
@@ -227,22 +227,37 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     """Validate dataset, feature, and numerical settings."""
 
     input_config = config.input
-    if input_config.type not in {"mnist", "cifar10", "numpy", "image_metadata"}:
+    if input_config.type not in {
+        "mnist",
+        "fashion_mnist",
+        "cifar10",
+        "numpy",
+        "image_metadata",
+    }:
         raise ConfigError(f"Unsupported input.type: {input_config.type}")
     if input_config.max_samples is not None and input_config.max_samples < 1:
         raise ConfigError("input.max_samples must be positive or null.")
-    if input_config.type in {"mnist", "cifar10"}:
+    if input_config.type in {"mnist", "fashion_mnist", "cifar10"}:
         if input_config.split not in {"train", "test", "all"}:
             raise ConfigError(
                 f"{input_config.type} input.split must be train, test, or all."
             )
-    if input_config.type == "mnist":
+    if input_config.type in {"mnist", "fashion_mnist"}:
+        dataset_name = (
+            "MNIST" if input_config.type == "mnist" else "Fashion-MNIST"
+        )
         if input_config.order not in {"source", "mldata"}:
-            raise ConfigError("MNIST input.order must be source or mldata.")
+            raise ConfigError(
+                f"{dataset_name} input.order must be source or mldata."
+            )
         if input_config.order == "mldata" and input_config.split != "all":
-            raise ConfigError("MNIST input.order=mldata requires input.split=all.")
+            raise ConfigError(
+                f"{dataset_name} input.order=mldata requires input.split=all."
+            )
         if input_config.thumbnail_mode not in {"files", "atlas"}:
-            raise ConfigError("MNIST input.thumbnail_mode must be files or atlas.")
+            raise ConfigError(
+                f"{dataset_name} input.thumbnail_mode must be files or atlas."
+            )
     elif input_config.type == "cifar10":
         if input_config.order != "source":
             raise ConfigError("CIFAR-10 input.order must be source.")

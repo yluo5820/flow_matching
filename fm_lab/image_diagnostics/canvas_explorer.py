@@ -196,7 +196,7 @@ def _build_atlases(
     for position, row in frame.iterrows():
         image = _load_preview(row.get("image_path"), tile_size)
         label = str(row.get("label", ""))
-        if str(row.get("dataset", "")).lower() == "mnist":
+        if str(row.get("dataset", "")).lower() in {"mnist", "fashion_mnist"}:
             image = _tint_grayscale(image, palette.get(label, (255, 255, 255)))
         atlas_index = position // atlas_capacity
         local_position = position % atlas_capacity
@@ -894,7 +894,8 @@ function drawTile(targetContext, point, x, y, size) {{
 }}
 
 function drawPreviewTile(point, x, y, size) {{
-  if (DATA.options.previewMode !== "original" || point.dataset.toLowerCase() !== "mnist") {{
+  const grayscaleDataset = ["mnist", "fashion_mnist"].includes(point.dataset.toLowerCase());
+  if (DATA.options.previewMode !== "original" || !grayscaleDataset) {{
     drawTile(previewContext, point, x, y, size);
     return;
   }}

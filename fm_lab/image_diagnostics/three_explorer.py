@@ -704,7 +704,8 @@ function drawPreview(point) {{
     sourceX, sourceY, DATA.tileSize, DATA.tileSize,
     0, 0, DATA.tileSize, DATA.tileSize
   );
-  if (DATA.options.previewMode === "original" && point.dataset.toLowerCase() === "mnist") {{
+  const grayscaleDataset = ["mnist", "fashion_mnist"].includes(point.dataset.toLowerCase());
+  if (DATA.options.previewMode === "original" && grayscaleDataset) {{
     const image = previewTileContext.getImageData(0, 0, DATA.tileSize, DATA.tileSize);
     for (let offset = 0; offset < image.data.length; offset += 4) {{
       image.data[offset] = 255;
