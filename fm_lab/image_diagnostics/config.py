@@ -16,6 +16,7 @@ class InputConfig:
     dataset_root: str = "data/mnist"
     split: str = "test"
     order: str = "source"
+    color_mode: str = "rgb"
     thumbnail_mode: str = "files"
     max_samples: int | None = None
     sample_seed: int = 42
@@ -261,6 +262,10 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     elif input_config.type == "cifar10":
         if input_config.order != "source":
             raise ConfigError("CIFAR-10 input.order must be source.")
+        if input_config.color_mode not in {"rgb", "grayscale"}:
+            raise ConfigError(
+                "CIFAR-10 input.color_mode must be rgb or grayscale."
+            )
         if input_config.thumbnail_mode not in {"files", "atlas"}:
             raise ConfigError("CIFAR-10 input.thumbnail_mode must be files or atlas.")
     elif input_config.type == "numpy":

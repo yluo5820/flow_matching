@@ -1,0 +1,67 @@
+id_estimation_name: cifar10_grayscale_dinov2_id
+
+input:
+  diagnostics_dir: outputs/dataset_explorer/cifar10_grayscale_dinov2_umap_full
+  explorer_data_path: explorer/explorer_data.parquet
+  embedding_source: features/dinov2_base_cls_grayscale_features.npy
+  embedding_metadata: features/dinov2_base_cls_grayscale_metadata.parquet
+  feature_space_name: dinov2_base_cls_grayscale
+  source_type: npy
+
+features:
+  normalize: true
+  pca_preprocess:
+    enabled: false
+    n_components: 50
+    whiten: false
+    random_state: 42
+    save_features: true
+
+groups:
+  enabled: true
+  groupby_columns:
+    - label
+    - manual_label
+
+local_id:
+  enabled: true
+  k_values: [5, 10, 15, 30, 50]
+  covariance_eigenvalues: 10
+  estimators:
+    covariance_spectrum: true
+    participation_ratio: true
+    pca_threshold: true
+    mle_lid: true
+    two_nn: true
+    ball_scaling: true
+
+global_id:
+  enabled: true
+  estimators:
+    two_nn: true
+    mle_lid: true
+    participation_ratio: true
+    pca_threshold: true
+    correlation_dimension: true
+    ball_scaling: true
+  min_group_size: 20
+  mle_k_values: [10, 20]
+  scaling_quantiles: [0.05, 0.10, 0.20, 0.35, 0.50]
+  scaling_max_points: 2000
+  skdim_estimators: []
+
+pca_thresholds:
+  explained_variance: [0.80, 0.90, 0.95, 0.99]
+
+distance:
+  metric: cosine
+
+output:
+  root_dir: outputs/image_diagnostics
+  save_local_id: true
+  save_group_id: true
+  save_csv: true
+  merge_into_explorer_data: true
+  merged_explorer_name: explorer_data_with_id.parquet
+  overwrite_explorer_data: false
+  skip_existing: true

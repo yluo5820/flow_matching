@@ -5,6 +5,7 @@ input:
   dataset_root: data/cifar10
   split: all
   order: source
+  color_mode: rgb
   thumbnail_mode: atlas
   max_samples: null
   sample_seed: 42

@@ -136,6 +136,13 @@ IDX files are downloaded to `data/fashion_mnist` and checked against the officia
 MD5 hashes. Raw-pixel builds do not require an embedding model. DINOv2 builds use
 `facebook/dinov2-base`.
 
+CIFAR-10 also supports `input.color_mode: grayscale`. This converts RGB images
+to luminance before raw features or DINOv2 extraction. Grayscale raw features
+have 1,024 dimensions; DINOv2 receives the luminance image replicated across
+three channels. Grayscale outputs use the separate dataset name
+`cifar10_grayscale`, so automatic discovery does not merge their atlases with
+the RGB dataset.
+
 Validate the dataset download and sample count without computing projections:
 
 ```bash
@@ -152,6 +159,16 @@ Build both Fashion-MNIST feature views:
 
 .conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
   --config configs/image_diagnostics/fashion_mnist_dinov2_umap_full.yaml
+```
+
+Build the full grayscale CIFAR-10 views:
+
+```bash
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/cifar10_grayscale_raw_umap_full.yaml
+
+.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
+  --config configs/image_diagnostics/cifar10_grayscale_dinov2_umap_full.yaml
 ```
 
 Launch the automatic multi-dataset explorer:

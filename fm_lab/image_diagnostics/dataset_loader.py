@@ -259,34 +259,60 @@ def _load_cifar10(
         [CIFAR10_LABELS[value] for value in selected_labels],
         dtype=object,
     )
-    vectors = selected_images.reshape(len(selected_images), -1)
+    grayscale = config.color_mode == "grayscale"
+    dataset_name = "cifar10_grayscale" if grayscale else "cifar10"
+    display_name = "CIFAR-10 grayscale" if grayscale else "CIFAR-10"
+    if grayscale:
+        feature_images = _rgb_to_grayscale(selected_images)
+        atlas_images = np.repeat(feature_images[..., None], 3, axis=-1)
+        vectors = feature_images.reshape(len(feature_images), -1)
+        image_shape = (32, 32)
+    else:
+        feature_images = selected_images
+        atlas_images = selected_images
+        vectors = selected_images.reshape(len(selected_images), -1)
+        image_shape = (32, 32, 3)
     image_paths = [""] * len(indices)
     atlas_metadata: dict[str, object] = {}
     if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
         atlas_metadata = _export_rgb_sprite_atlases(
-            selected_images,
+            atlas_images,
             output_dir=Path(thumbnail_dir).parent / "atlases",
-            prefix="cifar10",
+            prefix=dataset_name,
         )
     elif config.thumbnail_mode == "files":
-        image_paths = _export_rgb_thumbnails(
-            selected_images,
-            source_indices=indices,
-            output_dir=thumbnail_dir,
-            prefix="cifar10",
-        )
+        if grayscale:
+            image_paths = _export_grayscale_thumbnails(
+                vectors,
+                image_shape=(32, 32),
+                value_range=(0.0, 255.0),
+                source_indices=indices,
+                output_dir=thumbnail_dir,
+                prefix=dataset_name,
+            )
+        else:
+            image_paths = _export_rgb_thumbnails(
+                feature_images,
+                source_indices=indices,
+                output_dir=thumbnail_dir,
+                prefix=dataset_name,
+            )
     metadata = pd.DataFrame(
         {
             "row_id": np.arange(len(indices)),
             "image_path": image_paths,
-            "dataset": "cifar10",
+            "dataset": dataset_name,
             "split": split_values[indices],
             "label": label_names,
             "label_id": selected_labels,
+            "color_mode": config.color_mode,
             "family": label_names,
-            "prompt_id": [f"cifar10_{value}" for value in label_names],
-            "prompt": [f"CIFAR-10 {value}" for value in label_names],
-            "tags": [["cifar10", str(value)] for value in label_names],
+            "prompt_id": [f"{dataset_name}_{value}" for value in label_names],
+            "prompt": [f"{display_name} {value}" for value in label_names],
+            "tags": [
+                [dataset_name, str(value), config.color_mode]
+                for value in label_names
+            ],
             "source_index": indices,
             "original_index": original_indices[indices],
             "sample_type": "dataset",
@@ -299,13 +325,25 @@ def _load_cifar10(
         vectors=vectors,
         source_id=_files_source_id(
             source_files,
-            extra=f"{config.split}:{indices.tolist()}",
+            extra=f"{config.split}:{config.color_mode}:{indices.tolist()}",
         ),
-        source_description=f"CIFAR-10 {config.split} split at {dataset_root}",
+        source_description=(
+            f"{display_name} {config.split} split at {dataset_root}"
+        ),
         total_rows=len(images),
-        image_shape=(32, 32, 3),
+        image_shape=image_shape,
         value_range=(0.0, 255.0),
     )
+
+
+def _rgb_to_grayscale(images: np.ndarray) -> np.ndarray:
+    weights = np.asarray([0.299, 0.587, 0.114], dtype=np.float32)
+    luminance = np.tensordot(
+        np.asarray(images, dtype=np.float32),
+        weights,
+        axes=([-1], [0]),
+    )
+    return np.asarray(np.round(luminance), dtype=np.uint8)
 
 
 def _ensure_fashion_mnist(

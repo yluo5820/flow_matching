@@ -1,11 +1,11 @@
-explorer_name: cifar10_dinov2_umap_full
+explorer_name: cifar10_grayscale_dinov2_umap_full
 
 input:
   type: cifar10
   dataset_root: data/cifar10
   split: all
   order: source
-  color_mode: rgb
+  color_mode: grayscale
   thumbnail_mode: atlas
   max_samples: null
   sample_seed: 42
@@ -13,7 +13,7 @@ input:
 
 features:
   mode: dinov2
-  name: dinov2_base_cls
+  name: dinov2_base_cls_grayscale
   repo_id: facebook/dinov2-base
   normalize: true
   batch_size: 16
@@ -24,16 +24,16 @@ features:
 projection:
   skip_existing: true
   variants:
-    - name: DINOv2 UMAP 2D
-      key: dinov2_umap_2d
+    - name: Grayscale DINOv2 UMAP 2D
+      key: grayscale_dinov2_umap_2d
       method: umap
       n_components: 2
       n_neighbors: 15
       min_dist: 0.1
       metric: cosine
       random_state: 42
-    - name: DINOv2 UMAP 3D
-      key: dinov2_umap_3d
+    - name: Grayscale DINOv2 UMAP 3D
+      key: grayscale_dinov2_umap_3d
       method: umap
       n_components: 3
       n_neighbors: 15
@@ -73,4 +73,4 @@ explorer:
 
 id_estimation:
   enabled: true
-  config_path: configs/image_diagnostics/id_estimation_cifar10_dinov2.yaml
+  config_path: configs/image_diagnostics/id_estimation_cifar10_grayscale_dinov2.yaml

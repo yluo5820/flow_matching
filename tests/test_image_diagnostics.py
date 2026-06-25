@@ -243,6 +243,44 @@ def test_cifar10_loader_preserves_rgb_images_and_class_names(tmp_path: Path) -> 
         assert atlas.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
 
 
+def test_cifar10_loader_supports_grayscale_vectors_and_atlas(
+    tmp_path: Path,
+) -> None:
+    cifar_root = tmp_path / "cifar10"
+    data_dir = cifar_root / "cifar-10-batches-bin"
+    data_dir.mkdir(parents=True)
+    images = np.zeros((4, 32, 32, 3), dtype=np.uint8)
+    images[0] = np.asarray([255, 0, 0], dtype=np.uint8)
+    images[1] = np.asarray([0, 128, 0], dtype=np.uint8)
+    images[2] = np.asarray([0, 0, 64], dtype=np.uint8)
+    images[3] = np.asarray([12, 34, 56], dtype=np.uint8)
+    labels = np.asarray([0, 3, 8, 9], dtype=np.uint8)
+    _write_cifar10_batch(data_dir / "test_batch.bin", images, labels)
+
+    bundle = load_dataset(
+        InputConfig(
+            type="cifar10",
+            dataset_root=str(cifar_root),
+            split="test",
+            color_mode="grayscale",
+            thumbnail_mode="atlas",
+            max_samples=None,
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "assets" / "thumbnails",
+    )
+
+    assert bundle.vectors is not None
+    assert bundle.vectors.shape == (4, 32 * 32)
+    assert bundle.image_shape == (32, 32)
+    assert bundle.metadata["dataset"].unique().tolist() == ["cifar10_grayscale"]
+    assert bundle.metadata["color_mode"].unique().tolist() == ["grayscale"]
+    assert bundle.vectors[:, 0].tolist() == [76, 75, 7, 30]
+    atlas_path = Path(bundle.metadata["sprite_atlas_path"].iloc[0])
+    with Image.open(atlas_path) as atlas:
+        assert atlas.convert("RGB").getpixel((0, 0)) == (76, 76, 76)
+
+
 def test_large_prepacked_atlases_are_compacted_to_webp(tmp_path: Path) -> None:
     source = tmp_path / "atlas.png"
     pixels = np.zeros((64, 64, 4), dtype=np.uint8)
@@ -452,6 +490,56 @@ def test_dinov2_feature_runner_preserves_cifar_rgb_vectors(tmp_path: Path) -> No
     )
 
     assert result.features.tolist() == [[255.0, 0.0, 0.0], [0.0, 128.0, 255.0]]
+
+
+def test_dinov2_feature_runner_replicates_grayscale_cifar_channels(
+    tmp_path: Path,
+) -> None:
+    vectors = np.asarray(
+        [
+            np.full(32 * 32, 76, dtype=np.uint8),
+            np.full(32 * 32, 150, dtype=np.uint8),
+        ]
+    )
+    bundle = DatasetBundle(
+        metadata=pd.DataFrame(
+            {
+                "row_id": [0, 1],
+                "image_path": ["", ""],
+                "label": ["airplane", "ship"],
+            }
+        ),
+        vectors=vectors,
+        source_id="cifar10-grayscale-source",
+        source_description="CIFAR-10 grayscale vectors",
+        total_rows=2,
+        image_shape=(32, 32),
+        value_range=(0.0, 255.0),
+    )
+
+    class FakeExtractor:
+        def extract(self, batch):
+            pixels = [np.asarray(image)[0, 0].tolist() for image in batch]
+            assert pixels == [[76, 76, 76], [150, 150, 150]]
+            return np.asarray(pixels, dtype=np.float32)
+
+    result = compute_or_load_features(
+        config=FeatureConfig(
+            mode="dinov2",
+            name="dinov2_grayscale_test",
+            batch_size=2,
+            normalize=False,
+        ),
+        dataset=bundle,
+        output_dir=tmp_path / "explorer",
+        save=False,
+        model_loader=lambda _: FakeExtractor(),
+    )
+
+    assert result.features.tolist() == [
+        [76.0, 76.0, 76.0],
+        [150.0, 150.0, 150.0],
+    ]
 
 
 def test_feature_cache_reattaches_current_dataset_metadata(tmp_path: Path) -> None:
