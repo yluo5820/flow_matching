@@ -51,6 +51,7 @@ class ProjectionVariantConfig:
     key: str
     method: str = "umap"
     n_components: int = 2
+    pca_components: int | None = None
     n_neighbors: int = 15
     min_dist: float = 0.1
     metric: str = "euclidean"
@@ -312,6 +313,10 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
         if variant.n_components not in {2, 3}:
             raise ConfigError(
                 f"Projection {variant.name!r} n_components must be 2 or 3."
+            )
+        if variant.pca_components is not None and variant.pca_components < 1:
+            raise ConfigError(
+                f"Projection {variant.name!r} pca_components must be positive."
             )
         if variant.key in projection_keys:
             raise ConfigError(f"Duplicate projection variant key: {variant.key}")

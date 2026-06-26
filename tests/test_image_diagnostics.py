@@ -4,9 +4,11 @@ import gzip
 import io
 import json
 import struct
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -26,6 +28,7 @@ from fm_lab.image_diagnostics.config import (
     InputConfig,
     LocalDiagnosticsConfig,
     ProjectionConfig,
+    ProjectionVariantConfig,
     apply_diagnostics_overrides,
     diagnostics_config_from_dict,
     load_diagnostics_config,
@@ -84,7 +87,7 @@ def test_input_config_does_not_sample_by_default() -> None:
     assert InputConfig().max_samples is None
 
 
-def test_full_dataset_configs_compare_umap_k15_and_k100() -> None:
+def test_full_dataset_configs_are_3d_and_compare_umap_variants() -> None:
     root = Path(__file__).resolve().parents[1]
     config_names = (
         "mnist_raw_umap_full.yaml",
@@ -96,22 +99,34 @@ def test_full_dataset_configs_compare_umap_k15_and_k100() -> None:
         "cifar10_grayscale_raw_umap_full.yaml",
         "cifar10_grayscale_dinov2_umap_full.yaml",
     )
-    expected = {(2, 15), (2, 100), (3, 15), (3, 100)}
 
     for config_name in config_names:
         config = load_diagnostics_config(
             root / "configs" / "image_diagnostics" / config_name
         )
-        umap_variants = [
-            variant
-            for variant in config.projection.variants
-            if variant.method == "umap"
-        ]
+        variants = config.projection.variants
+        assert all(variant.n_components == 3 for variant in variants)
+        assert all(variant.method == "umap" for variant in variants)
         assert {
-            (variant.n_components, variant.n_neighbors)
-            for variant in umap_variants
-        } == expected
-        assert len({variant.key for variant in umap_variants}) == 4
+            variant.n_neighbors
+            for variant in variants
+            if variant.pca_components is None
+        } == {15, 100}
+
+        pca_variants = [
+            variant for variant in variants if variant.pca_components is not None
+        ]
+        if config_name.startswith("cifar10"):
+            assert {variant.pca_components for variant in pca_variants} == {
+                10,
+                15,
+                20,
+                25,
+            }
+            assert all(variant.n_neighbors == 15 for variant in pca_variants)
+            assert all(variant.metric == "euclidean" for variant in pca_variants)
+        else:
+            assert pca_variants == []
 
 
 def test_mnist_loader_selects_vectors_labels_and_thumbnails(tmp_path: Path) -> None:
@@ -723,6 +738,60 @@ def test_projection_runner_persists_three_components(tmp_path: Path) -> None:
     )
 
     assert {"pca_3d_x", "pca_3d_y", "pca_3d_z"} <= set(result.columns)
+
+
+def test_umap_variant_can_preprocess_input_with_pca(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    features = np.arange(60, dtype=np.float32).reshape(10, 6)
+    observed: dict[str, object] = {}
+
+    class FakeUMAP:
+        def __init__(self, **kwargs) -> None:
+            observed["kwargs"] = kwargs
+
+        def fit_transform(self, data: np.ndarray) -> np.ndarray:
+            observed["input_shape"] = data.shape
+            return np.column_stack(
+                [np.arange(len(data)), data[:, 0], data[:, 1]]
+            ).astype(np.float32)
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    config = ProjectionConfig(
+        variants=(
+            ProjectionVariantConfig(
+                name="PCA-2 UMAP 3D",
+                key="umap_pca2_3d",
+                method="umap",
+                n_components=3,
+                pca_components=2,
+                n_neighbors=4,
+                metric="euclidean",
+            ),
+        )
+    )
+
+    result = compute_or_load_projections(
+        features,
+        pd.Series(range(10)),
+        config,
+        tmp_path,
+        feature_name="raw",
+        save=False,
+    )
+
+    assert observed["input_shape"] == (10, 2)
+    assert observed["kwargs"] == {
+        "n_components": 3,
+        "n_neighbors": 4,
+        "min_dist": 0.1,
+        "metric": "euclidean",
+        "random_state": 42,
+    }
+    assert {"umap_pca2_3d_x", "umap_pca2_3d_y", "umap_pca2_3d_z"} <= set(
+        result.columns
+    )
 
 
 def test_three_renderer_accepts_mixed_projection_dimensions() -> None:

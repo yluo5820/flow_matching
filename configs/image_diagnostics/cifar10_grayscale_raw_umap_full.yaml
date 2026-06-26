@@ -20,27 +20,6 @@ features:
 projection:
   skip_existing: true
   variants:
-    - name: Grayscale UMAP 2D (k=15)
-      key: grayscale_umap_2d
-      method: umap
-      n_components: 2
-      n_neighbors: 15
-      min_dist: 0.1
-      metric: euclidean
-      random_state: 42
-    - name: Grayscale UMAP 2D (k=100)
-      key: grayscale_umap_k100_2d
-      method: umap
-      n_components: 2
-      n_neighbors: 100
-      min_dist: 0.1
-      metric: euclidean
-      random_state: 42
-    - name: Grayscale PCA 2D
-      key: grayscale_pca_2d
-      method: pca
-      n_components: 2
-      random_state: 42
     - name: Grayscale UMAP 3D (k=15)
       key: grayscale_umap_3d
       method: umap
@@ -54,6 +33,42 @@ projection:
       method: umap
       n_components: 3
       n_neighbors: 100
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale PCA-10 UMAP 3D (nn=15)
+      key: grayscale_umap_pca10_3d
+      method: umap
+      n_components: 3
+      pca_components: 10
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale PCA-15 UMAP 3D (nn=15)
+      key: grayscale_umap_pca15_3d
+      method: umap
+      n_components: 3
+      pca_components: 15
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale PCA-20 UMAP 3D (nn=15)
+      key: grayscale_umap_pca20_3d
+      method: umap
+      n_components: 3
+      pca_components: 20
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: Grayscale PCA-25 UMAP 3D (nn=15)
+      key: grayscale_umap_pca25_3d
+      method: umap
+      n_components: 3
+      pca_components: 25
+      n_neighbors: 15
       min_dist: 0.1
       metric: euclidean
       random_state: 42

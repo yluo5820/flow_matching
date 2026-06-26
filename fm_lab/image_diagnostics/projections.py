@@ -126,10 +126,11 @@ def _compute_projection_variant(
         return np.empty((0, variant.n_components), dtype=np.float32)
     if selected == "pca":
         return _pca(embeddings, variant.random_state, variant.n_components)
+    projection_input = _projection_input(embeddings, variant)
     if selected == "umap":
         if len(embeddings) < 3:
             LOGGER.warning("Fewer than three samples; using PCA coordinates for UMAP output.")
-            return _pca(embeddings, variant.random_state, variant.n_components)
+            return _pca(projection_input, variant.random_state, variant.n_components)
         try:
             import umap
         except ImportError as exc:
@@ -143,11 +144,11 @@ def _compute_projection_variant(
             metric=variant.metric,
             random_state=variant.random_state,
         )
-        return np.asarray(reducer.fit_transform(embeddings), dtype=np.float32)
+        return np.asarray(reducer.fit_transform(projection_input), dtype=np.float32)
     if selected == "tsne":
         if len(embeddings) < 3:
             LOGGER.warning("Fewer than three samples; using PCA coordinates for t-SNE output.")
-            return _pca(embeddings, variant.random_state, variant.n_components)
+            return _pca(projection_input, variant.random_state, variant.n_components)
         from sklearn.manifold import TSNE
 
         perplexity = min(
@@ -161,7 +162,7 @@ def _compute_projection_variant(
             init=variant.init,
             learning_rate=variant.learning_rate,
             random_state=variant.random_state,
-        ).fit_transform(embeddings)
+        ).fit_transform(projection_input)
     raise ValueError(f"Unsupported projection method: {selected}")
 
 
@@ -230,6 +231,21 @@ def _pca(
             [coordinates, np.zeros((len(coordinates), n_components - components))]
         )
     return np.asarray(coordinates, dtype=np.float32)
+
+
+def _projection_input(
+    embeddings: np.ndarray,
+    variant: ProjectionVariantConfig,
+) -> np.ndarray:
+    if variant.pca_components is None:
+        return embeddings
+    components = min(variant.pca_components, len(embeddings), embeddings.shape[1])
+    LOGGER.info(
+        "Preprocessing %s projection input with PCA to %d dimensions.",
+        variant.name,
+        components,
+    )
+    return _pca(embeddings, variant.random_state, variant.pca_components)
 
 
 def _validate_projection(
