@@ -17,6 +17,12 @@ from fm_lab.image_diagnostics.canvas_explorer import (
     prepare_array_sprite_atlases,
 )
 from fm_lab.image_diagnostics.config import ExplorerConfig
+from fm_lab.image_diagnostics.explorer_viewer import (
+    ExplorerDocument,
+    build_explorer_document,
+    class_filter_html,
+    shared_explorer_script,
+)
 from fm_lab.image_diagnostics.palette import LABEL_PALETTE
 
 
@@ -302,105 +308,60 @@ def _trajectory_explorer_template(
     height: int,
     config: ExplorerConfig,
 ) -> str:
-    template = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trajectory UMAP Explorer</title>
-<style>
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f2f2f2; }
-  #app { display: grid; grid-template-columns: __SIDEBAR_WIDTH__px 1fr; height: __HEIGHT__px; background: #111; }
-  #sidebar { background: #222; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .control { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 10px; }
-  label, .muted { color: #c8c8c8; font-size: 14px; }
-  button { border: 1px solid #444; background: #1b1b1b; color: #ddd; cursor: pointer; }
-  button:hover { background: #292929; }
-  #play { height: 32px; border-radius: 2px; font-size: 13px; }
-  input[type="range"] { width: 100%; accent-color: #d8d8d8; }
-  .time-grid { display: grid; grid-template-columns: 58px 1fr; gap: 8px; align-items: center; }
-  #time-readout { color: #aaa; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
-  .class-menu { position: relative; min-width: 0; }
-  .class-menu summary { height: 32px; display: flex; align-items: center; padding: 0 8px; background: #f3f3f3; color: #111; border-radius: 2px; cursor: pointer; list-style: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .class-menu summary::-webkit-details-marker { display: none; }
-  .class-menu summary::after { content: "v"; margin-left: auto; padding-left: 8px; color: #555; }
-  .class-options { position: absolute; z-index: 20; top: 36px; left: 0; right: 0; max-height: 250px; overflow-y: auto; padding: 6px; background: #f3f3f3; color: #111; border: 1px solid #bbb; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
-  .class-option { min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 2px 4px; color: #111; font-size: 12px; cursor: pointer; }
-  .class-option:hover { background: #ddd; }
-  .class-option input { margin: 0; }
-  .class-count { margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }
-  #preview-wrap { width: 100%; aspect-ratio: 1; background: #191919; display: grid; place-items: center; }
-  #preview { width: 100%; height: 100%; image-rendering: pixelated; }
-  #sample-info { min-height: 118px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-content: start; font-size: 12px; }
-  #sample-label { grid-column: 1 / -1; font-size: 24px; font-weight: 650; }
-  #sample-index { grid-column: 1 / -1; color: #a9a9a9; font-variant-numeric: tabular-nums; }
-  .metric-key { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }
-  .metric-value { color: #eee; font-variant-numeric: tabular-nums; text-align: right; }
-  #legend { display: flex; flex-wrap: wrap; gap: 6px 10px; }
-  .legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #cfcfcf; }
-  .swatch { width: 9px; height: 9px; }
-  #sidebar-footer { margin-top: auto; color: #aaa; font-size: 12px; line-height: 1.45; }
-  #main { position: relative; min-width: 0; overflow: hidden; background: #111; }
-  #plot { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
-  #plot.dragging { cursor: grabbing; }
-  #status { position: absolute; right: 14px; bottom: 12px; color: #777; font-size: 12px; pointer-events: none; }
-  #view-controls { position: absolute; right: 14px; top: 12px; display: grid; gap: 5px; }
-  #view-controls button { width: 34px; height: 34px; font-size: 20px; }
-  @media (max-width: 760px) {
-    #app { grid-template-columns: 1fr; grid-template-rows: 1fr 190px; }
-    #sidebar { grid-row: 2; display: grid; grid-template-columns: 120px minmax(150px, 220px) minmax(0, 1fr); grid-template-rows: auto auto 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }
-    #preview-wrap { grid-column: 1; grid-row: 1 / span 3; }
-    #sidebar > .control:nth-of-type(1) { grid-column: 2; grid-row: 1; }
-    #sidebar > .control:nth-of-type(2) { grid-column: 2; grid-row: 2; }
-    #sample-info { grid-column: 3; grid-row: 1 / span 3; overflow-y: auto; }
-    #legend, #sidebar-footer { display: none; }
-    #main { grid-row: 1; }
-    .control { grid-template-columns: 1fr; gap: 4px; align-content: start; }
-  }
-</style>
-</head>
-<body>
-<div id="app">
-  <aside id="sidebar">
-    <div class="control">
-      <label for="time">Time</label>
-      <div class="time-grid">
-        <button id="play">Play</button>
-        <input id="time" type="range" min="0" max="0" value="0" step="1">
-        <div id="time-readout">t = 0 / 0</div>
-      </div>
-    </div>
-    <div class="control">
-      <span class="muted">Class</span>
-      <details id="class-filter" class="class-menu">
-        <summary id="class-filter-summary">All classes</summary>
-        <div id="class-options" class="class-options"></div>
-      </details>
-    </div>
-    <div id="preview-wrap"><canvas id="preview"></canvas></div>
-    <div id="sample-info">
-      <div class="muted">Label</div>
-      <div id="sample-label">-</div>
-      <div id="sample-index">Index: -</div>
-    </div>
-    <div id="legend"></div>
-    <div id="sidebar-footer">
-      Drag to rotate. Scroll to zoom. Hover to inspect endpoint images. Click to pin a sample.
-    </div>
-  </aside>
-  <main id="main">
-    <canvas id="plot"></canvas>
-    <div id="view-controls">
-      <button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-      <button id="zoom-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
-      <button id="reset" title="Reset view" aria-label="Reset view">&#8634;</button>
-    </div>
-    <div id="status"></div>
-  </main>
-</div>
-<script>
+    controls_html = (
+        '<div class="control">\n'
+        '      <label for="time">Time</label>\n'
+        '      <div class="time-grid">\n'
+        '        <button id="play">Play</button>\n'
+        '        <input id="time" type="range" min="0" max="0" value="0" step="1">\n'
+        '        <div id="time-readout">t = 0 / 0</div>\n'
+        '      </div>\n'
+        '    </div>\n'
+        + class_filter_html()
+    )
+    sample_info_html = (
+        '<div class="muted">Label</div>\n'
+        '      <div id="sample-label">-</div>\n'
+        '      <div id="sample-index">Index: -</div>\n'
+        '      <div id="metrics"></div>'
+    )
+    footer_html = (
+        'Drag to rotate. Scroll to zoom. Hover to inspect endpoint images. '
+        'Click to pin a sample.'
+    )
+    extra_css = (
+        '  #play { height: 32px; border-radius: 2px; font-size: 13px; }\n'
+        '  input[type="range"] { width: 100%; accent-color: #d8d8d8; }\n'
+        '  .time-grid { display: grid; grid-template-columns: 58px 1fr; gap: 8px; align-items: center; }\n'
+        '  #time-readout { color: #aaa; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }\n'
+        '  #sample-info { min-height: 118px; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; font-size: 12px; }\n'
+        '  #sample-label { grid-column: 1 / -1; }\n'
+        '  #sample-index { grid-column: 1 / -1; }\n'
+        '  @media (max-width: 760px) {\n'
+        '    #sample-label { font-size: 20px; }\n'
+        '  }\n'
+    )
+    return build_explorer_document(
+        ExplorerDocument(
+            title="Trajectory UMAP Explorer",
+            controls_html=controls_html,
+            sample_info_html=sample_info_html,
+            footer_html=footer_html,
+            script=_trajectory_script(payload_json),
+            height=height,
+            config=config,
+            extra_css=extra_css,
+            control_label_width=72,
+            mobile_height=190,
+            mobile_columns="120px minmax(150px, 220px) minmax(0, 1fr)",
+            mobile_rows="auto auto 1fr",
+            preview_row_span=3,
+        )
+    )
+
+
+def _trajectory_script(payload_json: str) -> str:
+    script = r'''__SHARED_SCRIPT__
 const DATA = __PAYLOAD_JSON__;
 const canvas = document.getElementById("plot");
 const context = canvas.getContext("2d");
@@ -418,7 +379,7 @@ const classFilterSummary = document.getElementById("class-filter-summary");
 const classOptions = document.getElementById("class-options");
 const labelElement = document.getElementById("sample-label");
 const indexElement = document.getElementById("sample-index");
-const sampleInfo = document.getElementById("sample-info");
+const metricsElement = document.getElementById("metrics");
 const statusElement = document.getElementById("status");
 const resetButton = document.getElementById("reset");
 const zoomInButton = document.getElementById("zoom-in");
@@ -450,91 +411,13 @@ let span = bounds.span;
 
 slider.max = Math.max(0, steps - 1);
 slider.value = String(step);
+populateLegend(DATA.palette);
 
-for (const [label, color] of Object.entries(DATA.palette)) {
-  const item = document.createElement("span");
-  item.className = "legend-item";
-  const swatch = document.createElement("span");
-  swatch.className = "swatch";
-  swatch.style.background = color;
-  const text = document.createElement("span");
-  text.textContent = label;
-  item.append(swatch, text);
-  document.getElementById("legend").appendChild(item);
-}
-
-function initializeClassFilter() {
-  const counts = new Map();
-  for (const point of DATA.points) {
-    counts.set(point.label, (counts.get(point.label) || 0) + 1);
-  }
-  const labels = Array.from(counts.keys()).sort((left, right) =>
-    left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
-  );
-  selectedLabels = new Set(labels);
-  const allInput = document.createElement("input");
-  allInput.type = "checkbox";
-  allInput.checked = true;
-  classOptions.appendChild(createClassOption(allInput, "All classes", DATA.points.length));
-  const classInputs = labels.map(label => {
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = label;
-    input.checked = true;
-    classOptions.appendChild(createClassOption(input, label || "(empty)", counts.get(label)));
-    input.addEventListener("change", () => {
-      allInput.checked = classInputs.every(value => value.checked);
-      syncClassFilter(classInputs);
-    });
-    return input;
-  });
-  allInput.addEventListener("change", () => {
-    for (const input of classInputs) input.checked = allInput.checked;
-    syncClassFilter(classInputs);
-  });
-}
-
-function createClassOption(input, text, count) {
-  const row = document.createElement("label");
-  row.className = "class-option";
-  const name = document.createElement("span");
-  name.textContent = text;
-  const total = document.createElement("span");
-  total.className = "class-count";
-  total.textContent = count.toLocaleString();
-  row.append(input, name, total);
-  return row;
-}
-
-function syncClassFilter(classInputs) {
-  selectedLabels = new Set(
-    classInputs.filter(input => input.checked).map(input => input.value)
-  );
-  visibleIndices = DATA.points
-    .map((point, index) => selectedLabels.has(point.label) ? index : -1)
-    .filter(index => index >= 0);
-  const selectedCount = selectedLabels.size;
-  const totalCount = classInputs.length;
-  classFilterSummary.textContent = selectedCount === totalCount
-    ? "All classes"
-    : selectedCount === 0
-      ? "No classes"
-      : selectedCount === 1
-        ? Array.from(selectedLabels)[0] || "(empty)"
-        : `${selectedCount} classes`;
+function onClassFilterChange() {
   hoverIndex = null;
   pinnedIndex = null;
   showPoint(null);
   requestDraw();
-}
-
-function loadAtlases() {
-  return Promise.all(DATA.atlases.map(source => new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => { atlasImages.push(image); resolve(); };
-    image.onerror = reject;
-    image.src = source;
-  })));
 }
 
 function computeBounds() {
@@ -676,54 +559,6 @@ function drawHighlight(index) {
   drawTile(context, point, projected.x - size / 2, projected.y - size / 2, size);
 }
 
-function drawTile(targetContext, point, x, y, size) {
-  const sourceX = point.column * DATA.tileSize;
-  const sourceY = point.row * DATA.tileSize;
-  targetContext.imageSmoothingEnabled = false;
-  targetContext.drawImage(
-    atlasImages[point.atlas],
-    sourceX,
-    sourceY,
-    DATA.tileSize,
-    DATA.tileSize,
-    x,
-    y,
-    size,
-    size
-  );
-}
-
-function drawPreviewTile(point, x, y, size) {
-  const grayscaleDataset = ["mnist", "fashion_mnist"].includes(point.dataset.toLowerCase());
-  if (DATA.options.previewMode !== "original" || !grayscaleDataset) {
-    drawTile(previewContext, point, x, y, size);
-    return;
-  }
-  const sourceX = point.column * DATA.tileSize;
-  const sourceY = point.row * DATA.tileSize;
-  previewTileContext.clearRect(0, 0, DATA.tileSize, DATA.tileSize);
-  previewTileContext.drawImage(
-    atlasImages[point.atlas],
-    sourceX,
-    sourceY,
-    DATA.tileSize,
-    DATA.tileSize,
-    0,
-    0,
-    DATA.tileSize,
-    DATA.tileSize
-  );
-  const image = previewTileContext.getImageData(0, 0, DATA.tileSize, DATA.tileSize);
-  for (let offset = 0; offset < image.data.length; offset += 4) {
-    image.data[offset] = 255;
-    image.data[offset + 1] = 255;
-    image.data[offset + 2] = 255;
-  }
-  previewTileContext.putImageData(image, 0, 0);
-  previewContext.imageSmoothingEnabled = false;
-  previewContext.drawImage(previewTile, x, y, size, size);
-}
-
 function nearestPoint(mouseX, mouseY) {
   const threshold = Math.max(12, DATA.options.pointSize * 1.2);
   let best = null;
@@ -742,12 +577,10 @@ function nearestPoint(mouseX, mouseY) {
 }
 
 function showPoint(index) {
-  previewContext.clearRect(0, 0, preview.clientWidth, preview.clientHeight);
-  previewContext.fillStyle = "#191919";
-  previewContext.fillRect(0, 0, preview.clientWidth, preview.clientHeight);
+  clearPreview();
+  metricsElement.replaceChildren();
   labelElement.textContent = "-";
   indexElement.textContent = "Index: -";
-  clearMetrics();
   if (index === null) return;
   const point = DATA.points[index];
   const margin = 12;
@@ -760,31 +593,10 @@ function showPoint(index) {
   );
   labelElement.textContent = point.label || "-";
   indexElement.textContent = `${point.kind} - Index: ${point.sourceIndex} - Row: ${point.rowId}`;
-  appendMetric("UMAP X", point.coordinates[0]);
-  appendMetric("UMAP Y", point.coordinates[1]);
-  appendMetric("UMAP Z", point.coordinates[2]);
-  appendMetric("Label source", point.labelSource || "-");
-}
-
-function clearMetrics() {
-  for (const element of Array.from(sampleInfo.querySelectorAll(".metric-key, .metric-value"))) {
-    element.remove();
-  }
-}
-
-function appendMetric(name, value) {
-  const key = document.createElement("span");
-  key.className = "metric-key";
-  key.title = name;
-  key.textContent = name;
-  const metric = document.createElement("span");
-  metric.className = "metric-value";
-  if (typeof value === "number") {
-    metric.textContent = value.toFixed(3);
-  } else {
-    metric.textContent = String(value);
-  }
-  sampleInfo.append(key, metric);
+  appendMetric(metricsElement, "UMAP X", point.coordinates[0]);
+  appendMetric(metricsElement, "UMAP Y", point.coordinates[1]);
+  appendMetric(metricsElement, "UMAP Z", point.coordinates[2]);
+  appendMetric(metricsElement, "Label source", point.labelSource || "-");
 }
 
 function requestDraw() {
@@ -896,17 +708,13 @@ zoomOutButton.addEventListener("click", () => {
   requestDraw();
 });
 window.addEventListener("resize", resize);
-initializeClassFilter();
-loadAtlases().then(() => {
+initializeClassFilter(DATA.points, onClassFilterChange);
+loadAtlases(DATA.atlases).then(() => {
   resize();
   showPoint(null);
 });
-</script>
-</body>
-</html>
-"""
-    return (
-        template.replace("__PAYLOAD_JSON__", payload_json)
-        .replace("__HEIGHT__", str(int(height)))
-        .replace("__SIDEBAR_WIDTH__", str(int(config.sidebar_width)))
+'''
+    return script.replace("__SHARED_SCRIPT__", shared_explorer_script()).replace(
+        "__PAYLOAD_JSON__",
+        payload_json,
     )

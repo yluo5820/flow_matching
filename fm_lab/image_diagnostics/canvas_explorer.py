@@ -18,6 +18,12 @@ import pandas as pd
 from PIL import Image
 
 from fm_lab.image_diagnostics.config import ExplorerConfig
+from fm_lab.image_diagnostics.explorer_viewer import (
+    ExplorerDocument,
+    build_explorer_document,
+    class_filter_html,
+    shared_explorer_script,
+)
 from fm_lab.image_diagnostics.palette import LABEL_PALETTE
 
 ATLAS_COMPACTION_THRESHOLD = 32 * 1024 * 1024
@@ -721,116 +727,54 @@ def _html_template(
     height: int,
     config: ExplorerConfig,
 ) -> str:
-    metrics_display = "grid" if config.show_metrics else "none"
-    legend_display = "flex" if config.show_legend else "none"
-    controls_display = "grid" if config.show_view_controls else "none"
-    instructions_display = "block" if config.show_instructions else "none"
-    return f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  * {{ box-sizing: border-box; }}
-  html, body {{ margin: 0; height: 100%; overflow: hidden; background: #111; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f2f2f2; }}
-  #app {{ display: grid; grid-template-columns: {config.sidebar_width}px 1fr; height: {height}px; background: #111; }}
-  #sidebar {{ background: #222; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }}
-  .control {{ display: grid; grid-template-columns: 88px 1fr; align-items: center; gap: 10px; }}
-  label, .muted {{ color: #c8c8c8; font-size: 14px; }}
-  select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
-  .class-menu {{ position: relative; min-width: 0; }}
-  .class-menu summary {{ height: 32px; display: flex; align-items: center; padding: 0 8px; background: #f3f3f3; color: #111; border-radius: 2px; cursor: pointer; list-style: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-  .class-menu summary::-webkit-details-marker {{ display: none; }}
-  .class-menu summary::after {{ content: "▾"; margin-left: auto; padding-left: 8px; color: #555; }}
-  .class-options {{ position: absolute; z-index: 20; top: 36px; left: 0; right: 0; max-height: 250px; overflow-y: auto; padding: 6px; background: #f3f3f3; color: #111; border: 1px solid #bbb; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }}
-  .class-option {{ min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 2px 4px; color: #111; font-size: 12px; cursor: pointer; }}
-  .class-option:hover {{ background: #ddd; }}
-  .class-option input {{ margin: 0; }}
-  .class-count {{ margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }}
-  #preview-wrap {{ width: 100%; aspect-ratio: 1; background: #191919; display: grid; place-items: center; }}
-  #preview {{ width: 100%; height: 100%; image-rendering: pixelated; }}
-  #sample-info {{ min-height: 88px; display: grid; gap: 5px; align-content: start; }}
-  #sample-label {{ font-size: 24px; font-weight: 650; }}
-  #sample-index {{ color: #a9a9a9; font-variant-numeric: tabular-nums; }}
-  #metrics {{ display: {metrics_display}; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; margin-top: 8px; padding-top: 10px; border-top: 1px solid #3a3a3a; font-size: 12px; color: #bdbdbd; }}
-  .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
-  .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-  .metric-value {{ color: #eee; font-variant-numeric: tabular-nums; text-align: right; }}
-  #legend {{ display: {legend_display}; flex-wrap: wrap; gap: 6px 10px; }}
-  .legend-item {{ display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #cfcfcf; }}
-  .swatch {{ width: 9px; height: 9px; }}
-  #sidebar-footer {{ display: {instructions_display}; margin-top: auto; color: #aaa; font-size: 12px; line-height: 1.45; }}
-  #main {{ position: relative; min-width: 0; overflow: hidden; background: #111; }}
-  #plot {{ position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }}
-  #plot.dragging {{ cursor: grabbing; }}
-  #status {{ position: absolute; right: 14px; bottom: 12px; color: #777; font-size: 12px; pointer-events: none; }}
-  #view-controls {{ position: absolute; right: 14px; top: 12px; display: {controls_display}; gap: 5px; }}
-  #view-controls button {{ width: 34px; height: 34px; border: 1px solid #444; background: #1b1b1b; color: #ddd; cursor: pointer; font-size: 20px; }}
-  #view-controls button:hover {{ background: #292929; }}
-  @media (max-width: 760px) {{
-    #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 150px; }}
-    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 120px 140px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
-    #sidebar > .control:nth-of-type(1) {{ grid-column: 2; grid-row: 1; }}
-    #sidebar > .control:nth-of-type(2) {{ grid-column: 2; grid-row: 2; }}
-    #preview-wrap {{ grid-column: 1; grid-row: 1 / span 2; }}
-    #sample-info {{ grid-column: 3; grid-row: 1 / span 2; overflow-y: auto; }}
-    #legend, #sidebar-footer {{ display: none; }}
-    #main {{ grid-row: 1; }}
-    .control {{ grid-template-columns: 1fr; gap: 4px; align-content: start; }}
-    #sample-label {{ font-size: 20px; }}
-  }}
-</style>
-</head>
-<body>
-<div id="app">
-  <aside id="sidebar">
-    <div class="control">
-      <label for="projection">{config.selector_label}</label>
-      <select id="projection"></select>
-    </div>
-    <div class="control">
-      <span class="muted">Class</span>
-      <details id="class-filter" class="class-menu">
-        <summary id="class-filter-summary">All classes</summary>
-        <div id="class-options" class="class-options"></div>
-      </details>
-    </div>
-    <div id="preview-wrap"><canvas id="preview"></canvas></div>
-    <div id="sample-info">
-      <div class="muted">Label</div>
-      <div id="sample-label">-</div>
-      <div id="sample-index">Index: -</div>
-      <div id="metrics"></div>
-    </div>
-    <div id="legend"></div>
-    <div id="sidebar-footer">
-      Drag to pan. Scroll to zoom. Hover to inspect. Click to pin a sample.
-      Double-click or press the reset control to refit the projection.
-    </div>
-  </aside>
-  <main id="main">
-    <canvas id="plot"></canvas>
-    <div id="view-controls">
-      <button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-      <button id="zoom-out" title="Zoom out" aria-label="Zoom out">&minus;</button>
-      <button id="reset" title="Reset view" aria-label="Reset view">&#8634;</button>
-    </div>
-    <div id="status"></div>
-  </main>
-</div>
-<script>
-const DATA = {payload_json};
-for (const details of Object.values(DATA.projectionDiagnostics)) {{
-  for (const [name, encoded] of Object.entries(details)) {{
+    controls_html = (
+        '<div class="control">\n'
+        '      <label for="projection">' + config.selector_label + '</label>\n'
+        '      <select id="projection"></select>\n'
+        '    </div>\n'
+        + class_filter_html()
+    )
+    sample_info_html = (
+        '<div class="muted">Label</div>\n'
+        '      <div id="sample-label">-</div>\n'
+        '      <div id="sample-index">Index: -</div>\n'
+        '      <div id="metrics"></div>'
+    )
+    footer_html = (
+        'Drag to pan. Scroll to zoom. Hover to inspect. Click to pin a sample.\n'
+        '      Double-click or press the reset control to refit the projection.'
+    )
+    return build_explorer_document(
+        ExplorerDocument(
+            title="Dataset Explorer",
+            controls_html=controls_html,
+            sample_info_html=sample_info_html,
+            footer_html=footer_html,
+            script=_canvas_script(payload_json),
+            height=height,
+            config=config,
+            control_label_width=88,
+            mobile_height=150,
+            mobile_columns="120px 140px minmax(0, 1fr)",
+            mobile_rows="1fr 1fr",
+            preview_row_span=2,
+        )
+    )
+
+
+def _canvas_script(payload_json: str) -> str:
+    script = r'''__SHARED_SCRIPT__
+const DATA = __PAYLOAD_JSON__;
+for (const details of Object.values(DATA.projectionDiagnostics)) {
+  for (const [name, encoded] of Object.entries(details)) {
     const binary = atob(encoded.data);
     const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index++) {{
+    for (let index = 0; index < binary.length; index++) {
       bytes[index] = binary.charCodeAt(index);
-    }}
+    }
     details[name] = new Float32Array(bytes.buffer);
-  }}
-}}
+  }
+}
 const canvas = document.getElementById("plot");
 const context = canvas.getContext("2d");
 const preview = document.getElementById("preview");
@@ -871,84 +815,15 @@ let selectedLabels = new Set(DATA.points.map(point => point.label));
 let animation = null;
 let frameRequested = false;
 
-for (const name of DATA.projections) {{
+for (const name of DATA.projections) {
   const option = document.createElement("option");
   option.value = name;
   option.textContent = name;
   projectionSelect.appendChild(option);
-}}
-for (const [label, color] of Object.entries(DATA.palette)) {{
-  const item = document.createElement("span");
-  item.className = "legend-item";
-  const swatch = document.createElement("span");
-  swatch.className = "swatch";
-  swatch.style.background = color;
-  const text = document.createElement("span");
-  text.textContent = label;
-  item.append(swatch, text);
-  document.getElementById("legend").appendChild(item);
-}}
+}
+populateLegend(DATA.palette);
 
-function initializeClassFilter() {{
-  const counts = new Map();
-  for (const point of DATA.points) {{
-    counts.set(point.label, (counts.get(point.label) || 0) + 1);
-  }}
-  const labels = Array.from(counts.keys()).sort((left, right) =>
-    left.localeCompare(right, undefined, {{ numeric: true, sensitivity: "base" }})
-  );
-  selectedLabels = new Set(labels);
-  const allInput = document.createElement("input");
-  allInput.type = "checkbox";
-  allInput.checked = true;
-  const allRow = createClassOption(allInput, "All classes", DATA.points.length);
-  classOptions.appendChild(allRow);
-  const classInputs = labels.map(label => {{
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = label;
-    input.checked = true;
-    classOptions.appendChild(createClassOption(input, label || "(empty)", counts.get(label)));
-    input.addEventListener("change", () => {{
-      allInput.checked = classInputs.every(value => value.checked);
-      syncClassFilter(classInputs);
-    }});
-    return input;
-  }});
-  allInput.addEventListener("change", () => {{
-    for (const input of classInputs) input.checked = allInput.checked;
-    syncClassFilter(classInputs);
-  }});
-}}
-
-function createClassOption(input, text, count) {{
-  const row = document.createElement("label");
-  row.className = "class-option";
-  const name = document.createElement("span");
-  name.textContent = text;
-  const total = document.createElement("span");
-  total.className = "class-count";
-  total.textContent = count.toLocaleString();
-  row.append(input, name, total);
-  return row;
-}}
-
-function syncClassFilter(classInputs) {{
-  selectedLabels = new Set(
-    classInputs.filter(input => input.checked).map(input => input.value)
-  );
-  visibleIndices = DATA.points
-    .map((point, index) => selectedLabels.has(point.label) ? index : -1)
-    .filter(index => index >= 0);
-  const selectedCount = selectedLabels.size;
-  const totalCount = classInputs.length;
-  classFilterSummary.textContent = selectedCount === totalCount
-    ? "All classes"
-    : selectedCount === 0
-      ? "No classes"
-      : selectedCount === 1
-        ? Array.from(selectedLabels)[0] || "(empty)"
-        : `${{selectedCount}} classes`;
+function onClassFilterChange() {
   animation = null;
   currentCoordinates = DATA.points.map(
     point => point.coordinates[projection].slice()
@@ -957,18 +832,9 @@ function syncClassFilter(classInputs) {{
   pinnedIndex = null;
   showPoint(null);
   fitView();
-}}
+}
 
-function loadAtlases() {{
-  return Promise.all(DATA.atlases.map(source => new Promise((resolve, reject) => {{
-    const image = new Image();
-    image.onload = () => {{ atlasImages.push(image); resolve(); }};
-    image.onerror = reject;
-    image.src = source;
-  }})));
-}}
-
-function resize() {{
+function resize() {
   const rect = main.getBoundingClientRect();
   width = Math.max(1, rect.width);
   height = Math.max(1, rect.height);
@@ -980,25 +846,25 @@ function resize() {{
   preview.height = Math.round(preview.clientHeight * pixelRatio);
   previewContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   fitView();
-}}
+}
 
-function fitView() {{
+function fitView() {
   const coordinates = visibleIndices.map(index => currentCoordinates[index]);
-  if (!coordinates.length) {{
+  if (!coordinates.length) {
     centerX = 0;
     centerY = 0;
     fitScale = 1;
     scale = 1;
     requestDraw();
     return;
-  }}
+  }
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const coordinate of coordinates) {{
+  for (const coordinate of coordinates) {
     minX = Math.min(minX, coordinate[0]);
     maxX = Math.max(maxX, coordinate[0]);
     minY = Math.min(minY, coordinate[1]);
     maxY = Math.max(maxY, coordinate[1]);
-  }}
+  }
   centerX = (minX + maxX) / 2;
   centerY = (minY + maxY) / 2;
   const dataWidth = Math.max(1, maxX - minX);
@@ -1006,9 +872,9 @@ function fitView() {{
   fitScale = Math.min(width / (dataWidth * 1.12), height / (dataHeight * 1.12));
   scale = fitScale;
   requestDraw();
-}}
+}
 
-function pointSize() {{
+function pointSize() {
   if (!DATA.options.scalePointSizeWithZoom) return DATA.options.pointSize;
   const zoom = Math.max(1, scale / fitScale);
   return Math.max(
@@ -1018,34 +884,34 @@ function pointSize() {{
       DATA.options.pointSize + Math.log2(zoom) * 5
     )
   );
-}}
+}
 
-function zoomBy(factor) {{
+function zoomBy(factor) {
   scale = Math.max(fitScale * 0.5, Math.min(fitScale * 60, scale * factor));
   requestDraw();
-}}
+}
 
-function worldToScreen(coordinate) {{
+function worldToScreen(coordinate) {
   return [
     (coordinate[0] - centerX) * scale + width / 2,
     (centerY - coordinate[1]) * scale + height / 2,
   ];
-}}
+}
 
-function draw() {{
+function draw() {
   frameRequested = false;
   context.clearRect(0, 0, width, height);
   context.fillStyle = "#111";
   context.fillRect(0, 0, width, height);
   const size = pointSize();
-  for (const index of visibleIndices) {{
+  for (const index of visibleIndices) {
     const point = DATA.points[index];
     const screen = worldToScreen(currentCoordinates[index]);
     if (screen[0] < -size || screen[0] > width + size || screen[1] < -size || screen[1] > height + size) continue;
     drawTile(context, point, screen[0] - size / 2, screen[1] - size / 2, size);
-  }}
+  }
   const selectedIndex = pinnedIndex !== null ? pinnedIndex : hoverIndex;
-  if (selectedIndex !== null && selectedLabels.has(DATA.points[selectedIndex].label)) {{
+  if (selectedIndex !== null && selectedLabels.has(DATA.points[selectedIndex].label)) {
     const screen = worldToScreen(currentCoordinates[selectedIndex]);
     const highlightSize = Math.max(DATA.options.hoverSize, size * 2.0);
     context.strokeStyle = "#fff";
@@ -1063,98 +929,43 @@ function draw() {{
       screen[1] - highlightSize / 2,
       highlightSize
     );
-  }}
-  statusElement.textContent = `${{visibleIndices.length.toLocaleString()}} samples`;
+  }
+  statusElement.textContent = `${visibleIndices.length.toLocaleString()} samples`;
   if (animation) requestAnimationFrame(stepAnimation);
-}}
+}
 
-function drawTile(targetContext, point, x, y, size) {{
-  const sourceX = point.column * DATA.tileSize;
-  const sourceY = point.row * DATA.tileSize;
-  targetContext.imageSmoothingEnabled = false;
-  targetContext.drawImage(
-    atlasImages[point.atlas],
-    sourceX,
-    sourceY,
-    DATA.tileSize,
-    DATA.tileSize,
-    x,
-    y,
-    size,
-    size
-  );
-}}
-
-function drawPreviewTile(point, x, y, size) {{
-  const grayscaleDataset = ["mnist", "fashion_mnist"].includes(point.dataset.toLowerCase());
-  if (DATA.options.previewMode !== "original" || !grayscaleDataset) {{
-    drawTile(previewContext, point, x, y, size);
-    return;
-  }}
-  const sourceX = point.column * DATA.tileSize;
-  const sourceY = point.row * DATA.tileSize;
-  previewTileContext.clearRect(0, 0, DATA.tileSize, DATA.tileSize);
-  previewTileContext.drawImage(
-    atlasImages[point.atlas],
-    sourceX,
-    sourceY,
-    DATA.tileSize,
-    DATA.tileSize,
-    0,
-    0,
-    DATA.tileSize,
-    DATA.tileSize
-  );
-  const image = previewTileContext.getImageData(
-    0,
-    0,
-    DATA.tileSize,
-    DATA.tileSize
-  );
-  for (let offset = 0; offset < image.data.length; offset += 4) {{
-    image.data[offset] = 255;
-    image.data[offset + 1] = 255;
-    image.data[offset + 2] = 255;
-  }}
-  previewTileContext.putImageData(image, 0, 0);
-  previewContext.imageSmoothingEnabled = false;
-  previewContext.drawImage(previewTile, x, y, size, size);
-}}
-
-function requestDraw() {{
-  if (!frameRequested) {{
+function requestDraw() {
+  if (!frameRequested) {
     frameRequested = true;
     requestAnimationFrame(draw);
-  }}
-}}
+  }
+}
 
-function nearestPoint(mouseX, mouseY) {{
+function nearestPoint(mouseX, mouseY) {
   const threshold = Math.max(10, pointSize() * 0.75);
   let best = null;
   let bestDistance = threshold * threshold;
-  for (const index of visibleIndices) {{
+  for (const index of visibleIndices) {
     const screen = worldToScreen(currentCoordinates[index]);
     const dx = screen[0] - mouseX;
     const dy = screen[1] - mouseY;
     const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {{
+    if (distance < bestDistance) {
       best = index;
       bestDistance = distance;
-    }}
-  }}
+    }
+  }
   return best;
-}}
+}
 
-function showPoint(index) {{
-  previewContext.clearRect(0, 0, preview.clientWidth, preview.clientHeight);
-  previewContext.fillStyle = "#191919";
-  previewContext.fillRect(0, 0, preview.clientWidth, preview.clientHeight);
+function showPoint(index) {
+  clearPreview();
   metricsElement.replaceChildren();
-  if (index === null) {{
+  if (index === null) {
     labelElement.textContent = "-";
     indexElement.textContent = "Index: -";
     return;
-  }}
+  }
   const point = DATA.points[index];
   const margin = 12;
   drawPreviewTile(
@@ -1165,50 +976,30 @@ function showPoint(index) {{
     preview.clientHeight - margin * 2
   );
   labelElement.textContent = point.label || "-";
-  indexElement.textContent = `Index: ${{point.sourceIndex}}  Row: ${{point.rowId}}`;
-  appendMetricHeading(`Diagnostics · ${{projection}}`);
+  indexElement.textContent = `Index: ${point.sourceIndex}  Row: ${point.rowId}`;
+  appendMetricHeading(`Diagnostics - ${projection}`);
   const normalizedCoordinate = point.coordinates[projection];
-  appendMetric("Map X", normalizedCoordinate[0]);
-  appendMetric("Map Y", normalizedCoordinate[1]);
-  const selectedDetails = DATA.projectionDiagnostics[projection] || {{}};
-  for (const [name, values] of Object.entries(selectedDetails)) {{
-    appendMetric(name, values[index]);
-  }}
+  appendMetric(metricsElement, "Map X", normalizedCoordinate[0]);
+  appendMetric(metricsElement, "Map Y", normalizedCoordinate[1]);
+  const selectedDetails = DATA.projectionDiagnostics[projection] || {};
+  for (const [name, values] of Object.entries(selectedDetails)) {
+    appendMetric(metricsElement, name, values[index]);
+  }
   if (Object.keys(point.details).length) appendMetricHeading("Sample");
-  for (const [name, value] of Object.entries(point.details)) {{
+  for (const [name, value] of Object.entries(point.details)) {
     if (value === null) continue;
-    appendMetric(name.replaceAll("_", " "), value);
-  }}
-}}
+    appendMetric(metricsElement, name.replaceAll("_", " "), value);
+  }
+}
 
-function appendMetricHeading(text) {{
+function appendMetricHeading(text) {
   const heading = document.createElement("div");
   heading.className = "metrics-heading";
   heading.textContent = text;
   metricsElement.appendChild(heading);
-}}
+}
 
-function appendMetric(name, value) {{
-  if (value === null) return;
-  const key = document.createElement("span");
-  key.className = "metric-key";
-  key.title = name;
-  key.textContent = name;
-  const metric = document.createElement("span");
-  metric.className = "metric-value";
-  if (typeof value === "number") {{
-    metric.textContent = name.includes("agreement")
-      ? `${{(value * 100).toFixed(1)}}%`
-      : Number.isInteger(value)
-        ? value.toLocaleString()
-        : value.toFixed(3);
-  }} else {{
-    metric.textContent = String(value);
-  }}
-  metricsElement.append(key, metric);
-}}
-
-function stepAnimation(timestamp) {{
+function stepAnimation(timestamp) {
   if (!animation) return;
   const progress = Math.min(1, (timestamp - animation.start) / animation.duration);
   const eased = DATA.options.transitionEasing === "linear"
@@ -1220,38 +1011,38 @@ function stepAnimation(timestamp) {{
     coordinate[0] + (animation.to[index][0] - coordinate[0]) * eased,
     coordinate[1] + (animation.to[index][1] - coordinate[1]) * eased,
   ]);
-  if (progress >= 1) {{
+  if (progress >= 1) {
     currentCoordinates = animation.to;
     animation = null;
     fitView();
-  }}
+  }
   requestDraw();
-}}
+}
 
-projectionSelect.addEventListener("change", event => {{
+projectionSelect.addEventListener("change", event => {
   projection = event.target.value;
-  animation = {{
+  animation = {
     from: currentCoordinates.map(coordinate => coordinate.slice()),
     to: DATA.points.map(point => point.coordinates[projection].slice()),
     start: performance.now(),
     duration: DATA.options.transitionMs,
-  }};
+  };
   const selectedIndex = pinnedIndex !== null ? pinnedIndex : hoverIndex;
   showPoint(selectedIndex);
   requestDraw();
-}});
+});
 
-canvas.addEventListener("pointerdown", event => {{
+canvas.addEventListener("pointerdown", event => {
   dragging = true;
   moved = false;
   dragX = event.clientX;
   dragY = event.clientY;
   canvas.classList.add("dragging");
   canvas.setPointerCapture(event.pointerId);
-}});
-canvas.addEventListener("pointermove", event => {{
+});
+canvas.addEventListener("pointermove", event => {
   const rect = canvas.getBoundingClientRect();
-  if (dragging) {{
+  if (dragging) {
     const dx = event.clientX - dragX;
     const dy = event.clientY - dragY;
     if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
@@ -1261,34 +1052,34 @@ canvas.addEventListener("pointermove", event => {{
     dragY = event.clientY;
     requestDraw();
     return;
-  }}
+  }
   if (pinnedIndex !== null) return;
   hoverIndex = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
   showPoint(hoverIndex);
   requestDraw();
-}});
-canvas.addEventListener("pointerup", event => {{
+});
+canvas.addEventListener("pointerup", event => {
   dragging = false;
   canvas.classList.remove("dragging");
-  if (!moved) {{
+  if (!moved) {
     const rect = canvas.getBoundingClientRect();
     const selected = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
     pinnedIndex = pinnedIndex === selected ? null : selected;
     hoverIndex = selected;
     showPoint(pinnedIndex !== null ? pinnedIndex : hoverIndex);
-  }}
+  }
   requestDraw();
-}});
-canvas.addEventListener("pointerleave", () => {{
+});
+canvas.addEventListener("pointerleave", () => {
   dragging = false;
   canvas.classList.remove("dragging");
-  if (pinnedIndex === null) {{
+  if (pinnedIndex === null) {
     hoverIndex = null;
     showPoint(null);
     requestDraw();
-  }}
-}});
-canvas.addEventListener("wheel", event => {{
+  }
+});
+canvas.addEventListener("wheel", event => {
   event.preventDefault();
   const rect = canvas.getBoundingClientRect();
   const mouseX = event.clientX - rect.left;
@@ -1301,20 +1092,22 @@ canvas.addEventListener("wheel", event => {{
   centerY = worldY + (mouseY - height / 2) / nextScale;
   scale = nextScale;
   requestDraw();
-}}, {{ passive: false }});
+}, { passive: false });
 canvas.addEventListener("dblclick", fitView);
 resetButton.addEventListener("click", fitView);
 zoomInButton.addEventListener("click", () => zoomBy(1.5));
 zoomOutButton.addEventListener("click", () => zoomBy(1 / 1.5));
 window.addEventListener("resize", resize);
 
-initializeClassFilter();
-loadAtlases().then(() => {{
+initializeClassFilter(DATA.points, onClassFilterChange);
+loadAtlases(DATA.atlases).then(() => {
   resize();
   showPoint(null);
-}}).catch(error => {{
-  statusElement.textContent = `Failed to load thumbnail atlas: ${{error}}`;
-}});
-</script>
-</body>
-</html>"""
+}).catch(error => {
+  statusElement.textContent = `Failed to load thumbnail atlas: ${error}`;
+});
+'''
+    return script.replace("__SHARED_SCRIPT__", shared_explorer_script()).replace(
+        "__PAYLOAD_JSON__",
+        payload_json,
+    )

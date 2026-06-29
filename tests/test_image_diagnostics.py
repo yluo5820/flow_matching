@@ -1325,6 +1325,8 @@ def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:
     assert 'id="class-filter"' in html
     assert "All classes" in html
     assert "syncClassFilter" in html
+    assert "function initializeClassFilter(points, onChange)" in html
+    assert "function drawPreviewTile(point, x, y, size)" in html
     assert "for (const index of visibleIndices)" in html
     assert "${visibleIndices.length.toLocaleString()} samples" in html
 
