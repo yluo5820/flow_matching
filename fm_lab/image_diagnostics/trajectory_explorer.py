@@ -34,6 +34,7 @@ def write_trajectory_explorer_html(
     generated: np.ndarray | None,
     target_images: np.ndarray | None,
     generated_images: np.ndarray | None,
+    trajectory_images: np.ndarray | None = None,
     target_labels: np.ndarray | None = None,
     generated_labels: np.ndarray | None = None,
     image_shape: list[int] | tuple[int, ...] | None = None,
@@ -47,16 +48,29 @@ def write_trajectory_explorer_html(
     trajectory = _as_projected_trajectory(trajectory)
     target = _as_projected_points(target)
     generated = _as_projected_points(generated)
-    rows, endpoint_images, endpoint_coordinates = _endpoint_rows(
+    trajectory_labels = _trajectory_labels(
+        trajectory=trajectory,
+        target=target,
+        target_labels=target_labels,
+    )
+    (
+        rows,
+        atlas_images,
+        endpoint_coordinates,
+        n_endpoint_rows,
+        n_trajectory_preview_rows,
+    ) = _atlas_rows(
         target=target,
         generated=generated,
         target_images=target_images,
         generated_images=generated_images,
+        trajectory_images=trajectory_images,
         target_labels=target_labels,
         generated_labels=generated_labels,
+        trajectory_labels=trajectory_labels,
         dataset_name=dataset_name,
     )
-    if endpoint_images is None or endpoint_coordinates is None:
+    if atlas_images is None or endpoint_coordinates is None:
         raise ValueError("Trajectory explorer requires target or generated endpoint images.")
 
     explorer_config = config or ExplorerConfig(height=height)
@@ -64,21 +78,27 @@ def write_trajectory_explorer_html(
     frame = pd.DataFrame(rows)
     bundle = prepare_array_sprite_atlases(
         frame,
-        endpoint_images,
+        atlas_images,
         output_dir=output_path.parent / "assets" / "trajectory_atlases",
         image_shape=image_shape,
         image_value_range=image_value_range,
         tile_size=explorer_config.atlas_tile_size,
         max_atlas_size=explorer_config.atlas_size,
     )
-    trajectory_labels = _trajectory_labels(
-        trajectory=trajectory,
-        target=target,
-        target_labels=target_labels,
-    )
     palette = _palette_with_trajectory_labels(bundle.palette, trajectory_labels)
     payload = {
-        "points": _point_payload(bundle, endpoint_coordinates),
+        "points": _point_payload(
+            bundle,
+            coordinates=endpoint_coordinates,
+            start=0,
+            count=n_endpoint_rows,
+        ),
+        "trajectoryPreviews": _point_payload(
+            bundle,
+            coordinates=trajectory[-1],
+            start=n_endpoint_rows,
+            count=n_trajectory_preview_rows,
+        ),
         "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
         "palette": {
             label: f"rgb({color[0]}, {color[1]}, {color[2]})"
@@ -95,12 +115,14 @@ def write_trajectory_explorer_html(
             "targetAlpha": 0.28,
             "generatedAlpha": 0.9,
             "lineAlpha": 0.34,
+            "drawThumbnailsDefault": False,
         },
         "counts": {
             "targets": 0 if target is None else int(len(target)),
             "generated": 0 if generated is None else int(len(generated)),
             "trajectorySteps": int(trajectory.shape[0]),
             "trajectories": int(trajectory.shape[1]),
+            "trajectoryPreviews": int(n_trajectory_preview_rows),
         },
     }
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
@@ -110,9 +132,11 @@ def write_trajectory_explorer_html(
         encoding="utf-8",
     )
     return {
-        "endpoint_points": int(len(frame)),
+        "endpoint_points": int(n_endpoint_rows),
         "target_endpoint_points": int(payload["counts"]["targets"]),
         "generated_endpoint_points": int(payload["counts"]["generated"]),
+        "trajectory_preview_points": int(n_trajectory_preview_rows),
+        "atlas_points": int(len(frame)),
         "atlas_count": int(len(bundle.atlas_paths)),
     }
 
@@ -133,16 +157,18 @@ def _as_projected_points(values: np.ndarray | None) -> np.ndarray | None:
     return array
 
 
-def _endpoint_rows(
+def _atlas_rows(
     *,
     target: np.ndarray | None,
     generated: np.ndarray | None,
     target_images: np.ndarray | None,
     generated_images: np.ndarray | None,
+    trajectory_images: np.ndarray | None,
     target_labels: np.ndarray | None,
     generated_labels: np.ndarray | None,
+    trajectory_labels: list[str],
     dataset_name: str,
-) -> tuple[list[dict[str, Any]], np.ndarray | None, np.ndarray | None]:
+) -> tuple[list[dict[str, Any]], np.ndarray | None, np.ndarray | None, int, int]:
     rows: list[dict[str, Any]] = []
     image_blocks: list[np.ndarray] = []
     coordinate_blocks: list[np.ndarray] = []
@@ -184,9 +210,40 @@ def _endpoint_rows(
         image_blocks.append(generated_images[:count])
         coordinate_blocks.append(generated[:count])
 
+    endpoint_rows = len(rows)
+    if trajectory_images is not None:
+        trajectory_images = np.asarray(trajectory_images)
+        count = min(len(trajectory_images), len(trajectory_labels))
+        labels = trajectory_labels[:count]
+        for index in range(count):
+            rows.append(
+                {
+                    "row_id": len(rows),
+                    "source_index": index,
+                    "label": labels[index],
+                    "dataset": dataset_name,
+                    "kind": "trajectory",
+                    "label_source": "nearest target final"
+                    if labels[index] != "trajectory"
+                    else "none",
+                }
+            )
+        image_blocks.append(trajectory_images[:count])
+
     if not image_blocks:
-        return rows, None, None
-    return rows, np.concatenate(image_blocks, axis=0), np.concatenate(coordinate_blocks, axis=0)
+        return rows, None, None, 0, 0
+    endpoint_coordinates = (
+        np.concatenate(coordinate_blocks, axis=0)
+        if coordinate_blocks
+        else np.empty((0, 3), dtype=np.float32)
+    )
+    return (
+        rows,
+        np.concatenate(image_blocks, axis=0),
+        endpoint_coordinates,
+        endpoint_rows,
+        len(rows) - endpoint_rows,
+    )
 
 
 def _string_labels(
@@ -281,10 +338,15 @@ def _palette_with_trajectory_labels(
 
 def _point_payload(
     bundle: AtlasBundle,
+    *,
     coordinates: np.ndarray,
+    start: int,
+    count: int,
 ) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
-    for position, row in bundle.frame.iterrows():
+    frame = bundle.frame.iloc[start : start + count].reset_index(drop=True)
+    for position, row in frame.iterrows():
+        bundle_position = start + position
         points.append(
             {
                 "rowId": int(row.get("row_id", position)),
@@ -293,9 +355,9 @@ def _point_payload(
                 "dataset": str(row.get("dataset", "")),
                 "kind": str(row.get("kind", "")),
                 "labelSource": str(row.get("label_source", "")),
-                "atlas": int(row["atlas_index"]),
-                "column": int(row["atlas_column"]),
-                "row": int(row["atlas_row"]),
+                "atlas": int(bundle.frame.iloc[bundle_position]["atlas_index"]),
+                "column": int(bundle.frame.iloc[bundle_position]["atlas_column"]),
+                "row": int(bundle.frame.iloc[bundle_position]["atlas_row"]),
                 "coordinates": [float(value) for value in coordinates[position]],
             }
         )
@@ -318,6 +380,14 @@ def _trajectory_explorer_template(
         '      </div>\n'
         '    </div>\n'
         + class_filter_html()
+        + '\n'
+        '<div class="control">\n'
+        '      <span class="muted">View</span>\n'
+        '      <label class="toggle-row">\n'
+        '        <input id="show-thumbnails" type="checkbox">\n'
+        '        <span>Thumbnails</span>\n'
+        '      </label>\n'
+        '    </div>'
     )
     sample_info_html = (
         '<div class="muted">Label</div>\n'
@@ -337,7 +407,10 @@ def _trajectory_explorer_template(
         '  #sample-info { min-height: 118px; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; font-size: 12px; }\n'
         '  #sample-label { grid-column: 1 / -1; }\n'
         '  #sample-index { grid-column: 1 / -1; }\n'
+        '  .toggle-row { display: inline-flex; align-items: center; gap: 7px; color: #ddd; font-size: 13px; }\n'
+        '  .toggle-row input { margin: 0; }\n'
         '  @media (max-width: 760px) {\n'
+        '    #sidebar > .control:nth-of-type(3) { grid-column: 2; grid-row: 3; }\n'
         '    #sample-label { font-size: 20px; }\n'
         '  }\n'
     )
@@ -375,6 +448,7 @@ const main = document.getElementById("main");
 const slider = document.getElementById("time");
 const timeReadout = document.getElementById("time-readout");
 const playButton = document.getElementById("play");
+const thumbnailToggle = document.getElementById("show-thumbnails");
 const classFilterSummary = document.getElementById("class-filter-summary");
 const classOptions = document.getElementById("class-options");
 const labelElement = document.getElementById("sample-label");
@@ -403,6 +477,7 @@ let pinnedIndex = null;
 let frameRequested = false;
 let playing = false;
 let timer = null;
+let showThumbnails = Boolean(DATA.options.drawThumbnailsDefault);
 let selectedLabels = new Set(DATA.points.map(point => point.label));
 let visibleIndices = DATA.points.map((_, index) => index);
 let bounds = computeBounds();
@@ -411,6 +486,7 @@ let span = bounds.span;
 
 slider.max = Math.max(0, steps - 1);
 slider.value = String(step);
+thumbnailToggle.checked = showThumbnails;
 populateLegend(DATA.palette);
 
 function onClassFilterChange() {
@@ -474,6 +550,10 @@ function endpointSize(point) {
   return point.kind === "target" ? Math.max(5, DATA.options.pointSize * 0.72) : DATA.options.pointSize;
 }
 
+function isTrajectoryLabelVisible(label) {
+  return DATA.points.some(point => point.label === label) ? selectedLabels.has(label) : true;
+}
+
 function draw() {
   frameRequested = false;
   context.clearRect(0, 0, width, height);
@@ -482,11 +562,11 @@ function draw() {
   drawTrajectory();
   drawEndpoints();
   const selectedIndex = pinnedIndex !== null ? pinnedIndex : hoverIndex;
-  if (selectedIndex !== null && selectedLabels.has(DATA.points[selectedIndex].label)) {
-    drawHighlight(selectedIndex);
+  if (selectedIndex !== null) {
+    drawSelectionHighlight(selectedIndex);
   }
   timeReadout.textContent = `t = ${step} / ${Math.max(0, steps - 1)}`;
-  statusElement.textContent = `${visibleIndices.length.toLocaleString()} endpoint images - ${pathCount.toLocaleString()} trajectories`;
+  statusElement.textContent = `${visibleIndices.length.toLocaleString()} endpoints - ${pathCount.toLocaleString()} trajectories`;
 }
 
 function drawTrajectory() {
@@ -494,6 +574,7 @@ function drawTrajectory() {
   context.lineWidth = 0.8;
   for (let i = 0; i < pathCount; i++) {
     const label = DATA.trajectoryLabels[i] || "trajectory";
+    if (!isTrajectoryLabelVisible(label)) continue;
     context.strokeStyle = DATA.palette[label] || "#8b949e";
     context.globalAlpha = DATA.options.lineAlpha;
     context.beginPath();
@@ -511,6 +592,7 @@ function drawTrajectory() {
   }).sort((a, b) => a.projected.z - b.projected.z);
   for (const entry of sorted) {
     const label = DATA.trajectoryLabels[entry.index] || "trajectory";
+    if (!isTrajectoryLabelVisible(label)) continue;
     context.globalAlpha = 0.92;
     context.fillStyle = DATA.palette[label] || "#ef4444";
     context.strokeStyle = "#111";
@@ -533,29 +615,110 @@ function drawEndpoints() {
     const size = endpointSize(entry.point);
     if (entry.projected.x < -size || entry.projected.x > width + size || entry.projected.y < -size || entry.projected.y > height + size) continue;
     context.globalAlpha = entry.point.kind === "target" ? DATA.options.targetAlpha : DATA.options.generatedAlpha;
-    drawTile(context, entry.point, entry.projected.x - size / 2, entry.projected.y - size / 2, size);
+    if (showThumbnails) {
+      drawTile(context, entry.point, entry.projected.x - size / 2, entry.projected.y - size / 2, size);
+    } else {
+      drawCirclePoint(
+        entry.projected.x,
+        entry.projected.y,
+        size * 0.42,
+        DATA.palette[entry.point.label] || "#d4d4d4",
+        entry.point.kind === "target" ? DATA.options.targetAlpha : DATA.options.generatedAlpha
+      );
+    }
   }
   context.globalAlpha = 1;
 }
 
-function drawHighlight(index) {
+function drawCirclePoint(x, y, radius, color, alpha) {
+  context.globalAlpha = alpha;
+  context.fillStyle = color;
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.globalAlpha = 1;
+}
+
+function drawSelectionHighlight(selection) {
+  const parsed = parseSelection(selection);
+  if (parsed.kind === "point") drawEndpointHighlight(parsed.index);
+  else drawTrajectoryHighlight(parsed.index);
+}
+
+function drawEndpointHighlight(index) {
   const point = DATA.points[index];
+  if (!selectedLabels.has(point.label)) return;
   const projected = project(point.coordinates);
   const size = Math.max(DATA.options.hoverSize, endpointSize(point) * 2.2);
   context.globalAlpha = 1;
   context.strokeStyle = "#fff";
   context.lineWidth = 2;
   context.strokeRect(projected.x - size / 2 - 2, projected.y - size / 2 - 2, size + 4, size + 4);
-  drawTile(context, point, projected.x - size / 2, projected.y - size / 2, size);
+  if (showThumbnails) {
+    drawTile(context, point, projected.x - size / 2, projected.y - size / 2, size);
+  } else {
+    drawCirclePoint(projected.x, projected.y, Math.max(5, size * 0.18), DATA.palette[point.label] || "#fff", 1);
+  }
+}
+
+function drawTrajectoryHighlight(index) {
+  const label = DATA.trajectoryLabels[index] || "trajectory";
+  if (!isTrajectoryLabelVisible(label)) return;
+  const projected = project(DATA.trajectory[step][index]);
+  context.globalAlpha = 1;
+  context.strokeStyle = "#fff";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.arc(projected.x, projected.y, 8, 0, Math.PI * 2);
+  context.stroke();
 }
 
 function nearestPoint(mouseX, mouseY) {
-  return nearestVisiblePoint(
+  const trajectorySelection = nearestTrajectoryPoint(mouseX, mouseY);
+  if (trajectorySelection !== null) return trajectorySelection;
+  const endpointIndex = nearestVisiblePoint(
     mouseX,
     mouseY,
     Math.max(12, DATA.options.pointSize * 1.2),
     index => project(DATA.points[index].coordinates)
   );
+  return endpointIndex === null ? null : pointSelection(endpointIndex);
+}
+
+function nearestTrajectoryPoint(mouseX, mouseY) {
+  const threshold = Math.max(12, DATA.options.pointSize * 1.25);
+  let best = null;
+  let bestDistance = threshold * threshold;
+  if (!steps) return null;
+  for (let index = 0; index < pathCount; index++) {
+    const label = DATA.trajectoryLabels[index] || "trajectory";
+    if (!isTrajectoryLabelVisible(label)) continue;
+    const screen = project(DATA.trajectory[step][index]);
+    const dx = screen.x - mouseX;
+    const dy = screen.y - mouseY;
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best === null ? null : trajectorySelection(best);
+}
+
+function pointSelection(index) {
+  return `p:${index}`;
+}
+
+function trajectorySelection(index) {
+  return `t:${index}`;
+}
+
+function parseSelection(selection) {
+  const [kind, rawIndex] = String(selection).split(":");
+  return {
+    kind: kind === "t" ? "trajectory" : "point",
+    index: Number(rawIndex),
+  };
 }
 
 function showPoint(index) {
@@ -564,7 +727,12 @@ function showPoint(index) {
   labelElement.textContent = "-";
   indexElement.textContent = "Index: -";
   if (index === null) return;
-  const point = DATA.points[index];
+  const parsed = parseSelection(index);
+  if (parsed.kind === "trajectory") {
+    showTrajectoryPoint(parsed.index);
+    return;
+  }
+  const point = DATA.points[parsed.index];
   const margin = 12;
   drawPreviewTile(
     point,
@@ -579,6 +747,31 @@ function showPoint(index) {
   appendMetric(metricsElement, "UMAP Y", point.coordinates[1]);
   appendMetric(metricsElement, "UMAP Z", point.coordinates[2]);
   appendMetric(metricsElement, "Label source", point.labelSource || "-");
+}
+
+function showTrajectoryPoint(index) {
+  const previewPoint = DATA.trajectoryPreviews[index];
+  const label = DATA.trajectoryLabels[index] || "trajectory";
+  const current = DATA.trajectory[step][index];
+  const final = DATA.trajectory[DATA.trajectory.length - 1][index];
+  const margin = 12;
+  if (previewPoint) {
+    drawPreviewTile(
+      previewPoint,
+      margin,
+      margin,
+      preview.clientWidth - margin * 2,
+      preview.clientHeight - margin * 2
+    );
+  }
+  labelElement.textContent = label || "-";
+  indexElement.textContent = `trajectory - Index: ${index} - final image`;
+  appendMetric(metricsElement, "Current UMAP X", current[0]);
+  appendMetric(metricsElement, "Current UMAP Y", current[1]);
+  appendMetric(metricsElement, "Current UMAP Z", current[2]);
+  appendMetric(metricsElement, "Final UMAP X", final[0]);
+  appendMetric(metricsElement, "Final UMAP Y", final[1]);
+  appendMetric(metricsElement, "Final UMAP Z", final[2]);
 }
 
 function setStep(value) {
@@ -618,6 +811,10 @@ slider.addEventListener("input", () => {
 playButton.addEventListener("click", () => {
   if (playing) stopPlayback();
   else startPlayback();
+});
+thumbnailToggle.addEventListener("change", () => {
+  showThumbnails = thumbnailToggle.checked;
+  requestDraw();
 });
 installCanvasPointerHandlers((_event, dx, dy) => {
   yaw += dx * 0.008;

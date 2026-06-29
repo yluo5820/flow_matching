@@ -156,10 +156,16 @@ def test_plot_umap_projected_trajectories_writes_endpoint_explorer(
     assert 'id="preview"' in html
     assert "endpoint images" in html
     assert "trajectoryLabels" in html
+    assert "trajectoryPreviews" in html
+    assert 'id="show-thumbnails"' in html
+    assert '"drawThumbnailsDefault":false' in html
+    assert "showTrajectoryPoint" in html
     assert "function initializeClassFilter(points, onChange)" in html
     assert "function drawPreviewTile(point, x, y, size)" in html
     assert result["generated_points"] == 5
     assert result["explorer"]["endpoint_points"] == 11
+    assert result["explorer"]["trajectory_preview_points"] == 3
+    assert result["explorer"]["atlas_points"] == 14
     assert observed["input_shape"] == (6 + 5 + 4 * 3, 8)
     coordinates = np.load(coordinates_path)
     assert coordinates["generated"].shape == (5, 3)

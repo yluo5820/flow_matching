@@ -369,6 +369,7 @@ def plot_umap_projected_trajectories(
                 generated=generated_projected,
                 target_images=target_np,
                 generated_images=generated_np,
+                trajectory_images=trajectory_np[-1],
                 target_labels=target_labels_np,
                 generated_labels=generated_labels_np,
                 image_shape=image_shape,
