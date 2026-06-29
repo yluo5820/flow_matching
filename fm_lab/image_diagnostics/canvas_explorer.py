@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import math
@@ -18,6 +17,13 @@ import pandas as pd
 from PIL import Image
 
 from fm_lab.image_diagnostics.config import ExplorerConfig
+from fm_lab.image_diagnostics.explorer_payload import (
+    atlas_data_url,
+    palette_payload,
+    projection_columns,
+    projection_diagnostics_payload,
+    projection_point_payload,
+)
 from fm_lab.image_diagnostics.explorer_viewer import (
     ExplorerDocument,
     build_explorer_document,
@@ -223,23 +229,20 @@ def build_canvas_html(
     """Build the complete HTML document for the canvas explorer."""
 
     explorer_config = config or ExplorerConfig(height=height)
-    projections = _projection_columns(bundle.frame, projection_names=projection_names)
+    projections = projection_columns(bundle.frame, projection_names=projection_names)
     if not projections:
         raise ValueError("Explorer data contains no UMAP, PCA, or t-SNE coordinates.")
-    points = _point_payload(bundle.frame, projections)
+    points = projection_point_payload(bundle.frame, projections)
     atlases = [atlas_data_url(path) for path in bundle.atlas_paths]
     payload = {
         "points": points,
         "atlases": atlases,
         "projections": list(projections),
-        "projectionDiagnostics": _projection_diagnostics_payload(
+        "projectionDiagnostics": projection_diagnostics_payload(
             bundle.frame,
             projections,
         ),
-        "palette": {
-            label: f"rgb({color[0]}, {color[1]}, {color[2]})"
-            for label, color in bundle.palette.items()
-        },
+        "palette": palette_payload(bundle.palette),
         "tileSize": bundle.tile_size,
         "atlasColumns": bundle.atlas_columns,
         "options": {
@@ -403,145 +406,6 @@ def _tint_grayscale(image: Image.Image, color: tuple[int, int, int]) -> Image.Im
     return Image.fromarray(rgba, mode="RGBA")
 
 
-def _projection_columns(
-    frame: pd.DataFrame,
-    *,
-    projection_names: dict[str, str] | None = None,
-) -> dict[str, tuple[str, str]]:
-    projections: dict[str, tuple[str, str]] = {}
-    columns = set(frame.columns)
-    x_columns = [column for column in frame.columns if str(column).endswith("_x")]
-    for x_column in x_columns:
-        key = str(x_column)[:-2]
-        y_column = f"{key}_y"
-        if y_column not in columns:
-            continue
-        display_name = (
-            projection_names.get(key, _projection_display_name(key))
-            if projection_names
-            else _projection_display_name(key)
-        )
-        projections[display_name] = (str(x_column), y_column)
-    return projections
-
-
-def _point_payload(
-    frame: pd.DataFrame,
-    projections: dict[str, tuple[str, str]],
-) -> list[dict[str, Any]]:
-    normalized = {
-        name: _normalized_coordinates(frame, x_column, y_column)
-        for name, (x_column, y_column) in projections.items()
-    }
-    diagnostic_columns = sample_metric_columns(frame)
-    points: list[dict[str, Any]] = []
-    for position, row in frame.iterrows():
-        details = {
-            column: _json_scalar(row.get(column))
-            for column in diagnostic_columns
-        }
-        points.append(
-            {
-                "rowId": int(row.get("row_id", position)),
-                "sourceIndex": _json_scalar(row.get("source_index", position)),
-                "label": str(row.get("label", "")),
-                "dataset": str(row.get("dataset", "")),
-                "atlas": int(row["atlas_index"]),
-                "column": int(row["atlas_column"]),
-                "row": int(row["atlas_row"]),
-                "coordinates": {
-                    name: [
-                        float(normalized[name][position, 0]),
-                        float(normalized[name][position, 1]),
-                    ]
-                    for name in projections
-                },
-                "details": details,
-            }
-        )
-    return points
-
-
-def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
-    """Return compact sample-level diagnostics suitable for hover display."""
-
-    prefixes = (
-        "knn_radius_k",
-        "knn_mean_distance_k",
-        "participation_ratio_k",
-        "mle_lid_k",
-        "pca_dim_",
-        "ball_scaling_dim_k",
-        "ball_scaling_r2_k",
-    )
-    exact = {
-        "two_nn_lid",
-        "two_nn_lid_local",
-        "outlier_score",
-        "distance_to_label_centroid",
-    }
-    return [
-        str(column)
-        for column in frame.columns
-        if str(column) in exact or str(column).startswith(prefixes)
-    ]
-
-
-def _projection_diagnostics_payload(
-    frame: pd.DataFrame,
-    projections: dict[str, tuple[str, str]],
-) -> dict[str, dict[str, dict[str, str]]]:
-    payload: dict[str, dict[str, dict[str, str]]] = {}
-    for name, (x_column, _) in projections.items():
-        projection_key = x_column[:-2]
-        details: dict[str, dict[str, str]] = {}
-        prefixes = (
-            ("knn_radius_k", "kNN radius"),
-            ("label_agreement_k", "Local label agreement"),
-        )
-        for suffix_prefix, label in prefixes:
-            column = next(
-                (
-                    str(value)
-                    for value in frame.columns
-                    if str(value).startswith(f"{projection_key}_{suffix_prefix}")
-                ),
-                None,
-            )
-            if column:
-                k_value = column.rsplit("k", 1)[-1]
-                details[f"{label} (k={k_value})"] = _float32_payload(frame[column])
-        centroid_column = f"{projection_key}_distance_to_label_centroid"
-        if centroid_column in frame:
-            details["Distance to label centroid"] = _float32_payload(
-                frame[centroid_column]
-            )
-        payload[name] = details
-    return payload
-
-
-def _float32_payload(series: pd.Series) -> dict[str, str]:
-    values = np.asarray(series, dtype="<f4")
-    return {
-        "encoding": "float32-base64",
-        "data": base64.b64encode(values.tobytes()).decode("ascii"),
-    }
-
-
-def _normalized_coordinates(
-    frame: pd.DataFrame,
-    x_column: str,
-    y_column: str,
-) -> np.ndarray:
-    values = frame[[x_column, y_column]].to_numpy(dtype=np.float64)
-    center = np.nanmean(values, axis=0, keepdims=True)
-    values = values - center
-    maximum = float(np.nanmax(np.abs(values))) if values.size else 1.0
-    if not np.isfinite(maximum) or maximum <= 0.0:
-        maximum = 1.0
-    return np.nan_to_num(values / maximum * 20.0)
-
-
 def _atlas_digest(frame: pd.DataFrame, *, tile_size: int, atlas_size: int) -> str:
     digest = hashlib.sha256(f"{tile_size}:{atlas_size}".encode())
     for row in frame.itertuples(index=False):
@@ -675,31 +539,6 @@ def _compact_atlas_path(path: Path) -> Path:
     return compact_path
 
 
-def atlas_data_url(path: Path) -> str:
-    """Return an image atlas as a MIME-correct data URL."""
-
-    mime_type = {
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-    }.get(path.suffix.lower())
-    if mime_type is None:
-        raise ValueError(f"Unsupported sprite atlas format: {path.suffix}")
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
-
-def _projection_display_name(key: str) -> str:
-    if key == "tsne":
-        return "T-SNE"
-    if key == "umap":
-        return "UMAP"
-    if key == "pca":
-        return "PCA"
-    return key.replace("_", " ").title()
-
-
 def _remove_old_atlases(directory: Path, *, keep: set[Path]) -> None:
     for path in directory.glob("atlas_*.png"):
         if path not in keep:
@@ -713,12 +552,6 @@ def _natural_sort_key(value: str) -> tuple[int, float | str]:
         return (1, value)
 
 
-def _json_scalar(value: Any) -> Any:
-    if value is None or (isinstance(value, float) and not np.isfinite(value)):
-        return None
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def _html_template(

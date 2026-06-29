@@ -11,12 +11,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from fm_lab.image_diagnostics.canvas_explorer import (
-    AtlasBundle,
-    atlas_data_url,
-    prepare_array_sprite_atlases,
-)
+from fm_lab.image_diagnostics.canvas_explorer import prepare_array_sprite_atlases
 from fm_lab.image_diagnostics.config import ExplorerConfig
+from fm_lab.image_diagnostics.explorer_payload import (
+    atlas_data_url,
+    atlas_point_payload,
+    palette_payload,
+)
 from fm_lab.image_diagnostics.explorer_viewer import (
     ExplorerDocument,
     build_explorer_document,
@@ -87,23 +88,20 @@ def write_trajectory_explorer_html(
     )
     palette = _palette_with_trajectory_labels(bundle.palette, trajectory_labels)
     payload = {
-        "points": _point_payload(
-            bundle,
+        "points": atlas_point_payload(
+            bundle.frame,
             coordinates=endpoint_coordinates,
             start=0,
             count=n_endpoint_rows,
         ),
-        "trajectoryPreviews": _point_payload(
-            bundle,
+        "trajectoryPreviews": atlas_point_payload(
+            bundle.frame,
             coordinates=trajectory[-1],
             start=n_endpoint_rows,
             count=n_trajectory_preview_rows,
         ),
         "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
-        "palette": {
-            label: f"rgb({color[0]}, {color[1]}, {color[2]})"
-            for label, color in palette.items()
-        },
+        "palette": palette_payload(palette),
         "tileSize": bundle.tile_size,
         "atlasColumns": bundle.atlas_columns,
         "trajectory": np.round(trajectory, 5).tolist(),
@@ -334,34 +332,6 @@ def _palette_with_trajectory_labels(
         if label not in updated:
             updated[label] = LABEL_PALETTE[len(updated) % len(LABEL_PALETTE)]
     return updated
-
-
-def _point_payload(
-    bundle: AtlasBundle,
-    *,
-    coordinates: np.ndarray,
-    start: int,
-    count: int,
-) -> list[dict[str, Any]]:
-    points: list[dict[str, Any]] = []
-    frame = bundle.frame.iloc[start : start + count].reset_index(drop=True)
-    for position, row in frame.iterrows():
-        bundle_position = start + position
-        points.append(
-            {
-                "rowId": int(row.get("row_id", position)),
-                "sourceIndex": int(row.get("source_index", position)),
-                "label": str(row.get("label", "")),
-                "dataset": str(row.get("dataset", "")),
-                "kind": str(row.get("kind", "")),
-                "labelSource": str(row.get("label_source", "")),
-                "atlas": int(bundle.frame.iloc[bundle_position]["atlas_index"]),
-                "column": int(bundle.frame.iloc[bundle_position]["atlas_column"]),
-                "row": int(bundle.frame.iloc[bundle_position]["atlas_row"]),
-                "coordinates": [float(value) for value in coordinates[position]],
-            }
-        )
-    return points
 
 
 def _trajectory_explorer_template(

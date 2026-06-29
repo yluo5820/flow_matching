@@ -4,24 +4,26 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import urllib.request
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
 
-import numpy as np
 import pandas as pd
 from PIL import Image
 
 from fm_lab.image_diagnostics.canvas_explorer import (
     AtlasBundle,
-    atlas_data_url,
     prepare_sprite_atlases,
-    sample_metric_columns,
 )
 from fm_lab.image_diagnostics.config import ExplorerConfig
+from fm_lab.image_diagnostics.explorer_payload import (
+    atlas_data_url,
+    projection_columns,
+    projection_diagnostics_payload,
+    projection_dimensions,
+    projection_point_payload,
+)
 
 THREE_VERSION = "0.159.0"
 THREE_URL = (
@@ -68,18 +70,24 @@ def build_three_html(
 ) -> str:
     """Build a standalone Three.js document for 2D and 3D projections."""
 
-    projections = _projection_columns(bundle.frame, projection_names=projection_names)
+    projections = projection_columns(
+        bundle.frame,
+        projection_names=projection_names,
+        include_z=True,
+    )
     if not projections:
         raise ValueError("Three.js explorer data contains no x/y projection.")
     atlas_size = _atlas_size(bundle)
     payload = {
-        "points": _point_payload(bundle.frame, projections),
+        "points": projection_point_payload(
+            bundle.frame,
+            projections,
+            output_dimensions=3,
+        ),
         "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
         "projections": list(projections),
-        "projectionDimensions": {
-            name: len(columns) for name, columns in projections.items()
-        },
-        "projectionDiagnostics": _projection_diagnostics_payload(
+        "projectionDimensions": projection_dimensions(projections),
+        "projectionDiagnostics": projection_diagnostics_payload(
             bundle.frame,
             projections,
         ),
@@ -101,136 +109,6 @@ def build_three_html(
     )
 
 
-def _projection_columns(
-    frame: pd.DataFrame,
-    *,
-    projection_names: dict[str, str] | None,
-) -> dict[str, tuple[str, ...]]:
-    projections: dict[str, tuple[str, ...]] = {}
-    columns = set(frame.columns)
-    discovered = [
-        str(column)[:-2]
-        for column in frame.columns
-        if str(column).endswith("_x")
-    ]
-    ordered_keys = [
-        *(
-            key
-            for key in (projection_names or {})
-            if f"{key}_x" in columns
-        ),
-        *(key for key in discovered if key not in (projection_names or {})),
-    ]
-    for key in ordered_keys:
-        x_column = f"{key}_x"
-        y_column = f"{key}_y"
-        z_column = f"{key}_z"
-        if y_column not in columns:
-            continue
-        display_name = (
-            projection_names.get(key, key.replace("_", " ").title())
-            if projection_names
-            else key.replace("_", " ").title()
-        )
-        projections[display_name] = (
-            (x_column, y_column, z_column)
-            if z_column in columns
-            else (x_column, y_column)
-        )
-    return projections
-
-
-def _point_payload(
-    frame: pd.DataFrame,
-    projections: dict[str, tuple[str, ...]],
-) -> list[dict[str, Any]]:
-    normalized = {
-        name: _normalized_coordinates(frame, columns)
-        for name, columns in projections.items()
-    }
-    diagnostic_columns = sample_metric_columns(frame)
-    points: list[dict[str, Any]] = []
-    for position, row in frame.iterrows():
-        points.append(
-            {
-                "rowId": int(row.get("row_id", position)),
-                "sourceIndex": _json_scalar(row.get("source_index", position)),
-                "label": str(row.get("label", "")),
-                "dataset": str(row.get("dataset", "")),
-                "atlas": int(row["atlas_index"]),
-                "column": int(row["atlas_column"]),
-                "row": int(row["atlas_row"]),
-                "coordinates": {
-                    name: [float(value) for value in normalized[name][position]]
-                    for name in projections
-                },
-                "details": {
-                    column: _json_scalar(row.get(column))
-                    for column in diagnostic_columns
-                },
-            }
-        )
-    return points
-
-
-def _projection_diagnostics_payload(
-    frame: pd.DataFrame,
-    projections: dict[str, tuple[str, ...]],
-) -> dict[str, dict[str, dict[str, str]]]:
-    payload: dict[str, dict[str, dict[str, str]]] = {}
-    for name, columns in projections.items():
-        x_column = columns[0]
-        key = x_column[:-2]
-        details: dict[str, dict[str, str]] = {}
-        for prefix, label in (
-            ("knn_radius_k", "kNN radius"),
-            ("label_agreement_k", "Local label agreement"),
-        ):
-            column = next(
-                (
-                    str(value)
-                    for value in frame.columns
-                    if str(value).startswith(f"{key}_{prefix}")
-                ),
-                None,
-            )
-            if column:
-                k_value = column.rsplit("k", 1)[-1]
-                details[f"{label} (k={k_value})"] = _float32_payload(frame[column])
-        centroid_column = f"{key}_distance_to_label_centroid"
-        if centroid_column in frame:
-            details["Distance to label centroid"] = _float32_payload(
-                frame[centroid_column]
-            )
-        payload[name] = details
-    return payload
-
-
-def _float32_payload(series: pd.Series) -> dict[str, str]:
-    values = np.asarray(series, dtype="<f4")
-    return {
-        "encoding": "float32-base64",
-        "data": base64.b64encode(values.tobytes()).decode("ascii"),
-    }
-
-
-def _normalized_coordinates(
-    frame: pd.DataFrame,
-    columns: tuple[str, ...],
-) -> np.ndarray:
-    values = frame[list(columns)].to_numpy(dtype=np.float64, copy=True)
-    values -= np.nanmean(values, axis=0, keepdims=True)
-    maximum = float(np.nanmax(np.abs(values))) if values.size else 1.0
-    if not np.isfinite(maximum) or maximum <= 0.0:
-        maximum = 1.0
-    normalized = np.nan_to_num(values / maximum * 20.0)
-    if normalized.shape[1] == 2:
-        normalized = np.column_stack(
-            [normalized, np.zeros(len(normalized), dtype=normalized.dtype)]
-        )
-    return normalized
-
-
 def _atlas_size(bundle: AtlasBundle) -> int:
     with Image.open(bundle.atlas_paths[0]) as image:
         return image.width
@@ -248,14 +126,6 @@ def _load_three_source(directory: Path) -> str:
         finally:
             temporary_path.unlink(missing_ok=True)
     return path.read_text(encoding="utf-8")
-
-
-def _json_scalar(value: Any) -> Any:
-    if value is None or (isinstance(value, float) and not np.isfinite(value)):
-        return None
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def _html_template(
