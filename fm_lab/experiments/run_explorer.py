@@ -24,9 +24,8 @@ def parse_args() -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("build-dataset", "build-variant"):
-        build = subparsers.add_parser(name, help="Build and register a dataset variant.")
-        build.add_argument("--config", required=True, help="Dataset variant YAML config.")
+    build = subparsers.add_parser("build-dataset", help="Build and register a dataset.")
+    build.add_argument("--config", required=True, help="Dataset YAML config.")
 
     view = subparsers.add_parser("build-view", help="Build a projection view for a variant.")
     view.add_argument("--dataset", required=True, help="Dataset variant id, e.g. mnist/original.")
@@ -59,7 +58,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     workspace = Path(args.workspace)
-    if args.command in {"build-dataset", "build-variant"}:
+    if args.command == "build-dataset":
         config = load_variant_config(args.config)
         result = build_dataset_variant(
             config,

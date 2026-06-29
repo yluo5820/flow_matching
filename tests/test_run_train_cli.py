@@ -74,13 +74,13 @@ def test_training_overrides_from_cli_args() -> None:
 
 def test_data_overrides_include_dataset_variant_workspace() -> None:
     args = Namespace(
-        dataset_variant="mnist/long_tail_001",
+        dataset_variant="mnist/tail_digit1",
         workspace="outputs/geometry_explorer",
     )
 
     assert _data_overrides(args) == {
         "name": "mnist",
-        "variant_id": "mnist/long_tail_001",
+        "variant_id": "mnist/tail_digit1",
         "workspace": "outputs/geometry_explorer",
     }
 

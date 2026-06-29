@@ -129,6 +129,71 @@ def test_mnist_long_tail_variant_has_exact_counts_and_training_target(
     assert target.metadata()["variant_id"] == "mnist/long_tail_test"
 
 
+def test_dataset_variant_builder_supports_fashion_mnist_and_cifar10(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fashion_root = tmp_path / "fashion_mnist"
+    cifar_root = tmp_path / "cifar10"
+    _write_fake_idx_dataset(fashion_root, split="train", count=20)
+    _write_fake_cifar10(cifar_root, count=20)
+    _patch_fashion_mnist_checksums(monkeypatch, fashion_root)
+    workspace = tmp_path / "workspace"
+
+    fashion = build_dataset_variant(
+        DatasetVariantConfig(
+            family="fashion_mnist",
+            variant="tiny",
+            split="train",
+            input={
+                "dataset_root": str(fashion_root),
+                "split": "train",
+                "download": False,
+            },
+            selection={"per_class_counts": {"0": 2, "1": 1}},
+        ),
+        workspace=workspace,
+    )
+    cifar = build_dataset_variant(
+        DatasetVariantConfig(
+            family="cifar10",
+            variant="tiny",
+            split="train",
+            input={
+                "dataset_root": str(cifar_root),
+                "split": "train",
+                "download": False,
+            },
+            selection={"per_class_counts": {"airplane": 2, "automobile": 1}},
+        ),
+        workspace=workspace,
+    )
+    cifar_gray = build_dataset_variant(
+        DatasetVariantConfig(
+            family="cifar10_grayscale",
+            variant="tiny",
+            split="train",
+            input={
+                "dataset_root": str(cifar_root),
+                "split": "train",
+                "download": False,
+            },
+            selection={"per_class_counts": {"0": 2, "1": 1}},
+        ),
+        workspace=workspace,
+    )
+
+    assert fashion["variant_id"] == "fashion_mnist/tiny"
+    assert fashion["label_counts"] == {"Trouser": 1, "T-shirt/top": 2}
+    assert np.load(fashion["data_path"]).shape == (3, 784)
+    assert cifar["variant_id"] == "cifar10/tiny"
+    assert cifar["label_counts"] == {"airplane": 2, "automobile": 1}
+    assert np.load(cifar["data_path"]).shape == (3, 32 * 32 * 3)
+    assert cifar_gray["variant_id"] == "cifar10_grayscale/tiny"
+    assert cifar_gray["label_counts"] == {"airplane": 2, "automobile": 1}
+    assert np.load(cifar_gray["data_path"]).shape == (3, 32 * 32)
+
+
 def test_build_projection_view_and_unified_dataset_payload(tmp_path: Path) -> None:
     data_root = tmp_path / "mnist"
     _write_fake_mnist(data_root, split="train", count=24)
@@ -291,6 +356,18 @@ def test_explorer_cli_launch_dry_run(tmp_path: Path, monkeypatch, capsys) -> Non
 def _write_fake_mnist(root: Path, *, split: str, count: int) -> None:
     root.mkdir(parents=True, exist_ok=True)
     prefix = "train" if split == "train" else "t10k"
+    _write_fake_idx_dataset(root, split=split, count=count, prefix=prefix)
+
+
+def _write_fake_idx_dataset(
+    root: Path,
+    *,
+    split: str,
+    count: int,
+    prefix: str | None = None,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    prefix = prefix or ("train" if split == "train" else "t10k")
     images_path = root / f"{prefix}-images-idx3-ubyte.gz"
     labels_path = root / f"{prefix}-labels-idx1-ubyte.gz"
     images = np.arange(count * 28 * 28, dtype=np.uint8)
@@ -301,3 +378,29 @@ def _write_fake_mnist(root: Path, *, split: str, count: int) -> None:
     with gzip.open(labels_path, "wb") as handle:
         handle.write(struct.pack(">II", 2049, count))
         handle.write(labels.tobytes())
+
+
+def _write_fake_cifar10(root: Path, *, count: int) -> None:
+    data_dir = root / "cifar-10-batches-bin"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    labels = np.arange(count, dtype=np.uint8) % 10
+    images = np.arange(count * 32 * 32 * 3, dtype=np.uint8).reshape(count, -1)
+    records = np.column_stack([labels, images]).astype(np.uint8)
+    for index in range(1, 6):
+        batch = records if index == 1 else np.empty((0, 3073), dtype=np.uint8)
+        batch.tofile(data_dir / f"data_batch_{index}.bin")
+
+
+def _patch_fashion_mnist_checksums(monkeypatch, root: Path) -> None:
+    import hashlib
+
+    import fm_lab.image_diagnostics.dataset_loader as dataset_loader
+
+    replacements = {}
+    for path in root.glob("*-idx*-ubyte.gz"):
+        replacements[path.name] = hashlib.md5(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        dataset_loader,
+        "FASHION_MNIST_FILES",
+        dataset_loader.FASHION_MNIST_FILES | replacements,
+    )

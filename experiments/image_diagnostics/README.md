@@ -21,8 +21,23 @@ Large artifacts stay outside SQLite: dataset indexes are Parquet, arrays are
 fm-lab-explorer build-dataset \
   --config configs/geometry_explorer/mnist_original.yaml
 
-fm-lab-explorer build-variant \
-  --config configs/geometry_explorer/mnist_long_tail_001.yaml
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/fashion_mnist_original.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/cifar10_original.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/cifar10_grayscale_original.yaml
 ```
 
 ## Build Projection Views
@@ -30,11 +45,19 @@ fm-lab-explorer build-variant \
 ```bash
 fm-lab-explorer build-view \
   --dataset mnist/original \
-  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+  --config configs/geometry_explorer/raw_geometry_view.yaml
 
 fm-lab-explorer build-view \
-  --dataset mnist/long_tail_001 \
-  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+  --dataset mnist/tail_digit1 \
+  --config configs/geometry_explorer/raw_geometry_view.yaml
+
+fm-lab-explorer build-view \
+  --dataset fashion_mnist/original \
+  --config configs/geometry_explorer/raw_geometry_view.yaml
+
+fm-lab-explorer build-view \
+  --dataset cifar10/original \
+  --config configs/geometry_explorer/raw_geometry_view.yaml
 ```
 
 ## Train On A Variant
@@ -42,7 +65,7 @@ fm-lab-explorer build-view \
 ```bash
 fm-lab-train \
   --config configs/mnist/mnist_image_unet_ot.yaml \
-  --dataset-variant mnist/long_tail_001 \
+  --dataset-variant mnist/tail_digit1 \
   --workspace outputs/geometry_explorer
 ```
 

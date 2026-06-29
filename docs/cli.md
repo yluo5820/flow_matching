@@ -69,7 +69,7 @@ Key options:
 | `--output-dir` | Override `experiment.output_dir`. |
 | `--dry-run` | Create run directory and metadata without training. |
 | `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
-| `--dataset-variant` | Registered dataset variant id, e.g. `mnist/long_tail_001`. |
+| `--dataset-variant` | Registered dataset variant id, e.g. `mnist/tail_digit1`. |
 | `--workspace` | Geometry explorer workspace used to resolve `--dataset-variant`. |
 | `--steps` | Override `training.steps`. When early stopping is enabled, this is the maximum step count. |
 | `--batch-size` | Override `training.batch_size`. |
@@ -206,7 +206,7 @@ To train on a registered MNIST variant from the unified geometry explorer:
 ```bash
 fm-lab-train \
   --config configs/mnist/mnist_image_unet_ot.yaml \
-  --dataset-variant mnist/long_tail_001 \
+  --dataset-variant mnist/tail_digit1 \
   --workspace outputs/geometry_explorer \
   --device auto
 ```
@@ -408,12 +408,18 @@ Build and launch the unified registry-backed geometry explorer.
 fm-lab-explorer build-dataset \
   --config configs/geometry_explorer/mnist_original.yaml
 
-fm-lab-explorer build-variant \
-  --config configs/geometry_explorer/mnist_long_tail_001.yaml
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
 
 fm-lab-explorer build-view \
-  --dataset mnist/long_tail_001 \
-  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+  --dataset mnist/tail_digit1 \
+  --config configs/geometry_explorer/raw_geometry_view.yaml
 
 fm-lab-explorer build-trajectory \
   --run-dir runs/mnist_image_unet_ot \
@@ -427,8 +433,7 @@ Key options:
 | Option | Meaning |
 |---|---|
 | `--workspace` | Geometry explorer workspace. Defaults to `outputs/geometry_explorer`. |
-| `build-dataset --config` | Build a canonical dataset variant, such as `mnist/original`. |
-| `build-variant --config` | Build an edited dataset variant, such as long-tail MNIST. |
+| `build-dataset --config` | Build any dataset instance from config: original, edited, long-tail, grayscale, etc. |
 | `build-view --dataset --config` | Build projections and diagnostics for a registered variant. |
 | `build-trajectory --run-dir` | Project and register saved trajectory arrays from a completed run. |
 | `launch` | Start the Streamlit UI. Use `--dry-run` to print the launch command. |

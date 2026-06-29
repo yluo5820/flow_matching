@@ -47,8 +47,9 @@ def load_variant_config(path: str | Path) -> DatasetVariantConfig:
 def variant_config_from_dict(raw: dict[str, Any]) -> DatasetVariantConfig:
     values = dict(raw)
     family = str(values.get("family", "mnist")).lower()
-    if family != "mnist":
-        raise ConfigError("Only family: mnist variants are supported in this first pass.")
+    if family not in _SUPPORTED_FAMILIES:
+        supported = ", ".join(sorted(_SUPPORTED_FAMILIES))
+        raise ConfigError(f"Unsupported dataset family {family!r}. Supported: {supported}.")
     return DatasetVariantConfig(
         family=family,
         variant=str(values.get("variant", "original")),
@@ -69,12 +70,10 @@ def build_dataset_variant(
 ) -> dict[str, Any]:
     """Build and register one concrete dataset variant."""
 
-    if config.family != "mnist":
-        raise ConfigError("Only MNIST variants are supported.")
     registry = GeometryRegistry(workspace)
     output_dir = registry.workspace / "datasets" / config.family / config.variant
     output_dir.mkdir(parents=True, exist_ok=True)
-    input_config = _mnist_input_config(config)
+    input_config = _input_config(config)
     dataset = load_dataset(
         input_config,
         project_root=project_root,
@@ -107,7 +106,7 @@ def build_dataset_variant(
         "seed": config.seed,
         "rows": int(len(metadata)),
         "label_counts": label_counts,
-        "image_shape": list(dataset.image_shape or (28, 28)),
+        "image_shape": list(dataset.image_shape or _default_image_shape(config.family)),
         "value_range": list(dataset.value_range or (0.0, 1.0)),
         "dataset_path": str(dataset_path),
         "data_path": str(data_path),
@@ -126,7 +125,7 @@ def build_dataset_variant(
         config_path=config_path or output_dir / "config_used.yaml",
         row_count=len(metadata),
         label_counts=label_counts,
-        image_shape=dataset.image_shape or (28, 28),
+        image_shape=dataset.image_shape or _default_image_shape(config.family),
         value_range=dataset.value_range or (0.0, 1.0),
     )
     return {
@@ -165,16 +164,38 @@ def load_variant_bundle(
     )
 
 
-def _mnist_input_config(config: DatasetVariantConfig) -> InputConfig:
+_SUPPORTED_FAMILIES = {"mnist", "fashion_mnist", "cifar10", "cifar10_grayscale"}
+
+
+def _input_config(config: DatasetVariantConfig) -> InputConfig:
     values = dict(config.input)
-    values.setdefault("type", "mnist")
-    values.setdefault("dataset_root", "data/mnist")
+    if config.family == "fashion_mnist":
+        values.setdefault("type", "fashion_mnist")
+        values.setdefault("dataset_root", "data/fashion_mnist")
+    elif config.family in {"cifar10", "cifar10_grayscale"}:
+        values.setdefault("type", "cifar10")
+        values.setdefault("dataset_root", "data/cifar10")
+        values.setdefault(
+            "color_mode",
+            "grayscale" if config.family == "cifar10_grayscale" else "rgb",
+        )
+    else:
+        values.setdefault("type", "mnist")
+        values.setdefault("dataset_root", "data/mnist")
     values.setdefault("split", config.split)
     values.setdefault("order", "mldata" if config.split == "all" else "source")
     values.setdefault("thumbnail_mode", "atlas")
     values.setdefault("download", False)
     values["max_samples"] = None
     return InputConfig(**values)
+
+
+def _default_image_shape(family: str) -> tuple[int, ...]:
+    if family == "cifar10":
+        return (32, 32, 3)
+    if family == "cifar10_grayscale":
+        return (32, 32)
+    return (28, 28)
 
 
 def _select_positions(
@@ -187,8 +208,8 @@ def _select_positions(
     counts = {str(key): int(value) for key, value in per_class_counts.items()}
     rng = np.random.default_rng(config.seed)
     selected: list[int] = []
-    labels = metadata["label"].astype(str).to_numpy()
-    for label, count in sorted(counts.items(), key=lambda item: float(item[0])):
+    labels = _selection_label_keys(metadata, counts)
+    for label, count in sorted(counts.items(), key=lambda item: _label_sort_key(item[0])):
         candidates = np.flatnonzero(labels == label)
         if count < 0:
             raise ConfigError(f"Class count for label {label!r} must be non-negative.")
@@ -201,6 +222,23 @@ def _select_positions(
         rng.shuffle(shuffled)
         selected.extend(int(value) for value in shuffled[:count])
     return np.asarray(sorted(selected), dtype=int)
+
+
+def _selection_label_keys(metadata: pd.DataFrame, counts: dict[str, int]) -> np.ndarray:
+    labels = metadata["label"].astype(str).to_numpy()
+    missing = set(counts) - set(labels)
+    if not missing or "label_id" not in metadata:
+        return labels
+    label_ids = metadata["label_id"].astype(str).to_numpy()
+    id_missing = set(counts) - set(label_ids)
+    return label_ids if len(id_missing) < len(missing) else labels
+
+
+def _label_sort_key(value: str) -> tuple[int, float | str]:
+    try:
+        return (0, float(value))
+    except ValueError:
+        return (1, value)
 
 
 def _labels_array(metadata: pd.DataFrame) -> np.ndarray:

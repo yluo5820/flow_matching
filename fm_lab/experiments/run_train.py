@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-variant",
         default=None,
-        help="Registered dataset variant id, e.g. mnist/long_tail_001.",
+        help="Registered dataset variant id, e.g. mnist/tail_digit1.",
     )
     parser.add_argument(
         "--workspace",

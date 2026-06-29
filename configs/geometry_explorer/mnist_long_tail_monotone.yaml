@@ -1,5 +1,5 @@
 family: mnist
-variant: long_tail_001
+variant: long_tail_monotone
 base: original
 split: all
 seed: 42

@@ -163,16 +163,22 @@ dataset variants, projection views, and optional model trajectory views under
 fm-lab-explorer build-dataset \
   --config configs/geometry_explorer/mnist_original.yaml
 
-fm-lab-explorer build-variant \
-  --config configs/geometry_explorer/mnist_long_tail_001.yaml
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
 
 fm-lab-explorer build-view \
   --dataset mnist/original \
-  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+  --config configs/geometry_explorer/raw_geometry_view.yaml
 
 fm-lab-explorer build-view \
-  --dataset mnist/long_tail_001 \
-  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+  --dataset mnist/tail_digit1 \
+  --config configs/geometry_explorer/raw_geometry_view.yaml
 
 fm-lab-explorer launch
 ```

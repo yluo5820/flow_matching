@@ -1,11 +1,9 @@
-explorer_name: mnist_raw_geometry_view
+explorer_name: raw_geometry_view
 
 input:
   type: numpy
   data_path: unused.npy
   labels_path: unused.npy
-  image_shape: [28, 28]
-  value_range: [0.0, 1.0]
 
 features:
   mode: raw
