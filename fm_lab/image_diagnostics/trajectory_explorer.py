@@ -449,17 +449,7 @@ function computeBounds() {
 }
 
 function resize() {
-  const rect = main.getBoundingClientRect();
-  width = Math.max(1, rect.width);
-  height = Math.max(1, rect.height);
-  pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-  canvas.width = Math.round(width * pixelRatio);
-  canvas.height = Math.round(height * pixelRatio);
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  preview.width = Math.round(preview.clientWidth * pixelRatio);
-  preview.height = Math.round(preview.clientHeight * pixelRatio);
-  previewContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  requestDraw();
+  resizeExplorerCanvases(requestDraw);
 }
 
 function project(point) {
@@ -560,20 +550,12 @@ function drawHighlight(index) {
 }
 
 function nearestPoint(mouseX, mouseY) {
-  const threshold = Math.max(12, DATA.options.pointSize * 1.2);
-  let best = null;
-  let bestDistance = threshold * threshold;
-  for (const index of visibleIndices) {
-    const screen = project(DATA.points[index].coordinates);
-    const dx = screen.x - mouseX;
-    const dy = screen.y - mouseY;
-    const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {
-      best = index;
-      bestDistance = distance;
-    }
-  }
-  return best;
+  return nearestVisiblePoint(
+    mouseX,
+    mouseY,
+    Math.max(12, DATA.options.pointSize * 1.2),
+    index => project(DATA.points[index].coordinates)
+  );
 }
 
 function showPoint(index) {
@@ -597,13 +579,6 @@ function showPoint(index) {
   appendMetric(metricsElement, "UMAP Y", point.coordinates[1]);
   appendMetric(metricsElement, "UMAP Z", point.coordinates[2]);
   appendMetric(metricsElement, "Label source", point.labelSource || "-");
-}
-
-function requestDraw() {
-  if (!frameRequested) {
-    frameRequested = true;
-    requestAnimationFrame(draw);
-  }
 }
 
 function setStep(value) {
@@ -644,53 +619,10 @@ playButton.addEventListener("click", () => {
   if (playing) stopPlayback();
   else startPlayback();
 });
-canvas.addEventListener("pointerdown", event => {
-  dragging = true;
-  moved = false;
-  dragX = event.clientX;
-  dragY = event.clientY;
-  canvas.classList.add("dragging");
-  canvas.setPointerCapture(event.pointerId);
-});
-canvas.addEventListener("pointermove", event => {
-  const rect = canvas.getBoundingClientRect();
-  if (dragging) {
-    const dx = event.clientX - dragX;
-    const dy = event.clientY - dragY;
-    if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
-    yaw += dx * 0.008;
-    pitch += dy * 0.008;
-    pitch = Math.max(-1.45, Math.min(1.45, pitch));
-    dragX = event.clientX;
-    dragY = event.clientY;
-    requestDraw();
-    return;
-  }
-  if (pinnedIndex !== null) return;
-  hoverIndex = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
-  showPoint(hoverIndex);
-  requestDraw();
-});
-canvas.addEventListener("pointerup", event => {
-  dragging = false;
-  canvas.classList.remove("dragging");
-  if (!moved) {
-    const rect = canvas.getBoundingClientRect();
-    const selected = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
-    pinnedIndex = pinnedIndex === selected ? null : selected;
-    hoverIndex = selected;
-    showPoint(pinnedIndex !== null ? pinnedIndex : hoverIndex);
-  }
-  requestDraw();
-});
-canvas.addEventListener("pointerleave", () => {
-  dragging = false;
-  canvas.classList.remove("dragging");
-  if (pinnedIndex === null) {
-    hoverIndex = null;
-    showPoint(null);
-    requestDraw();
-  }
+installCanvasPointerHandlers((_event, dx, dy) => {
+  yaw += dx * 0.008;
+  pitch += dy * 0.008;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch));
 });
 canvas.addEventListener("wheel", event => {
   event.preventDefault();

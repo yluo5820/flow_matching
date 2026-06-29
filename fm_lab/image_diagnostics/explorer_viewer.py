@@ -301,6 +301,94 @@ function clearPreview() {
   previewContext.fillRect(0, 0, preview.clientWidth, preview.clientHeight);
 }
 
+function resizeExplorerCanvases(afterResize) {
+  const rect = main.getBoundingClientRect();
+  width = Math.max(1, rect.width);
+  height = Math.max(1, rect.height);
+  pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = Math.round(width * pixelRatio);
+  canvas.height = Math.round(height * pixelRatio);
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  preview.width = Math.round(preview.clientWidth * pixelRatio);
+  preview.height = Math.round(preview.clientHeight * pixelRatio);
+  previewContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  afterResize();
+}
+
+function requestDraw() {
+  if (!frameRequested) {
+    frameRequested = true;
+    requestAnimationFrame(draw);
+  }
+}
+
+function installCanvasPointerHandlers(onDragMove) {
+  canvas.addEventListener("pointerdown", event => {
+    dragging = true;
+    moved = false;
+    dragX = event.clientX;
+    dragY = event.clientY;
+    canvas.classList.add("dragging");
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener("pointermove", event => {
+    const rect = canvas.getBoundingClientRect();
+    if (dragging) {
+      const dx = event.clientX - dragX;
+      const dy = event.clientY - dragY;
+      if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+      onDragMove(event, dx, dy);
+      dragX = event.clientX;
+      dragY = event.clientY;
+      requestDraw();
+      return;
+    }
+    if (pinnedIndex !== null) return;
+    hoverIndex = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
+    showPoint(hoverIndex);
+    requestDraw();
+  });
+  canvas.addEventListener("pointerup", event => {
+    dragging = false;
+    canvas.classList.remove("dragging");
+    if (!moved) {
+      const rect = canvas.getBoundingClientRect();
+      const selected = nearestPoint(event.clientX - rect.left, event.clientY - rect.top);
+      pinnedIndex = pinnedIndex === selected ? null : selected;
+      hoverIndex = selected;
+      showPoint(pinnedIndex !== null ? pinnedIndex : hoverIndex);
+    }
+    requestDraw();
+  });
+  canvas.addEventListener("pointerleave", () => {
+    dragging = false;
+    canvas.classList.remove("dragging");
+    if (pinnedIndex === null) {
+      hoverIndex = null;
+      showPoint(null);
+      requestDraw();
+    }
+  });
+}
+
+function nearestVisiblePoint(mouseX, mouseY, threshold, screenForIndex) {
+  let best = null;
+  let bestDistance = threshold * threshold;
+  for (const index of visibleIndices) {
+    const screen = screenForIndex(index);
+    const screenX = Array.isArray(screen) ? screen[0] : screen.x;
+    const screenY = Array.isArray(screen) ? screen[1] : screen.y;
+    const dx = screenX - mouseX;
+    const dy = screenY - mouseY;
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 function appendMetric(container, name, value) {
   if (value === null) return;
   const key = document.createElement("span");
