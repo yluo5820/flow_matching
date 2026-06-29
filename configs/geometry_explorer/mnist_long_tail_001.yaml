@@ -1,0 +1,25 @@
+family: mnist
+variant: long_tail_001
+base: original
+split: all
+seed: 42
+
+input:
+  dataset_root: data/mnist
+  split: all
+  order: mldata
+  thumbnail_mode: atlas
+  download: false
+
+selection:
+  per_class_counts:
+    "0": 6000
+    "1": 4800
+    "2": 3600
+    "3": 2400
+    "4": 1600
+    "5": 1000
+    "6": 700
+    "7": 450
+    "8": 300
+    "9": 150

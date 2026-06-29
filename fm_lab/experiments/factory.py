@@ -21,6 +21,7 @@ from fm_lab.data import (
     HelixMixture,
     LineSegment3D,
     MNISTImages,
+    MNISTVariantImages,
     MoebiusStrip,
     MultiSwissRoll,
     MultiTorus,
@@ -78,6 +79,13 @@ def build_target(config: dict[str, Any]):
             std=float(data_config.get("std", 0.08)),
         )
     if name == "mnist":
+        if data_config.get("variant_id"):
+            return MNISTVariantImages(
+                variant_id=str(data_config["variant_id"]),
+                workspace=data_config.get("workspace", "outputs/geometry_explorer"),
+                normalize=str(data_config.get("normalize", "zero_one")),
+                dequantize=bool(data_config.get("dequantize", False)),
+            )
         return MNISTImages(
             root=data_config.get("root", "data/mnist"),
             train=bool(data_config.get("train", True)),

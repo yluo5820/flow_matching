@@ -3,6 +3,90 @@
 This module builds an interactive UMAP explorer for image or vector datasets.
 It is independent of any image-generation model.
 
+## Unified Geometry Explorer Workflow
+
+The newer unified workflow stores dataset variants, projection views, and model
+trajectory views under one workspace:
+
+```text
+outputs/geometry_explorer/
+  registry.sqlite
+  datasets/<family>/<variant>/
+  model_runs/<family>/<variant>/<run_id>/
+```
+
+The registry is SQLite metadata only. Large tables remain Parquet, arrays
+remain `.npy`/`.npz`, and thumbnails remain cached atlas images.
+
+Build the canonical MNIST variant:
+
+```bash
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_original.yaml
+```
+
+Build a handmade long-tail MNIST variant:
+
+```bash
+fm-lab-explorer build-variant \
+  --config configs/geometry_explorer/mnist_long_tail_001.yaml
+```
+
+Build a raw-pixel projection view for either variant:
+
+```bash
+fm-lab-explorer build-view \
+  --dataset mnist/original \
+  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+
+fm-lab-explorer build-view \
+  --dataset mnist/long_tail_001 \
+  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+```
+
+Train a flow-matching model on a registered variant:
+
+```bash
+fm-lab-train \
+  --config configs/mnist/mnist_image_unet_ot.yaml \
+  --dataset-variant mnist/long_tail_001 \
+  --workspace outputs/geometry_explorer
+```
+
+Project and register that run's sampling trajectories:
+
+```bash
+fm-lab-explorer build-trajectory \
+  --run-dir runs/mnist_image_unet_ot \
+  --nfe 64 \
+  --max-trajectories 512
+```
+
+Launch the unified UI:
+
+```bash
+fm-lab-explorer launch
+```
+
+Or launch through Streamlit directly:
+
+```bash
+streamlit run experiments/geometry_explorer_app.py -- \
+  --workspace outputs/geometry_explorer
+```
+
+The unified UI has selectors for dataset family, dataset variant, projection
+view, mode, and trajectory run when available. Dataset mode shows the original
+projection explorer view. Trajectory mode shows endpoints, cumulative paths,
+a time slider, class filtering, layer toggles, and the selected sample's image
+in the sidebar.
+
+Existing explorer outputs and training runs can be indexed without rebuilding:
+
+```bash
+fm-lab-explorer import-existing
+```
+
 The processing pipeline is:
 
 ```text

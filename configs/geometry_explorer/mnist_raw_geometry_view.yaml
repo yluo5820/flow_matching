@@ -1,0 +1,74 @@
+explorer_name: mnist_raw_geometry_view
+
+input:
+  type: numpy
+  data_path: unused.npy
+  labels_path: unused.npy
+  image_shape: [28, 28]
+  value_range: [0.0, 1.0]
+
+features:
+  mode: raw
+  name: raw_pixels
+  normalize: false
+  skip_existing: true
+
+projection:
+  skip_existing: true
+  variants:
+    - name: UMAP 3D (k=15)
+      key: umap_3d
+      method: umap
+      n_components: 3
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: euclidean
+      random_state: 42
+    - name: PCA 3D
+      key: pca_3d
+      method: pca
+      n_components: 3
+      random_state: 42
+
+diagnostics:
+  enabled: true
+  k_neighbors: 15
+  metric: euclidean
+  covariance_eigenvalues: 5
+  compute_knn_radius: true
+  compute_covariance_spectrum: true
+  compute_participation_ratio: true
+  compute_two_nn_lid: true
+  compute_centroid_distances: true
+  compute_outlier_score: true
+  skip_existing: true
+
+output:
+  root_dir: outputs/geometry_explorer/views
+  save_features: true
+  save_projection: true
+  save_diagnostics: true
+  save_explorer_data: true
+
+explorer:
+  enabled: true
+  app_type: streamlit
+  renderer: three3d
+  height: 760
+  sidebar_width: 300
+  point_size: 14
+  hover_size: 58
+  atlas_tile_size: 28
+  atlas_size: 2048
+  selector_label: Projection
+  preview_mode: original
+  show_metrics: true
+  show_legend: false
+  show_view_controls: true
+  show_instructions: false
+  show_workspace: false
+  compute_projection_diagnostics: true
+  projection_diagnostics_k: 15
+
+id_estimation:
+  enabled: false

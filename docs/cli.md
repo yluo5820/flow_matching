@@ -36,6 +36,7 @@ When adding or changing a CLI:
 | Command | Purpose | Primary input | Main outputs |
 |---|---|---|---|
 | `fm-lab-train` | Train one flow model and sample it. | Toy YAML config | checkpoint, metrics, samples, loss/sample/trajectory plots |
+| `fm-lab-explorer` | Build and launch the unified geometry explorer. | Dataset variant/projection/run configs | SQLite registry, dataset variants, projection views, trajectory views |
 | `fm-lab-diagnostics` | Estimate path-law ambiguity before training. | Toy YAML config | ambiguity CSV/JSON, heatmaps, raw grids |
 | `fm-lab-field-diagnostics` | Measure learned-field curvature/Jacobian stats. | Checkpoint | field stats CSV |
 | `fm-lab-solver-sensitivity` | Compare generated samples across solvers/NFEs. | Checkpoint | pairwise distance CSVs, matrices |
@@ -69,6 +70,8 @@ Key options:
 | `--output-dir` | Override `experiment.output_dir`. |
 | `--dry-run` | Create run directory and metadata without training. |
 | `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+| `--dataset-variant` | Registered dataset variant id, e.g. `mnist/long_tail_001`. |
+| `--workspace` | Geometry explorer workspace used to resolve `--dataset-variant`. |
 | `--steps` | Override `training.steps`. When early stopping is enabled, this is the maximum step count. |
 | `--batch-size` | Override `training.batch_size`. |
 | `--n-samples` | Override `sampling.n_samples`. |
@@ -198,6 +201,16 @@ The MNIST configs also enable `sampling.trajectory_umap`, which writes
 `plots/trajectory_umap3d_<solver>_nfe*.png`,
 `plots/trajectory_umap3d_<solver>_nfe*.html`, and
 `trajectories/<solver>_nfe*_umap3d.npz`.
+
+To train on a registered MNIST variant from the unified geometry explorer:
+
+```bash
+fm-lab-train \
+  --config configs/mnist/mnist_image_unet_ot.yaml \
+  --dataset-variant mnist/long_tail_001 \
+  --workspace outputs/geometry_explorer \
+  --device auto
+```
 
 Experimental MNIST configs also include `configs/mnist/mnist_direction_only_image_unet_ot.yaml`
 and `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml`.
@@ -387,6 +400,53 @@ run_dir/
   plots/generated_samples_nfe*.png
   plots/trajectories_*_nfe*.png
 ```
+
+## `fm-lab-explorer`
+
+Build and launch the unified registry-backed geometry explorer.
+
+```bash
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_original.yaml
+
+fm-lab-explorer build-variant \
+  --config configs/geometry_explorer/mnist_long_tail_001.yaml
+
+fm-lab-explorer build-view \
+  --dataset mnist/long_tail_001 \
+  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
+
+fm-lab-explorer build-trajectory \
+  --run-dir runs/mnist_image_unet_ot \
+  --nfe 64
+
+fm-lab-explorer launch
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--workspace` | Geometry explorer workspace. Defaults to `outputs/geometry_explorer`. |
+| `build-dataset --config` | Build a canonical dataset variant, such as `mnist/original`. |
+| `build-variant --config` | Build an edited dataset variant, such as long-tail MNIST. |
+| `build-view --dataset --config` | Build projections and diagnostics for a registered variant. |
+| `build-trajectory --run-dir` | Project and register saved trajectory arrays from a completed run. |
+| `import-existing` | Index existing `outputs/dataset_explorer/*` and `runs/*` artifacts. |
+| `launch` | Start the Streamlit UI. Use `--dry-run` to print the launch command. |
+
+Main workspace layout:
+
+```text
+outputs/geometry_explorer/
+  registry.sqlite
+  datasets/<family>/<variant>/
+  model_runs/<family>/<variant>/<run_id>/
+```
+
+The registry stores metadata and paths only. Large explorer tables remain Parquet,
+trajectory coordinates remain `.npz`, sample arrays remain `.npy`, and thumbnails remain
+atlas image files.
 
 ## `fm-lab-sample-checkpoint`
 

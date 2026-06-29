@@ -224,6 +224,43 @@ def normalized_coordinates(
     return normalized
 
 
+def normalize_coordinate_arrays(
+    *arrays: np.ndarray,
+    output_dimensions: int = 3,
+) -> list[np.ndarray]:
+    """Center/scale several coordinate arrays in one shared coordinate system."""
+
+    reshaped = []
+    for values in arrays:
+        array = np.asarray(values, dtype=np.float64)
+        if array.size == 0:
+            reshaped.append(array.reshape(*array.shape[:-1], output_dimensions))
+            continue
+        if array.shape[-1] < output_dimensions:
+            padding = np.zeros(
+                (*array.shape[:-1], output_dimensions - array.shape[-1]),
+                dtype=array.dtype,
+            )
+            array = np.concatenate([array, padding], axis=-1)
+        reshaped.append(array[..., :output_dimensions])
+    flattened = [
+        values.reshape(-1, output_dimensions)
+        for values in reshaped
+        if values.size > 0
+    ]
+    if not flattened:
+        return [np.asarray(values, dtype=np.float32) for values in reshaped]
+    combined = np.concatenate(flattened, axis=0)
+    center = np.nanmean(combined, axis=0, keepdims=True)
+    maximum = float(np.nanmax(np.abs(combined - center))) if combined.size else 1.0
+    if not np.isfinite(maximum) or maximum <= 0.0:
+        maximum = 1.0
+    return [
+        np.nan_to_num((values - center) / maximum * 20.0).astype(np.float32)
+        for values in reshaped
+    ]
+
+
 def atlas_point_fields(row: pd.Series, position: int) -> dict[str, Any]:
     """Return the shared metadata and atlas tile location for one point."""
 

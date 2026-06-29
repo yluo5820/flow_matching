@@ -33,6 +33,16 @@ def parse_args() -> argparse.Namespace:
         help="Device override: auto, cpu, cuda, or mps.",
     )
     parser.add_argument(
+        "--dataset-variant",
+        default=None,
+        help="Registered dataset variant id, e.g. mnist/long_tail_001.",
+    )
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Geometry explorer workspace used to resolve --dataset-variant.",
+    )
+    parser.add_argument(
         "--steps",
         type=int,
         default=None,
@@ -107,6 +117,9 @@ def main() -> None:
         config = deep_update(config, {"training": training_overrides})
     if args.output_dir is not None:
         config = deep_update(config, {"experiment": {"output_dir": args.output_dir}})
+    data_overrides = _data_overrides(args)
+    if data_overrides:
+        config = deep_update(config, {"data": data_overrides})
     sampling_overrides = _sampling_overrides(args)
     if sampling_overrides:
         config = deep_update(config, {"sampling": sampling_overrides})
@@ -153,6 +166,13 @@ def main() -> None:
         solvers=solvers,
         device=device,
     )
+    if config.get("data", {}).get("variant_id"):
+        from fm_lab.geometry_explorer.trajectories import register_completed_run
+
+        register_completed_run(
+            run_dir,
+            workspace=config.get("data", {}).get("workspace", "outputs/geometry_explorer"),
+        )
     print(f"Finished run: {run_dir}")
     early_stopping = metrics.get("early_stopping", {})
     if early_stopping.get("stopped"):
@@ -192,6 +212,16 @@ def _training_overrides(args: argparse.Namespace) -> dict:
     if args.batch_size is not None:
         training["batch_size"] = args.batch_size
     return training
+
+
+def _data_overrides(args: argparse.Namespace) -> dict:
+    data = {}
+    if args.dataset_variant is not None:
+        data["variant_id"] = args.dataset_variant
+        data["name"] = args.dataset_variant.split("/", 1)[0]
+    if args.workspace is not None:
+        data["workspace"] = args.workspace
+    return data
 
 
 def _sampling_overrides(args: argparse.Namespace) -> dict:

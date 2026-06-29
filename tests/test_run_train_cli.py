@@ -6,6 +6,7 @@ from fm_lab.experiments.run_sample_checkpoint import (
     _sampling_overrides as _checkpoint_sampling_overrides,
 )
 from fm_lab.experiments.run_train import (
+    _data_overrides,
     _objective_overrides,
     _sampling_overrides,
     _training_overrides,
@@ -68,6 +69,19 @@ def test_training_overrides_from_cli_args() -> None:
     assert _training_overrides(args) == {
         "steps": 1234,
         "batch_size": 256,
+    }
+
+
+def test_data_overrides_include_dataset_variant_workspace() -> None:
+    args = Namespace(
+        dataset_variant="mnist/long_tail_001",
+        workspace="outputs/geometry_explorer",
+    )
+
+    assert _data_overrides(args) == {
+        "name": "mnist",
+        "variant_id": "mnist/long_tail_001",
+        "workspace": "outputs/geometry_explorer",
     }
 
 
