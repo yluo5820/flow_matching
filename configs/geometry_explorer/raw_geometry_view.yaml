@@ -69,4 +69,4 @@ explorer:
   projection_diagnostics_k: 15
 
 id_estimation:
-  enabled: false
+  enabled: true

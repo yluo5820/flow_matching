@@ -249,9 +249,85 @@ id_estimation:
     assert payload["mode"] == "dataset"
     assert payload["projectionDimensions"] == {"PCA 3D": 3}
     assert len(payload["points"]) == 6
+    assert payload["atlasSize"] >= payload["tileSize"]
     assert "THREE.PerspectiveCamera" in html
+    assert "texture2D(textureAtlas" in html
+    assert "Diagnostics · ${projection}" in html
     assert 'id="show-thumbnails"' in html
     assert 'id="class-filter"' in html
+
+
+def test_build_projection_view_registers_id_merged_explorer_data(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "mnist"
+    _write_fake_mnist(data_root, split="train", count=24)
+    workspace = tmp_path / "workspace"
+    build_dataset_variant(
+        DatasetVariantConfig(
+            family="mnist",
+            variant="small_id",
+            split="train",
+            input={"dataset_root": str(data_root), "split": "train"},
+            selection={"per_class_counts": {"0": 2, "1": 2, "2": 2}},
+        ),
+        workspace=workspace,
+    )
+    config_path = tmp_path / "view_id.yaml"
+    config_path.write_text(
+        """
+explorer_name: small_id_view
+input:
+  type: numpy
+  data_path: unused.npy
+features:
+  mode: raw
+  name: raw_pixels
+  skip_existing: false
+projection:
+  variants:
+    - name: PCA 3D
+      key: pca_3d
+      method: pca
+      n_components: 3
+diagnostics:
+  enabled: false
+output:
+  root_dir: unused
+  save_features: true
+explorer:
+  renderer: three3d
+  compute_projection_diagnostics: false
+id_estimation:
+  enabled: true
+""",
+        encoding="utf-8",
+    )
+
+    def fake_run_id_estimation(config, *, project_root=None):
+        del project_root
+        explorer_path = Path(config.input.diagnostics_dir) / config.input.explorer_data_path
+        frame = pd.read_parquet(explorer_path)
+        frame["mle_lid_k15"] = np.linspace(1.0, 2.0, len(frame))
+        merged_path = explorer_path.with_name("explorer_data_with_raw_pixels_id.parquet")
+        frame.to_parquet(merged_path, index=False)
+        return {"merged_explorer_path": str(merged_path)}
+
+    monkeypatch.setattr(
+        "fm_lab.geometry_explorer.views.run_id_estimation",
+        fake_run_id_estimation,
+    )
+
+    result = build_projection_view(
+        variant_id="mnist/small_id",
+        config_path=config_path,
+        workspace=workspace,
+    )
+    payload = load_projection_payload(result["view_id"], workspace=workspace)
+
+    assert Path(result["explorer_data"]).name == "explorer_data_with_raw_pixels_id.parquet"
+    assert "mle_lid_k15" in payload["points"][0]["details"]
 
 
 def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
@@ -330,6 +406,8 @@ def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
     assert payload["mode"] == "trajectory"
     assert payload["counts"]["trajectories"] == 2
     assert len(payload["trajectoryPreviews"]) == 2
+    assert payload["atlasSize"] >= payload["tileSize"]
+    assert "texture2D(textureAtlas" in html
     assert 'id="time"' in html
     assert 'id="show-trajectory"' in html
 

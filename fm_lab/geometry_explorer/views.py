@@ -11,10 +11,17 @@ from typing import Any
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.variants import load_variant_bundle
 from fm_lab.image_diagnostics.config import (
+    DiagnosticsRunConfig,
     diagnostics_config_from_dict,
 )
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
 from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
+from fm_lab.image_diagnostics.id_config import (
+    IDEstimationConfig,
+    id_config_from_dict,
+    load_id_config,
+)
+from fm_lab.image_diagnostics.id_runner import run_id_estimation
 from fm_lab.image_diagnostics.label_store import ensure_label_store
 from fm_lab.image_diagnostics.local_diagnostics import compute_or_load_local_diagnostics
 from fm_lab.image_diagnostics.projection_diagnostics import compute_projection_diagnostics
@@ -48,9 +55,12 @@ def build_projection_view(
             "explorer_name": explorer_name,
             "output": {"root_dir": str(output_root)},
             "input": _variant_input_override(registry, variant_row),
-            "id_estimation": {"enabled": False},
         },
     )
+    if raw.get("id_estimation", {}).get("enabled") and not raw["id_estimation"].get(
+        "config_path"
+    ):
+        raw = deep_update(raw, {"id_estimation": {"config_path": "__auto__"}})
     config = diagnostics_config_from_dict(raw)
     output_dir = prepare_output_dir(config)
     logger = configure_logging(output_dir)
@@ -113,6 +123,23 @@ def build_projection_view(
         )
     write_parquet(explorer_data, explorer_path)
 
+    id_estimation = None
+    registered_explorer_path = explorer_path
+    if config.id_estimation.enabled:
+        if not config.output.save_features:
+            raise RuntimeError("Geometry ID estimation requires output.save_features: true.")
+        id_config = _id_config_for_view(
+            config,
+            output_dir=output_dir,
+            project_root=project_root,
+        )
+        logger.info("Running intrinsic-dimension estimation for geometry view.")
+        id_estimation = run_id_estimation(id_config, project_root=project_root)
+        logger = configure_logging(output_dir)
+        merged_path = id_estimation.get("merged_explorer_path")
+        if merged_path:
+            registered_explorer_path = Path(str(merged_path))
+
     projection_names = {
         variant_config.key: variant_config.name
         for variant_config in projection_variants(config.projection)
@@ -123,7 +150,7 @@ def build_projection_view(
         variant_id=variant_id,
         feature_name=config.features.name,
         feature_mode=config.features.mode,
-        explorer_data_path=explorer_path,
+        explorer_data_path=registered_explorer_path,
         output_dir=output_dir,
         projection_names=projection_names,
         renderer=config.explorer.renderer,
@@ -135,9 +162,10 @@ def build_projection_view(
         "view_id": view_id,
         "variant_id": variant_id,
         "output_dir": output_dir,
-        "explorer_data": explorer_path,
+        "explorer_data": registered_explorer_path,
         "rows": len(explorer_data),
         "projection_names": projection_names,
+        "id_estimation": id_estimation,
         "runtime_seconds": elapsed,
     }
 
@@ -165,3 +193,68 @@ def _variant_input_override(registry: GeometryRegistry, row: Any) -> dict[str, A
     if row["value_range_json"]:
         values["value_range"] = json.loads(row["value_range_json"])
     return values
+
+
+def _id_config_for_view(
+    config: DiagnosticsRunConfig,
+    *,
+    output_dir: Path,
+    project_root: str | Path | None,
+) -> IDEstimationConfig:
+    if config.id_estimation.config_path and config.id_estimation.config_path != "__auto__":
+        path = Path(config.id_estimation.config_path).expanduser()
+        if not path.is_absolute():
+            path = Path(project_root or Path.cwd()) / path
+        loaded = load_id_config(path)
+        return replace(
+            loaded,
+            input=replace(
+                loaded.input,
+                diagnostics_dir=str(output_dir.resolve()),
+            ),
+        )
+    name = f"{config.explorer_name}_{config.features.name}_id"
+    raw = {
+        "id_estimation_name": name,
+        "input": {
+            "diagnostics_dir": str(output_dir.resolve()),
+            "explorer_data_path": "explorer/explorer_data.parquet",
+            "embedding_source": f"features/{config.features.name}_features.npy",
+            "embedding_metadata": f"features/{config.features.name}_metadata.parquet",
+            "feature_space_name": config.features.name,
+            "source_type": "npy",
+        },
+        "features": {
+            "normalize": config.features.normalize,
+            "pca_preprocess": {
+                "enabled": True,
+                "n_components": 50,
+                "whiten": False,
+                "random_state": 42,
+                "save_features": True,
+            },
+        },
+        "groups": {
+            "enabled": True,
+            "groupby_columns": ["label", "manual_label"],
+        },
+        "local_id": {
+            "enabled": True,
+            "k_values": [5, 10, 15, 30, 50],
+            "covariance_eigenvalues": 10,
+        },
+        "global_id": {
+            "enabled": True,
+            "min_group_size": 20,
+            "scaling_max_points": 2000,
+        },
+        "distance": {"metric": config.diagnostics.metric},
+        "output": {
+            "root_dir": str(output_dir / "id_estimation"),
+            "merge_into_explorer_data": True,
+            "merged_explorer_name": f"explorer_data_with_{config.features.name}_id.parquet",
+            "overwrite_explorer_data": False,
+            "skip_existing": True,
+        },
+    }
+    return id_config_from_dict(raw)

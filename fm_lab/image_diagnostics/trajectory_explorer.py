@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 
 from fm_lab.geometry_explorer.viewer import build_geometry_html
 from fm_lab.image_diagnostics.canvas_explorer import prepare_array_sprite_atlases
@@ -103,6 +104,7 @@ def write_trajectory_explorer_html(
         "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
         "palette": palette_payload(palette),
         "tileSize": bundle.tile_size,
+        "atlasSize": _atlas_size(bundle.atlas_paths),
         "atlasColumns": bundle.atlas_columns,
         "trajectory": np.round(normalized_trajectory, 5).tolist(),
         "trajectoryLabels": trajectory_labels,
@@ -150,6 +152,13 @@ def _as_projected_trajectory(values: np.ndarray) -> np.ndarray:
     if array.ndim != 3 or array.shape[-1] != 3:
         raise ValueError(f"Trajectory explorer requires shape (steps, paths, 3), got {array.shape}.")
     return array
+
+
+def _atlas_size(paths: list[Path]) -> int:
+    if not paths:
+        return 1
+    with Image.open(paths[0]) as image:
+        return int(image.width)
 
 
 def _as_projected_points(values: np.ndarray | None) -> np.ndarray | None:

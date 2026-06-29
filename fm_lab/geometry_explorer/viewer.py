@@ -75,6 +75,7 @@ def _html_template(
   #sample-label {{ font-size: 24px; font-weight: 650; }}
   #sample-index {{ color: #a9a9a9; font-variant-numeric: tabular-nums; }}
   #metrics {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; margin-top: 8px; padding-top: 10px; border-top: 1px solid #3a3a3a; font-size: 12px; color: #bdbdbd; }}
+  .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
   .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }}
   .metric-value {{ color: #eee; font-variant-numeric: tabular-nums; text-align: right; }}
   #main {{ position: relative; min-width: 0; overflow: hidden; background: #111; }}
@@ -184,6 +185,7 @@ const resetButton = document.getElementById("reset");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
 const atlasImages = [];
+let atlasTextures = [];
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
@@ -281,6 +283,10 @@ function buildEndpoints() {
     .map((point, index) => pointVisible(point) ? index : -1)
     .filter(index => index >= 0);
   if (!visibleIndices.length) return;
+  if (thumbnailToggle.checked && canUseAtlasPointCloud()) {
+    buildAtlasPointClouds(visibleIndices);
+    return;
+  }
   if (thumbnailToggle.checked && visibleIndices.length <= 2000) {
     for (const pointIndex of visibleIndices) {
       endpointGroup.add(endpointSprite(DATA.points[pointIndex], pointIndex));
@@ -310,6 +316,69 @@ function buildEndpoints() {
   endpointGroup.add(points);
 }
 
+function canUseAtlasPointCloud() {
+  return atlasTextures.length > 0 && Number(DATA.atlasSize || 0) > 0;
+}
+
+function buildAtlasPointClouds(indices) {
+  const byAtlas = new Map();
+  for (const pointIndex of indices) {
+    const point = DATA.points[pointIndex];
+    if (!byAtlas.has(point.atlas)) byAtlas.set(point.atlas, []);
+    byAtlas.get(point.atlas).push(pointIndex);
+  }
+  for (const [atlas, atlasIndices] of byAtlas.entries()) {
+    const texture = atlasTextures[atlas];
+    if (!texture || !atlasIndices.length) continue;
+    const positions = new Float32Array(atlasIndices.length * 3);
+    const offsets = new Float32Array(atlasIndices.length * 2);
+    atlasIndices.forEach((pointIndex, local) => {
+      const point = DATA.points[pointIndex];
+      const coordinate = pointCoordinate(point);
+      positions.set([coordinate[0] || 0, coordinate[1] || 0, coordinate[2] || 0], local * 3);
+      offsets[local * 2] = point.column * DATA.tileSize / DATA.atlasSize;
+      offsets[local * 2 + 1] = point.row * DATA.tileSize / DATA.atlasSize;
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("offset", new THREE.BufferAttribute(offsets, 2));
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        textureAtlas: { value: texture },
+        repeat: { value: new THREE.Vector2(DATA.tileSize / DATA.atlasSize, DATA.tileSize / DATA.atlasSize) },
+        pointSize: { value: DATA.options.pointSize },
+      },
+      vertexShader: `
+        attribute vec2 offset;
+        varying vec2 vOffset;
+        uniform float pointSize;
+        void main() {
+          vOffset = offset;
+          gl_PointSize = pointSize;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D textureAtlas;
+        uniform vec2 repeat;
+        varying vec2 vOffset;
+        void main() {
+          vec2 uv = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
+          vec4 texel = texture2D(textureAtlas, vOffset + uv * repeat);
+          if (texel.a < 0.04) discard;
+          gl_FragColor = texel;
+        }
+      `,
+      transparent: true,
+      depthTest: true,
+      depthWrite: true,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.userData = { kind: "endpoint", indices: atlasIndices };
+    endpointGroup.add(points);
+  }
+}
+
 function endpointSprite(point, pointIndex) {
   const coordinate = pointCoordinate(point);
   const tile = document.createElement("canvas");
@@ -336,6 +405,18 @@ function endpointSprite(point, pointIndex) {
   sprite.scale.set(1.15, 1.15, 1.15);
   sprite.userData = { kind: "endpoint", index: pointIndex };
   return sprite;
+}
+
+function initializeAtlasTextures() {
+  atlasTextures = atlasImages.map(image => {
+    const texture = new THREE.Texture(image);
+    texture.flipY = false;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+    return texture;
+  });
 }
 
 function buildTrajectoryLines() {
@@ -445,12 +526,21 @@ function showSelection(selection) {
   labelElement.textContent = point.label || "-";
   indexElement.textContent = `${point.kind || "sample"} - Index: ${point.sourceIndex} - Row: ${point.rowId}`;
   const coordinate = pointCoordinate(point);
-  appendMetric(metricsElement, `${projection} X`, coordinate[0]);
-  appendMetric(metricsElement, `${projection} Y`, coordinate[1]);
-  appendMetric(metricsElement, `${projection} Z`, coordinate[2] || 0);
-  for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, key, value);
+  appendMetricHeading(`Diagnostics · ${projection}`);
+  appendMetric(metricsElement, "Map X", coordinate[0]);
+  appendMetric(metricsElement, "Map Y", coordinate[1]);
+  if ((DATA.projectionDimensions || {})[projection] === 3) appendMetric(metricsElement, "Map Z", coordinate[2] || 0);
   const diagnostics = (DATA.projectionDiagnostics || {})[projection] || {};
   for (const [key, values] of Object.entries(diagnostics)) appendMetric(metricsElement, key, values[selection.index]);
+  if (Object.keys(point.details || {}).length) appendMetricHeading("Sample");
+  for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, key.replaceAll("_", " "), value);
+}
+
+function appendMetricHeading(text) {
+  const heading = document.createElement("div");
+  heading.className = "metrics-heading";
+  heading.textContent = text;
+  metricsElement.appendChild(heading);
 }
 
 function drawPreview(point) {
@@ -559,6 +649,7 @@ window.addEventListener("resize", resize);
 
 initializeClassFilter(DATA.points, onClassFilterChange);
 loadAtlases(DATA.atlases).then(() => {
+  initializeAtlasTextures();
   resize();
   rebuildScene();
   showSelection(null);

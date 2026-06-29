@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.image_diagnostics.canvas_explorer import (
@@ -74,6 +75,7 @@ def load_projection_payload(
         "projectionDimensions": projection_dimensions(projections),
         "projectionDiagnostics": projection_diagnostics_payload(bundle.frame, projections),
         "tileSize": bundle.tile_size,
+        "atlasSize": _atlas_size(bundle.atlas_paths),
         "atlasColumns": bundle.atlas_columns,
         "options": _default_options(),
         "counts": {
@@ -177,6 +179,7 @@ def load_trajectory_payload(
         "projectionDimensions": {"Trajectory UMAP": 3},
         "projectionDiagnostics": {"Trajectory UMAP": {}},
         "tileSize": bundle.tile_size,
+        "atlasSize": _atlas_size(bundle.atlas_paths),
         "atlasColumns": bundle.atlas_columns,
         "trajectory": np.round(normalized_trajectory, 5).tolist(),
         "trajectoryLabels": trajectory_labels,
@@ -203,6 +206,13 @@ def _load_optional_array(registry: GeometryRegistry, value: str | None) -> np.nd
     if not path.exists():
         return None
     return np.load(path)
+
+
+def _atlas_size(paths: list[Path]) -> int:
+    if not paths:
+        return 1
+    with Image.open(paths[0]) as image:
+        return int(image.width)
 
 
 def _dataset_name(registry: GeometryRegistry, row: Any) -> str:

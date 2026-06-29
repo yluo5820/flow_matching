@@ -74,7 +74,12 @@ def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
             list(labels),
             format_func=labels.__getitem__,
         )
-        payload = load_trajectory_payload(selected_view, workspace=registry.workspace)
+        html = _cached_view_html(
+            st,
+            mode="trajectory",
+            view_id=selected_view,
+            workspace=registry.workspace,
+        )
     else:
         if not projection_views:
             st.error("No projection views are registered for this dataset variant.")
@@ -88,11 +93,33 @@ def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
             list(labels),
             format_func=labels.__getitem__,
         )
-        payload = load_projection_payload(selected_view, workspace=registry.workspace)
+        html = _cached_view_html(
+            st,
+            mode="projection",
+            view_id=selected_view,
+            workspace=registry.workspace,
+        )
 
-    html = build_geometry_html(
-        payload,
-        height=760,
-        vendor_dir=registry.workspace / "assets" / "vendor",
-    )
     st.iframe(html, height=760, width="stretch", tab_index=0)
+
+
+def _cached_view_html(st, *, mode: str, view_id: str, workspace: Path) -> str:
+    cache = st.session_state.setdefault("_geometry_view_html_cache", {})
+    registry_path = workspace / "registry.sqlite"
+    registry_mtime = registry_path.stat().st_mtime_ns if registry_path.exists() else 0
+    key = (mode, view_id, str(workspace), registry_mtime)
+    if key not in cache:
+        with st.spinner("Loading geometry view..."):
+            payload = (
+                load_trajectory_payload(view_id, workspace=workspace)
+                if mode == "trajectory"
+                else load_projection_payload(view_id, workspace=workspace)
+            )
+            cache[key] = build_geometry_html(
+                payload,
+                height=760,
+                vendor_dir=workspace / "assets" / "vendor",
+            )
+        while len(cache) > 3:
+            cache.pop(next(iter(cache)))
+    return cache[key]
