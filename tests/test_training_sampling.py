@@ -21,6 +21,17 @@ class ZeroVelocity(nn.Module):
         return torch.zeros_like(x)
 
 
+class RecordingZeroVelocity(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        self.batch_sizes.append(int(x.shape[0]))
+        return torch.zeros_like(x)
+
+
 class UnitXDirectionSpeed(nn.Module):
     requires_source_label = True
 
@@ -131,6 +142,30 @@ def test_sampling_seed_makes_plot_sources_reproducible(tmp_path) -> None:
     assert np.allclose(trajectories_a, trajectories_b)
 
 
+def test_sample_and_plot_chunks_large_final_sample_batches(tmp_path) -> None:
+    config = _sampling_config(seed=654)
+    config["sampling"]["n_samples"] = 9
+    config["sampling"]["n_trajectories"] = 2
+    config["sampling"]["sample_batch_size"] = 4
+    model = RecordingZeroVelocity()
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=GaussianMixture3D(n_modes=4),
+        source=GaussianSource(dim=3),
+        model=model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
+    assert generated.shape == (9, 3)
+    assert summary["sample_batch_size"] == 4
+    assert max(model.batch_sizes) == 4
+    assert 1 in model.batch_sizes
+
+
 def test_sample_and_plot_supports_source_label_conditioned_models(tmp_path) -> None:
     config = _sampling_config(seed=777)
 
@@ -149,6 +184,54 @@ def test_sample_and_plot_supports_source_label_conditioned_models(tmp_path) -> N
     assert trajectory.shape == (4, 5, 3)
     assert summary["line_containment"]["euler"]["off_line_max"] < 1.0e-6
     assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
+
+
+def test_sample_and_plot_writes_umap_trajectory_when_enabled(tmp_path, monkeypatch) -> None:
+    config = _sampling_config(seed=888)
+    config["sampling"]["trajectory_umap"] = {
+        "enabled": True,
+        "max_target_points": 4,
+        "n_neighbors": 3,
+        "save_coordinates": True,
+    }
+
+    def fake_umap_plot(trajectory, output_path, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("plot", encoding="utf-8")
+        coordinates_path = kwargs["coordinates_path"]
+        np.savez_compressed(coordinates_path, trajectory=np.zeros((*trajectory.shape[:2], 3)))
+        interactive_path = kwargs["interactive_path"]
+        interactive_path.write_text("html", encoding="utf-8")
+        return {
+            "plot_path": str(output_path),
+            "coordinates_path": str(coordinates_path),
+            "interactive_path": str(interactive_path),
+            "n_steps": int(trajectory.shape[0]),
+            "n_trajectories": int(trajectory.shape[1]),
+            "target_points": int(kwargs["max_target_points"]),
+            "n_neighbors": int(kwargs["n_neighbors"]),
+        }
+
+    monkeypatch.setattr(
+        "fm_lab.training.trainer.plot_umap_projected_trajectories",
+        fake_umap_plot,
+    )
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=GaussianMixture3D(n_modes=4),
+        source=GaussianSource(dim=3),
+        model=ZeroVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert (tmp_path / "plots" / "trajectory_umap3d_euler_nfe3.png").exists()
+    assert (tmp_path / "plots" / "trajectory_umap3d_euler_nfe3.html").exists()
+    assert (tmp_path / "trajectories" / "euler_nfe3_umap3d.npz").exists()
+    assert summary["trajectory_umap"]["euler"]["target_points"] == 4
+    assert summary["trajectory_umap"]["euler"]["n_neighbors"] == 3
 
 
 def test_direction_only_training_guard_accepts_minibatch_ot_coupling() -> None:

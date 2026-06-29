@@ -19,7 +19,11 @@ from fm_lab.couplings.base import Coupling
 from fm_lab.data.base import TargetDistribution
 from fm_lab.paths.base import FlowPath
 from fm_lab.plotting.diagnostics import plot_training_history
-from fm_lab.plotting.trajectories import plot_generated_samples, plot_trajectories
+from fm_lab.plotting.trajectories import (
+    plot_generated_samples,
+    plot_trajectories,
+    plot_umap_projected_trajectories,
+)
 from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
@@ -400,10 +404,30 @@ def sample_and_plot(
     nfe = int(sampling_config.get("nfe", max(solver_config.get("nfes", [32]))))
     schedule = sampling_config.get("schedule", solver_config.get("schedule", "uniform"))
     plot_max_points = int(sampling_config.get("plot_max_points", n_samples))
+    sample_batch_size = int(sampling_config.get("sample_batch_size", n_samples))
+    if sample_batch_size < 1:
+        raise ValueError("sampling.sample_batch_size must be positive.")
     trajectory_target_max_points = int(
         sampling_config.get("trajectory_target_max_points", min(n_samples, 3000))
     )
     sampling_seed = _sampling_seed(config)
+    trajectory_umap_config = sampling_config.get("trajectory_umap", {}) or {}
+    trajectory_umap_enabled = bool(trajectory_umap_config.get("enabled", False))
+    trajectory_umap_max_target_points = int(
+        trajectory_umap_config.get("max_target_points", trajectory_target_max_points)
+    )
+    trajectory_umap_max_trajectories = trajectory_umap_config.get("max_trajectories")
+    if trajectory_umap_max_trajectories is not None:
+        trajectory_umap_max_trajectories = int(trajectory_umap_max_trajectories)
+    trajectory_umap_n_neighbors = int(trajectory_umap_config.get("n_neighbors", 30))
+    trajectory_umap_min_dist = float(trajectory_umap_config.get("min_dist", 0.1))
+    trajectory_umap_metric = str(trajectory_umap_config.get("metric", "euclidean"))
+    trajectory_umap_random_state = int(
+        trajectory_umap_config.get("random_state", sampling_seed)
+    )
+    trajectory_umap_save_coordinates = bool(
+        trajectory_umap_config.get("save_coordinates", True)
+    )
     target_metadata = target.metadata()
     image_shape = target_metadata.get("image_shape")
     image_value_range = target_metadata.get("image_value_range", (0.0, 1.0))
@@ -415,6 +439,8 @@ def sample_and_plot(
         target_samples = target.sample(n_samples, device=device)
         x0_samples = source.sample(n_samples, device=device)
         trajectory_x0 = source.sample(n_trajectories, device=device)
+    target_samples_cpu = target_samples.detach().cpu()
+    del target_samples
     requires_source_label = _requires_source_label(model)
     generated: dict[str, torch.Tensor] = {}
     artifact_summary: dict[str, Any] = {
@@ -423,6 +449,7 @@ def sample_and_plot(
         "nfe": nfe,
         "schedule": schedule,
         "plot_max_points": plot_max_points,
+        "sample_batch_size": sample_batch_size,
         "trajectory_target_max_points": trajectory_target_max_points,
         "seed": sampling_seed,
     }
@@ -434,15 +461,17 @@ def sample_and_plot(
     samples_dir.mkdir(parents=True, exist_ok=True)
     trajectories_dir.mkdir(parents=True, exist_ok=True)
 
-    def sample_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return _model_velocity(model, x, t, source_label=x0_samples)
-
     def trajectory_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return _model_velocity(model, x, t, source_label=trajectory_x0)
 
     for solver in solvers:
-        final = solver.solve(sample_v_fn, x0_samples.clone(), t_grid, return_trajectory=False)
-        generated[solver.name] = final.detach().cpu()
+        generated[solver.name] = _solve_final_samples_in_chunks(
+            model=model,
+            solver=solver,
+            x0_samples=x0_samples,
+            t_grid=t_grid,
+            batch_size=sample_batch_size,
+        )
         np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
         trajectory = solver.solve(
@@ -465,20 +494,41 @@ def sample_and_plot(
         plot_trajectories(
             trajectory_cpu,
             run_dir / "plots" / f"trajectories_{solver.name}_nfe{nfe}.png",
-            target_samples=target_samples.detach().cpu(),
+            target_samples=target_samples_cpu,
             max_target_points=trajectory_target_max_points,
             image_shape=image_shape,
             image_value_range=image_value_range,
         )
+        if trajectory_umap_enabled:
+            coordinates_path = None
+            if trajectory_umap_save_coordinates:
+                coordinates_path = trajectories_dir / f"{solver.name}_nfe{nfe}_umap3d.npz"
+            artifact_summary.setdefault("trajectory_umap", {})[solver.name] = (
+                plot_umap_projected_trajectories(
+                    trajectory_cpu,
+                    run_dir / "plots" / f"trajectory_umap3d_{solver.name}_nfe{nfe}.png",
+                    target_samples=target_samples_cpu,
+                    max_target_points=trajectory_umap_max_target_points,
+                    max_trajectories=trajectory_umap_max_trajectories,
+                    n_neighbors=trajectory_umap_n_neighbors,
+                    min_dist=trajectory_umap_min_dist,
+                    metric=trajectory_umap_metric,
+                    random_state=trajectory_umap_random_state,
+                    coordinates_path=coordinates_path,
+                    interactive_path=(
+                        run_dir / "plots" / f"trajectory_umap3d_{solver.name}_nfe{nfe}.html"
+                    ),
+                )
+            )
 
     np.save(samples_dir / "source_reference.npy", x0_samples.detach().cpu().numpy())
-    np.save(samples_dir / "target_reference.npy", target_samples.detach().cpu().numpy())
+    np.save(samples_dir / "target_reference.npy", target_samples_cpu.numpy())
     np.save(
         trajectories_dir / f"source_reference_nfe{nfe}.npy",
         trajectory_x0.detach().cpu().numpy(),
     )
     plot_generated_samples(
-        target_samples.detach().cpu(),
+        target_samples_cpu,
         generated,
         run_dir / "plots" / f"generated_samples_nfe{nfe}.png",
         max_points=plot_max_points,
@@ -486,6 +536,44 @@ def sample_and_plot(
         image_value_range=image_value_range,
     )
     return artifact_summary
+
+
+def _solve_final_samples_in_chunks(
+    *,
+    model: nn.Module,
+    solver: Solver,
+    x0_samples: torch.Tensor,
+    t_grid: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    final_chunks: list[torch.Tensor] = []
+    for start in range(0, x0_samples.shape[0], batch_size):
+        source_label = x0_samples[start : start + batch_size]
+
+        def v_fn(
+            x: torch.Tensor,
+            t: torch.Tensor,
+            source_label: torch.Tensor = source_label,
+        ) -> torch.Tensor:
+            return _model_velocity(model, x, t, source_label=source_label)
+
+        final = solver.solve(
+            v_fn,
+            source_label.clone(),
+            t_grid,
+            return_trajectory=False,
+        )
+        final_chunks.append(final.detach().cpu())
+        del final
+        _empty_device_cache(t_grid.device)
+    return torch.cat(final_chunks, dim=0)
+
+
+def _empty_device_cache(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
 
 
 def _validate_training_compatibility(

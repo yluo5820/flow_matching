@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum points shown in generated sample plots.",
     )
     parser.add_argument(
+        "--sample-batch-size",
+        type=int,
+        default=None,
+        help="Batch size used when integrating final generated samples.",
+    )
+    parser.add_argument(
         "--trajectory-target-max-points",
         type=int,
         default=None,
@@ -198,6 +204,8 @@ def _sampling_overrides(args: argparse.Namespace) -> dict:
         sampling["nfe"] = args.nfe
     if args.plot_max_points is not None:
         sampling["plot_max_points"] = args.plot_max_points
+    if args.sample_batch_size is not None:
+        sampling["sample_batch_size"] = args.sample_batch_size
     if args.trajectory_target_max_points is not None:
         sampling["trajectory_target_max_points"] = args.trajectory_target_max_points
     return sampling

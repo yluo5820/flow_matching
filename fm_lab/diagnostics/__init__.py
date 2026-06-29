@@ -15,9 +15,14 @@ from fm_lab.diagnostics.solver_sensitivity import (
     pairwise_solver_distances,
     solver_sensitivity_summary,
 )
+from fm_lab.diagnostics.trajectory_umap import (
+    TrajectoryUMAPConfig,
+    project_saved_trajectories,
+)
 
 __all__ = [
     "GridAmbiguityResult",
+    "TrajectoryUMAPConfig",
     "bayes_regression_gap_knn",
     "curvature_stats",
     "exact_jacobian",
@@ -27,6 +32,7 @@ __all__ = [
     "knn_ambiguity",
     "material_acceleration",
     "pairwise_solver_distances",
+    "project_saved_trajectories",
     "radial_deviation",
     "radial_tangent_velocity_2d",
     "sliced_wasserstein",

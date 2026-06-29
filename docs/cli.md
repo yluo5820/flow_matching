@@ -43,6 +43,8 @@ When adding or changing a CLI:
 | `fm-lab-compare-runs` | Compare completed runs with same source/target. | Training run directories | side-by-side samples, overlaid loss curves |
 | `fm-lab-mnist-eval` | Evaluate a completed MNIST image-generation run. | MNIST run directory | pixel/classifier/nearest-neighbor metrics, nearest-neighbor plot |
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
+| `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
+| `fm-lab-trajectory-umap` | Project saved trajectories into 3D UMAP space. | Saved trajectory arrays | UMAP trajectory PNG/HTML/NPZ, summary JSON |
 
 ## `fm-lab-train`
 
@@ -73,6 +75,7 @@ Key options:
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
 | `--plot-max-points` | Override `sampling.plot_max_points`; defaults to all generated samples. |
+| `--sample-batch-size` | Integrate final generated samples in chunks of this size. |
 | `--trajectory-target-max-points` | Override `sampling.trajectory_target_max_points`. |
 | `--objective` | Override `objective.name`, e.g. `flow_matching`. |
 | `--objective-loss` | Override `objective.loss`, currently `mse`. |
@@ -191,6 +194,10 @@ image U-Net, and minibatch OT with batch size 128. The older
 why image inductive bias matters. MNIST configs use the standard IDX gzip files under
 `data/mnist` and have `data.download: true`, so the first run attempts to download them.
 MNIST sample and trajectory PNGs are image grids instead of coordinate scatter plots.
+The MNIST configs also enable `sampling.trajectory_umap`, which writes
+`plots/trajectory_umap3d_<solver>_nfe*.png`,
+`plots/trajectory_umap3d_<solver>_nfe*.html`, and
+`trajectories/<solver>_nfe*_umap3d.npz`.
 
 Experimental MNIST configs also include `configs/mnist/mnist_direction_only_image_unet_ot.yaml`
 and `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml`.
@@ -380,6 +387,71 @@ run_dir/
   plots/generated_samples_nfe*.png
   plots/trajectories_*_nfe*.png
 ```
+
+## `fm-lab-sample-checkpoint`
+
+Regenerate samples and trajectories from an existing checkpoint without retraining.
+This is useful when a trained MNIST model needs more trajectories for UMAP projection.
+
+```bash
+fm-lab-sample-checkpoint \
+  --run-dir runs/mnist_image_unet_ot \
+  --output-dir runs/mnist_image_unet_ot_umap_resample \
+  --n-samples 2048 \
+  --n-trajectories 256 \
+  --nfe 64 \
+  --trajectory-umap \
+  --device auto
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--run-dir` | Completed training run directory. Required. |
+| `--checkpoint` | Checkpoint path; defaults to `<run-dir>/checkpoint.pt`. |
+| `--output-dir` | Output directory; defaults to writing into `--run-dir`. |
+| `--n-samples` | Override `sampling.n_samples`. |
+| `--n-trajectories` | Override `sampling.n_trajectories`. |
+| `--nfe` | Override `sampling.nfe`. |
+| `--sample-batch-size` | Integrate final generated samples in chunks of this size. |
+| `--trajectory-umap` | Enable 3D UMAP trajectory plots for this sampling pass. |
+| `--no-trajectory-umap` | Disable 3D UMAP trajectory plots for this sampling pass. |
+| `--trajectory-umap-target-points` | Maximum target reference points included in the UMAP fit. |
+| `--trajectory-umap-neighbors` | UMAP `n_neighbors`. |
+| `--trajectory-umap-min-dist` | UMAP `min_dist`. |
+| `--device` | `auto`, `cpu`, `cuda`, or `mps`. |
+
+Use `--output-dir` when changing `--nfe`, `--n-samples`, or `--n-trajectories` if you
+want to preserve the original run artifacts.
+
+## `fm-lab-trajectory-umap`
+
+Project already-saved trajectories into a shared 3D UMAP space. This does not load a
+checkpoint or generate new ODE paths; it reads `trajectories/<solver>_nfe*.npy`.
+
+```bash
+fm-lab-trajectory-umap \
+  --run-dir runs/mnist_image_unet_ot \
+  --solver euler \
+  --nfe 64
+```
+
+Key options:
+
+| Option | Meaning |
+|---|---|
+| `--run-dir` | Completed training run directory. Required. |
+| `--output-dir` | Output directory; defaults to writing into `--run-dir`. |
+| `--solver` | Solver name, or `auto` to process all matching trajectory files. |
+| `--nfe` | NFE suffix to project. |
+| `--max-target-points` | Maximum target reference points included in the UMAP fit. |
+| `--max-trajectories` | Optional cap on trajectory paths included in the UMAP fit. |
+| `--n-neighbors` | UMAP `n_neighbors`. |
+| `--min-dist` | UMAP `min_dist`. |
+| `--metric` | UMAP input metric. |
+| `--random-state` | UMAP random seed. |
+| `--no-save-coordinates` | Skip writing the projected coordinate `.npz`. |
 
 ## `fm-lab-mnist-eval`
 

@@ -1,5 +1,10 @@
 from argparse import Namespace
+from types import SimpleNamespace
 
+import fm_lab.experiments.run_sample_checkpoint as sample_checkpoint_cli
+from fm_lab.experiments.run_sample_checkpoint import (
+    _sampling_overrides as _checkpoint_sampling_overrides,
+)
 from fm_lab.experiments.run_train import (
     _objective_overrides,
     _sampling_overrides,
@@ -72,6 +77,7 @@ def test_sampling_overrides_from_cli_args() -> None:
         n_trajectories=128,
         nfe=64,
         plot_max_points=8192,
+        sample_batch_size=512,
         trajectory_target_max_points=3000,
     )
 
@@ -80,5 +86,115 @@ def test_sampling_overrides_from_cli_args() -> None:
         "n_trajectories": 128,
         "nfe": 64,
         "plot_max_points": 8192,
+        "sample_batch_size": 512,
         "trajectory_target_max_points": 3000,
     }
+
+
+def test_checkpoint_sampling_overrides_include_trajectory_umap() -> None:
+    args = Namespace(
+        n_samples=4096,
+        n_trajectories=256,
+        nfe=96,
+        plot_max_points=None,
+        sample_batch_size=128,
+        trajectory_target_max_points=None,
+        trajectory_umap=True,
+        no_trajectory_umap=False,
+        trajectory_umap_target_points=5000,
+        trajectory_umap_neighbors=45,
+        trajectory_umap_min_dist=0.05,
+    )
+
+    assert _checkpoint_sampling_overrides(args) == {
+        "n_samples": 4096,
+        "n_trajectories": 256,
+        "nfe": 96,
+        "sample_batch_size": 128,
+        "trajectory_umap": {
+            "enabled": True,
+            "max_target_points": 5000,
+            "n_neighbors": 45,
+            "min_dist": 0.05,
+        },
+    }
+
+
+def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "checkpoint.pt"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_bytes(b"checkpoint")
+    model = _FakeCheckpointModel()
+
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "parse_args",
+        lambda: Namespace(
+            run_dir=str(run_dir),
+            checkpoint=None,
+            output_dir=None,
+            device="mps",
+            n_samples=None,
+            n_trajectories=None,
+            nfe=None,
+            plot_max_points=None,
+            sample_batch_size=None,
+            trajectory_target_max_points=None,
+            trajectory_umap=False,
+            no_trajectory_umap=False,
+            trajectory_umap_target_points=None,
+            trajectory_umap_neighbors=None,
+            trajectory_umap_min_dist=None,
+        ),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "resolve_device", lambda value: value)
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "load_checkpoint",
+        lambda path, map_location: {
+            "config": {"sampling": {"nfe": 3}},
+            "model_state_dict": {"weight": 1.0},
+        },
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "build_target", lambda config: object())
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_source",
+        lambda config: SimpleNamespace(dim=7),
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_model",
+        lambda config, dim: model,
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "build_solvers", lambda config: ["solver"])
+
+    def fake_sample_and_plot(**kwargs):
+        assert kwargs["model"] is model
+        assert kwargs["model"].loaded_state == {"weight": 1.0}
+        assert kwargs["model"].device == "mps"
+        assert kwargs["device"] == "mps"
+        return {"ok": True}
+
+    monkeypatch.setattr(sample_checkpoint_cli, "sample_and_plot", fake_sample_and_plot)
+
+    sample_checkpoint_cli.main()
+
+    assert model.device == "mps"
+
+
+class _FakeCheckpointModel:
+    def __init__(self) -> None:
+        self.loaded_state = None
+        self.device = None
+
+    def load_state_dict(self, state):
+        self.loaded_state = state
+
+    def to(self, device):
+        self.device = device
+        return self

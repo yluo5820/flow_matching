@@ -52,6 +52,15 @@ sampling:
   n_trajectories: 16
   nfe: 64
   plot_max_points: 64
+  sample_batch_size: 256
+  trajectory_umap:
+    enabled: true
+    max_target_points: 3000
+    n_neighbors: 30
+    min_dist: 0.1
+    metric: euclidean
+    random_state: 42
+    save_coordinates: true
 
 diagnostics:
   ambiguity:

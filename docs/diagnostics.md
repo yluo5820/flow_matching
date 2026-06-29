@@ -124,6 +124,35 @@ image U-Net, and minibatch OT:
 | MNIST learned-acceleration image U-Net + OT | `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml` | Uses image U-Nets for both Eulerian velocity and learned interpolant coefficients. |
 | MNIST flat MLP | `configs/mnist/mnist_linear_baseline.yaml` | Deliberately naive flattened-pixel baseline. |
 
+MNIST configs enable `sampling.trajectory_umap` by default. During sampling, the
+high-dimensional trajectory states are embedded together with target reference
+images into a shared 3D UMAP space and written as both a static preview and an
+interactive time-slider view.
+
+For an existing completed run that already has `trajectories/<solver>_nfe*.npy`,
+build only the UMAP trajectory plot without resampling:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_trajectory_umap \
+  --run-dir runs/mnist_image_unet_ot \
+  --solver euler \
+  --nfe 64
+```
+
+To generate a larger trajectory batch from an existing checkpoint without
+retraining, resample into a separate output directory:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_sample_checkpoint \
+  --run-dir runs/mnist_image_unet_ot \
+  --output-dir runs/mnist_image_unet_ot_umap_resample \
+  --n-samples 2048 \
+  --n-trajectories 256 \
+  --sample-batch-size 256 \
+  --nfe 64 \
+  --trajectory-umap
+```
+
 ## Dataset Explorers
 
 The image diagnostics explorer supports full MNIST, Fashion-MNIST, and CIFAR-10
@@ -217,6 +246,7 @@ slow or visually too dense.
 
 This plot shows generated ODE trajectories from source to final sample.
 For 3D runs, each line is rendered in 3D over coordinates `x0`, `x1`, and `x2`.
+For image runs, this remains an image-snapshot grid over a few time indices.
 All solver trajectory plots start from the same saved
 `trajectories/source_reference_nfe*.npy` positions.
 
@@ -226,6 +256,23 @@ Read it as:
 - Smooth, coherent paths usually indicate a better behaved vector field.
 - Sharp turns or tangled paths can indicate high curvature or solver stress.
 - This is qualitative; pair it with field and solver diagnostics.
+
+### `plots/trajectory_umap3d_*_nfe*.png`
+
+For high-dimensional runs such as MNIST, this plot fits a 3D UMAP embedding to
+the selected trajectory states plus saved target reference samples. It then
+draws the ODE paths in that learned 3D coordinate system. Blue points are source
+states, red points are final generated states, and black points are target
+references.
+
+The matching `trajectories/*_nfe*_umap3d.npz` file stores the projected
+trajectory coordinates and target coordinates. Treat the plot as qualitative:
+UMAP preserves local neighborhoods, not physical distances in pixel space.
+
+The same stem with `.html` is the interactive view. It has a time slider:
+at each selected step it shows only the current particle positions, plus the
+cumulative trajectory segments up to that step. Drag to rotate and use the
+mouse wheel to zoom.
 
 ### `diagnostics/mnist_eval_*.json`
 
