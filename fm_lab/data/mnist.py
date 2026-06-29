@@ -47,10 +47,19 @@ class MNISTImages:
     _labels: torch.Tensor | None = field(default=None, init=False, repr=False)
 
     def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        samples, _ = self.sample_with_labels(n, device=device)
+        return samples
+
+    def sample_with_labels(
+        self,
+        n: int,
+        device: torch.device | str | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if n < 1:
             raise ValueError("MNISTImages.sample requires n >= 1.")
         self._load()
         assert self._images is not None
+        assert self._labels is not None
         indices = torch.randint(0, self._images.shape[0], (n,))
         if self.dequantize:
             assert self._raw_images is not None
@@ -61,9 +70,12 @@ class MNISTImages:
             )
         else:
             samples = self._images[indices]
+        labels = self._labels[indices]
         if device is not None:
-            samples = samples.to(torch.device(device))
-        return samples
+            resolved_device = torch.device(device)
+            samples = samples.to(resolved_device)
+            labels = labels.to(resolved_device)
+        return samples, labels
 
     def log_prob(self, x: torch.Tensor) -> torch.Tensor | None:
         del x

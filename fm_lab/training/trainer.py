@@ -384,6 +384,19 @@ def _sample_training_batch(
     return x0, x1, t
 
 
+def _sample_target_with_optional_labels(
+    target: TargetDistribution,
+    n: int,
+    *,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    sample_with_labels = getattr(target, "sample_with_labels", None)
+    if callable(sample_with_labels):
+        samples, labels = sample_with_labels(n, device=device)
+        return samples, labels
+    return target.sample(n, device=device), None
+
+
 @torch.no_grad()
 def sample_and_plot(
     *,
@@ -436,11 +449,18 @@ def sample_and_plot(
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
     with _temporary_torch_seed(sampling_seed, device):
-        target_samples = target.sample(n_samples, device=device)
+        target_samples, target_labels = _sample_target_with_optional_labels(
+            target,
+            n_samples,
+            device=device,
+        )
         x0_samples = source.sample(n_samples, device=device)
         trajectory_x0 = source.sample(n_trajectories, device=device)
     target_samples_cpu = target_samples.detach().cpu()
+    target_labels_cpu = target_labels.detach().cpu() if target_labels is not None else None
     del target_samples
+    if target_labels is not None:
+        del target_labels
     requires_source_label = _requires_source_label(model)
     generated: dict[str, torch.Tensor] = {}
     artifact_summary: dict[str, Any] = {
@@ -508,6 +528,8 @@ def sample_and_plot(
                     trajectory_cpu,
                     run_dir / "plots" / f"trajectory_umap3d_{solver.name}_nfe{nfe}.png",
                     target_samples=target_samples_cpu,
+                    generated_samples=generated[solver.name],
+                    target_labels=target_labels_cpu,
                     max_target_points=trajectory_umap_max_target_points,
                     max_trajectories=trajectory_umap_max_trajectories,
                     n_neighbors=trajectory_umap_n_neighbors,
@@ -518,11 +540,16 @@ def sample_and_plot(
                     interactive_path=(
                         run_dir / "plots" / f"trajectory_umap3d_{solver.name}_nfe{nfe}.html"
                     ),
+                    image_shape=image_shape,
+                    image_value_range=image_value_range,
+                    dataset_name=str(target_metadata.get("name", "")),
                 )
             )
 
     np.save(samples_dir / "source_reference.npy", x0_samples.detach().cpu().numpy())
     np.save(samples_dir / "target_reference.npy", target_samples_cpu.numpy())
+    if target_labels_cpu is not None:
+        np.save(samples_dir / "target_reference_labels.npy", target_labels_cpu.numpy())
     np.save(
         trajectories_dir / f"source_reference_nfe{nfe}.npy",
         trajectory_x0.detach().cpu().numpy(),

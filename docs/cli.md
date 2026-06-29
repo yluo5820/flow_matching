@@ -399,6 +399,7 @@ fm-lab-sample-checkpoint \
   --output-dir runs/mnist_image_unet_ot_umap_resample \
   --n-samples 2048 \
   --n-trajectories 256 \
+  --sample-batch-size 256 \
   --nfe 64 \
   --trajectory-umap \
   --device auto
@@ -429,6 +430,8 @@ want to preserve the original run artifacts.
 
 Project already-saved trajectories into a shared 3D UMAP space. This does not load a
 checkpoint or generate new ODE paths; it reads `trajectories/<solver>_nfe*.npy`.
+When matching `samples/<solver>_nfe*.npy` endpoint samples exist, the HTML output
+uses the explorer-style endpoint image preview and class filter.
 
 ```bash
 fm-lab-trajectory-umap \

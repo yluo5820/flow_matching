@@ -21,6 +21,7 @@ from fm_lab.image_diagnostics.canvas_explorer import (
     _compact_atlas_path,
     atlas_data_url,
     build_canvas_html,
+    prepare_array_sprite_atlases,
     prepare_sprite_atlases,
 )
 from fm_lab.image_diagnostics.config import (
@@ -1243,6 +1244,35 @@ def test_sprite_atlas_packs_and_tints_mnist_thumbnails(tmp_path: Path) -> None:
         assert atlas.mode == "RGBA"
         assert atlas.getpixel((3, 2))[3] == 255
         assert atlas.getpixel((0, 0))[3] == 0
+
+
+def test_array_sprite_atlas_packs_in_memory_mnist_images(tmp_path: Path) -> None:
+    images = np.zeros((3, 4), dtype=np.float32)
+    images[:, [1, 2]] = 1.0
+    frame = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2],
+            "source_index": [10, 11, 12],
+            "dataset": ["mnist"] * 3,
+            "label": ["0", "1", "2"],
+            "kind": ["target", "generated", "generated"],
+        }
+    )
+
+    bundle = prepare_array_sprite_atlases(
+        frame,
+        images,
+        output_dir=tmp_path / "array_atlases",
+        image_shape=[2, 2],
+        tile_size=2,
+        max_atlas_size=8,
+    )
+
+    assert len(bundle.atlas_paths) == 1
+    assert bundle.frame["atlas_column"].tolist() == [0, 1, 2]
+    with Image.open(bundle.atlas_paths[0]) as atlas:
+        assert atlas.mode == "RGBA"
+        assert atlas.getpixel((1, 0))[3] == 255
 
 
 def test_canvas_html_contains_thumbnail_interactions(tmp_path: Path) -> None:

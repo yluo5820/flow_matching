@@ -10,6 +10,11 @@ from typing import Any
 import numpy as np
 import torch
 
+from fm_lab.image_diagnostics.trajectory_explorer import (
+    infer_generated_labels_from_target,
+    write_trajectory_explorer_html,
+)
+
 
 def _to_numpy(x: torch.Tensor):
     return x.detach().cpu().numpy()
@@ -154,6 +159,9 @@ def plot_umap_projected_trajectories(
     output_path: str | Path,
     *,
     target_samples: torch.Tensor | np.ndarray | None = None,
+    generated_samples: torch.Tensor | np.ndarray | None = None,
+    target_labels: torch.Tensor | np.ndarray | None = None,
+    generated_labels: torch.Tensor | np.ndarray | None = None,
     max_target_points: int = 3000,
     max_trajectories: int | None = None,
     n_neighbors: int = 30,
@@ -162,6 +170,9 @@ def plot_umap_projected_trajectories(
     random_state: int = 42,
     coordinates_path: str | Path | None = None,
     interactive_path: str | Path | None = None,
+    image_shape: list[int] | tuple[int, ...] | None = None,
+    image_value_range: list[float] | tuple[float, float] = (0.0, 1.0),
+    dataset_name: str = "mnist",
 ) -> dict[str, Any]:
     """Fit a 3D UMAP embedding to high-dimensional trajectories and plot paths."""
 
@@ -187,6 +198,7 @@ def plot_umap_projected_trajectories(
         trajectory_np = trajectory_np[:, :max_trajectories, :]
 
     target_np = None
+    target_labels_np = None
     if target_samples is not None and max_target_points > 0:
         target_np = _as_numpy_array(target_samples)[:max_target_points]
         if target_np.ndim != 2:
@@ -196,9 +208,32 @@ def plot_umap_projected_trajectories(
                 f"Target dim {target_np.shape[1]} does not match trajectory dim "
                 f"{trajectory_np.shape[2]}."
             )
+        if target_labels is not None:
+            target_labels_np = np.asarray(target_labels)[: len(target_np)]
+
+    generated_np = None
+    generated_labels_np = None
+    if generated_samples is not None:
+        generated_np = _as_numpy_array(generated_samples)
+        if generated_np.ndim != 2:
+            raise ValueError(
+                f"Generated samples must have shape (n, dim), got {generated_np.shape}."
+            )
+        if generated_np.shape[1] != trajectory_np.shape[2]:
+            raise ValueError(
+                f"Generated dim {generated_np.shape[1]} does not match trajectory dim "
+                f"{trajectory_np.shape[2]}."
+            )
+        if generated_labels is not None:
+            generated_labels_np = np.asarray(generated_labels)[: len(generated_np)]
 
     flat_trajectory = trajectory_np.reshape(-1, trajectory_np.shape[-1])
-    embedding_inputs = [flat_trajectory] if target_np is None else [target_np, flat_trajectory]
+    embedding_inputs = []
+    if target_np is not None:
+        embedding_inputs.append(target_np)
+    if generated_np is not None:
+        embedding_inputs.append(generated_np)
+    embedding_inputs.append(flat_trajectory)
     embedding_input = np.concatenate(embedding_inputs, axis=0).astype(np.float32, copy=False)
     projected = _compute_umap3d(
         embedding_input,
@@ -213,6 +248,10 @@ def plot_umap_projected_trajectories(
     if target_np is not None:
         target_projected = projected[: len(target_np)]
         offset = len(target_np)
+    generated_projected = None
+    if generated_np is not None:
+        generated_projected = projected[offset : offset + len(generated_np)]
+        offset += len(generated_np)
     trajectory_projected = projected[offset:].reshape(
         trajectory_np.shape[0],
         trajectory_np.shape[1],
@@ -232,6 +271,18 @@ def plot_umap_projected_trajectories(
             linewidths=0,
             depthshade=True,
             label="target",
+        )
+    if generated_projected is not None and len(generated_projected) > 0:
+        axis.scatter(
+            generated_projected[:, 0],
+            generated_projected[:, 1],
+            generated_projected[:, 2],
+            s=4,
+            alpha=0.16,
+            color="#f97316",
+            linewidths=0,
+            depthshade=True,
+            label="generated",
         )
 
     for idx in range(trajectory_projected.shape[1]):
@@ -270,6 +321,8 @@ def plot_umap_projected_trajectories(
     bounds_arrays = [trajectory_projected]
     if target_projected is not None:
         bounds_arrays.append(target_projected)
+    if generated_projected is not None:
+        bounds_arrays.append(generated_projected)
     _format_umap_axis(axis, bounds_arrays)
     fig.tight_layout(pad=1.2)
     fig.subplots_adjust(left=0.02, right=0.94, bottom=0.02, top=0.96)
@@ -286,6 +339,9 @@ def plot_umap_projected_trajectories(
             target=np.empty((0, 3), dtype=np.float32)
             if target_projected is None
             else target_projected.astype(np.float32, copy=False),
+            generated=np.empty((0, 3), dtype=np.float32)
+            if generated_projected is None
+            else generated_projected.astype(np.float32, copy=False),
             n_neighbors=np.asarray([n_neighbors], dtype=np.int64),
             min_dist=np.asarray([min_dist], dtype=np.float32),
             random_state=np.asarray([random_state], dtype=np.int64),
@@ -293,16 +349,41 @@ def plot_umap_projected_trajectories(
         saved_coordinates_path = str(coordinates_output)
 
     saved_interactive_path = None
+    explorer_summary = None
     if interactive_path is not None:
         interactive_output = Path(interactive_path)
-        _write_interactive_umap_trajectory_html(
-            interactive_output,
-            trajectory=trajectory_projected,
-            target=target_projected,
-        )
+        if image_shape is not None and (
+            (target_np is not None and target_projected is not None)
+            or (generated_np is not None and generated_projected is not None)
+        ):
+            if generated_labels_np is None:
+                generated_labels_np = infer_generated_labels_from_target(
+                    generated=generated_projected,
+                    target=target_projected,
+                    target_labels=target_labels_np,
+                )
+            explorer_summary = write_trajectory_explorer_html(
+                interactive_output,
+                trajectory=trajectory_projected,
+                target=target_projected,
+                generated=generated_projected,
+                target_images=target_np,
+                generated_images=generated_np,
+                target_labels=target_labels_np,
+                generated_labels=generated_labels_np,
+                image_shape=image_shape,
+                image_value_range=image_value_range,
+                dataset_name=dataset_name,
+            )
+        else:
+            _write_interactive_umap_trajectory_html(
+                interactive_output,
+                trajectory=trajectory_projected,
+                target=target_projected,
+            )
         saved_interactive_path = str(interactive_output)
 
-    return {
+    result = {
         "plot_path": str(output_path),
         "coordinates_path": saved_coordinates_path,
         "interactive_path": saved_interactive_path,
@@ -310,11 +391,15 @@ def plot_umap_projected_trajectories(
         "n_trajectories": int(trajectory_projected.shape[1]),
         "trajectory_points": int(flat_trajectory.shape[0]),
         "target_points": 0 if target_np is None else int(target_np.shape[0]),
+        "generated_points": 0 if generated_np is None else int(generated_np.shape[0]),
         "n_neighbors": int(n_neighbors),
         "min_dist": float(min_dist),
         "metric": metric,
         "random_state": int(random_state),
     }
+    if explorer_summary is not None:
+        result["explorer"] = explorer_summary
+    return result
 
 
 def _plot_dim(x: np.ndarray) -> int:

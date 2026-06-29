@@ -25,6 +25,19 @@ def test_mnist_images_loads_idx_files(tmp_path) -> None:
     assert metadata["n_images"] == 4
 
 
+def test_mnist_images_sample_with_labels_returns_matching_labels(tmp_path) -> None:
+    _write_fake_mnist(tmp_path, split="train", count=4)
+    target = MNISTImages(root=tmp_path, train=True, download=False)
+
+    torch.manual_seed(12)
+    samples, labels = target.sample_with_labels(3)
+
+    assert samples.shape == (3, 784)
+    assert labels.shape == (3,)
+    assert labels.dtype == torch.int64
+    assert set(labels.tolist()) <= {0, 1, 2, 3}
+
+
 def test_mnist_images_supports_centered_normalization(tmp_path) -> None:
     _write_fake_mnist(tmp_path, split="train", count=2)
     target = MNISTImages(root=tmp_path, train=True, download=False, normalize="minus_one_one")

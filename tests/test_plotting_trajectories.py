@@ -118,11 +118,58 @@ def test_plot_umap_projected_trajectories_supports_high_dimensional_paths(
     assert result["trajectory_points"] == 20
 
 
+def test_plot_umap_projected_trajectories_writes_endpoint_explorer(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    observed = {}
+
+    class FakeUMAP:
+        def __init__(self, **kwargs) -> None:
+            observed["kwargs"] = kwargs
+
+        def fit_transform(self, values: np.ndarray) -> np.ndarray:
+            observed["input_shape"] = values.shape
+            return values[:, :3]
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    output_path = tmp_path / "plots" / "trajectory_umap.png"
+    coordinates_path = tmp_path / "trajectories" / "trajectory_umap.npz"
+    interactive_path = tmp_path / "plots" / "trajectory_umap.html"
+
+    result = plot_umap_projected_trajectories(
+        trajectory=torch.rand(4, 3, 8),
+        target_samples=torch.rand(6, 8),
+        generated_samples=torch.rand(5, 8),
+        target_labels=torch.tensor([0, 1, 2, 3, 4, 5]),
+        output_path=output_path,
+        n_neighbors=4,
+        coordinates_path=coordinates_path,
+        interactive_path=interactive_path,
+        image_shape=[2, 4],
+        dataset_name="mnist",
+    )
+
+    assert output_path.exists()
+    assert interactive_path.exists()
+    html = interactive_path.read_text(encoding="utf-8")
+    assert 'id="preview"' in html
+    assert "endpoint images" in html
+    assert "trajectoryLabels" in html
+    assert result["generated_points"] == 5
+    assert result["explorer"]["endpoint_points"] == 11
+    assert observed["input_shape"] == (6 + 5 + 4 * 3, 8)
+    coordinates = np.load(coordinates_path)
+    assert coordinates["generated"].shape == (5, 3)
+
+
 def test_project_saved_trajectories_writes_summary(tmp_path, monkeypatch) -> None:
     run_dir = tmp_path / "run"
     (run_dir / "samples").mkdir(parents=True)
     (run_dir / "trajectories").mkdir()
     np.save(run_dir / "samples" / "target_reference.npy", np.zeros((7, 4), dtype=np.float32))
+    np.save(run_dir / "samples" / "target_reference_labels.npy", np.arange(7, dtype=np.int64))
+    np.save(run_dir / "samples" / "euler_nfe9.npy", np.ones((5, 4), dtype=np.float32))
     np.save(run_dir / "trajectories" / "euler_nfe9.npy", np.zeros((3, 2, 4), dtype=np.float32))
     np.save(
         run_dir / "trajectories" / "source_reference_nfe9.npy",
@@ -130,6 +177,9 @@ def test_project_saved_trajectories_writes_summary(tmp_path, monkeypatch) -> Non
     )
 
     def fake_plot(trajectory, output_path, **kwargs):
+        assert kwargs["generated_samples"].shape == (5, 4)
+        assert kwargs["target_labels"].shape == (7,)
+        assert kwargs["image_shape"] == [2, 2]
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("plot", encoding="utf-8")
         kwargs["interactive_path"].parent.mkdir(parents=True, exist_ok=True)

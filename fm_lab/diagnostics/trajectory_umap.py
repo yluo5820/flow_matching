@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from fm_lab.plotting.trajectories import plot_umap_projected_trajectories
-from fm_lab.utils.config import ConfigError
+from fm_lab.utils.config import ConfigError, load_config
 from fm_lab.utils.logging import write_json
 
 
@@ -40,6 +40,8 @@ def project_saved_trajectories(config: TrajectoryUMAPConfig) -> dict[str, Any]:
     diagnostics_dir = output_dir / "diagnostics"
 
     target_samples = _load_target_reference(run_dir)
+    target_labels = _load_target_labels(run_dir)
+    image_metadata = _load_image_metadata(run_dir)
     trajectory_paths = _resolve_trajectory_paths(
         run_dir,
         solver=config.solver,
@@ -49,6 +51,7 @@ def project_saved_trajectories(config: TrajectoryUMAPConfig) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for trajectory_path in trajectory_paths:
         solver_name = _solver_from_trajectory_path(trajectory_path, nfe=config.nfe)
+        generated_samples = _load_generated_samples(run_dir, solver=solver_name, nfe=config.nfe)
         coordinates_path = None
         if config.save_coordinates:
             coordinates_path = trajectories_dir / f"{solver_name}_nfe{config.nfe}_umap3d.npz"
@@ -56,6 +59,8 @@ def project_saved_trajectories(config: TrajectoryUMAPConfig) -> dict[str, Any]:
             np.load(trajectory_path),
             plots_dir / f"trajectory_umap3d_{solver_name}_nfe{config.nfe}.png",
             target_samples=target_samples,
+            generated_samples=generated_samples,
+            target_labels=target_labels,
             max_target_points=config.max_target_points,
             max_trajectories=config.max_trajectories,
             n_neighbors=config.n_neighbors,
@@ -64,6 +69,10 @@ def project_saved_trajectories(config: TrajectoryUMAPConfig) -> dict[str, Any]:
             random_state=config.random_state,
             coordinates_path=coordinates_path,
             interactive_path=plots_dir / f"trajectory_umap3d_{solver_name}_nfe{config.nfe}.html",
+            image_shape=image_metadata.get("image_shape")
+            or _infer_image_shape(target_samples, generated_samples),
+            image_value_range=image_metadata.get("image_value_range", (0.0, 1.0)),
+            dataset_name=str(image_metadata.get("dataset", "")),
         )
         result["trajectory_path"] = str(trajectory_path)
         results[solver_name] = result
@@ -87,6 +96,48 @@ def _load_target_reference(run_dir: Path) -> np.ndarray | None:
     if not target_path.exists():
         return None
     return np.load(target_path)
+
+
+def _load_target_labels(run_dir: Path) -> np.ndarray | None:
+    labels_path = run_dir / "samples" / "target_reference_labels.npy"
+    if not labels_path.exists():
+        return None
+    return np.load(labels_path)
+
+
+def _load_generated_samples(run_dir: Path, *, solver: str, nfe: int) -> np.ndarray | None:
+    sample_path = run_dir / "samples" / f"{solver}_nfe{nfe}.npy"
+    if not sample_path.exists():
+        return None
+    return np.load(sample_path)
+
+
+def _infer_image_shape(*arrays: np.ndarray | None) -> list[int] | None:
+    for array in arrays:
+        if array is None or array.ndim != 2:
+            continue
+        side = int(round(float(array.shape[1]) ** 0.5))
+        if side * side == array.shape[1]:
+            return [side, side]
+    return None
+
+
+def _load_image_metadata(run_dir: Path) -> dict[str, Any]:
+    config_path = run_dir / "config.yaml"
+    if not config_path.exists():
+        return {}
+    config = load_config(config_path)
+    data_config = config.get("data", {})
+    dataset = str(data_config.get("name", ""))
+    metadata: dict[str, Any] = {"dataset": dataset}
+    if dataset.lower() == "mnist":
+        metadata["image_shape"] = [28, 28]
+    normalize = str(data_config.get("normalize", "zero_one")).lower()
+    if normalize in {"minus_one_one", "-1_1", "centered"}:
+        metadata["image_value_range"] = (-1.0, 1.0)
+    elif normalize in {"zero_one", "01", "unit"}:
+        metadata["image_value_range"] = (0.0, 1.0)
+    return metadata
 
 
 def _resolve_trajectory_paths(run_dir: Path, *, solver: str, nfe: int) -> list[Path]:

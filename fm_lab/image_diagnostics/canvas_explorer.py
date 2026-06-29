@@ -130,6 +130,83 @@ def prepare_sprite_atlases(
     )
 
 
+def prepare_array_sprite_atlases(
+    frame: pd.DataFrame,
+    images: np.ndarray,
+    *,
+    output_dir: str | Path,
+    image_shape: list[int] | tuple[int, ...] | None,
+    image_value_range: list[float] | tuple[float, float] = (0.0, 1.0),
+    tile_size: int = 28,
+    max_atlas_size: int = 2048,
+) -> AtlasBundle:
+    """Pack in-memory image arrays into the same atlas layout as file previews."""
+
+    if tile_size < 1:
+        raise ValueError("tile_size must be positive.")
+    prepared = frame.reset_index(drop=True).copy()
+    images_np = np.asarray(images)
+    if images_np.shape[0] != len(prepared):
+        raise ValueError(
+            f"Image count {images_np.shape[0]} does not match frame rows {len(prepared)}."
+        )
+
+    atlas_columns = max(1, max_atlas_size // tile_size)
+    atlas_capacity = atlas_columns * atlas_columns
+    labels = sorted(
+        {str(value) for value in prepared.get("label", pd.Series(dtype=str))},
+        key=_natural_sort_key,
+    )
+    palette = {
+        label: LABEL_PALETTE[index % len(LABEL_PALETTE)]
+        for index, label in enumerate(labels)
+    }
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    digest = _array_atlas_digest(
+        prepared,
+        images_np,
+        image_shape=image_shape,
+        image_value_range=image_value_range,
+        tile_size=tile_size,
+        atlas_size=max_atlas_size,
+    )
+    atlas_count = max(1, math.ceil(len(prepared) / atlas_capacity))
+    atlas_paths = [
+        output_path / f"atlas_{digest[:12]}_{index:02d}.png"
+        for index in range(atlas_count)
+    ]
+    if not all(path.exists() for path in atlas_paths):
+        _remove_old_atlases(output_path, keep=set(atlas_paths))
+        _build_array_atlases(
+            prepared,
+            images_np,
+            atlas_paths=atlas_paths,
+            palette=palette,
+            image_shape=image_shape,
+            image_value_range=image_value_range,
+            tile_size=tile_size,
+            atlas_columns=atlas_columns,
+            atlas_capacity=atlas_capacity,
+            atlas_size=max_atlas_size,
+        )
+
+    positions = np.arange(len(prepared), dtype=int)
+    prepared["atlas_index"] = positions // atlas_capacity
+    local_positions = positions % atlas_capacity
+    prepared["atlas_column"] = local_positions % atlas_columns
+    prepared["atlas_row"] = local_positions // atlas_columns
+    return _compact_atlas_bundle(
+        AtlasBundle(
+            frame=prepared,
+            atlas_paths=atlas_paths,
+            palette=palette,
+            tile_size=tile_size,
+            atlas_columns=atlas_columns,
+        )
+    )
+
+
 def build_canvas_html(
     bundle: AtlasBundle,
     *,
@@ -211,6 +288,49 @@ def _build_atlases(
         atlas.save(path, optimize=True)
 
 
+def _build_array_atlases(
+    frame: pd.DataFrame,
+    images: np.ndarray,
+    *,
+    atlas_paths: list[Path],
+    palette: dict[str, tuple[int, int, int]],
+    image_shape: list[int] | tuple[int, ...] | None,
+    image_value_range: list[float] | tuple[float, float],
+    tile_size: int,
+    atlas_columns: int,
+    atlas_capacity: int,
+    atlas_size: int,
+) -> None:
+    atlases = [
+        Image.new(
+            "RGBA",
+            (atlas_size, atlas_size),
+            (0, 0, 0, 0),
+        )
+        for _ in atlas_paths
+    ]
+    for position, row in frame.iterrows():
+        image = _array_preview(
+            images[position],
+            image_shape=image_shape,
+            image_value_range=image_value_range,
+            tile_size=tile_size,
+        )
+        label = str(row.get("label", ""))
+        if str(row.get("dataset", "")).lower() in {"mnist", "fashion_mnist"}:
+            image = _tint_grayscale(image, palette.get(label, (255, 255, 255)))
+        atlas_index = position // atlas_capacity
+        local_position = position % atlas_capacity
+        column = local_position % atlas_columns
+        row_index = local_position // atlas_columns
+        atlases[atlas_index].alpha_composite(
+            image,
+            (column * tile_size, row_index * tile_size),
+        )
+    for atlas, path in zip(atlases, atlas_paths, strict=False):
+        atlas.save(path, optimize=True)
+
+
 def _load_preview(path_value: Any, tile_size: int) -> Image.Image:
     path = Path(str(path_value)) if str(path_value).strip() else None
     if path is None or not path.is_file():
@@ -223,6 +343,48 @@ def _load_preview(path_value: Any, tile_size: int) -> Image.Image:
         y = (tile_size - image.height) // 2
         output.alpha_composite(image, (x, y))
         return output
+
+
+def _array_preview(
+    values: np.ndarray,
+    *,
+    image_shape: list[int] | tuple[int, ...] | None,
+    image_value_range: list[float] | tuple[float, float],
+    tile_size: int,
+) -> Image.Image:
+    array = np.asarray(values)
+    if image_shape is not None:
+        shape = tuple(int(value) for value in image_shape)
+        expected = int(np.prod(shape))
+        if array.size == expected:
+            array = array.reshape(shape)
+    if array.ndim == 1:
+        side = int(round(math.sqrt(array.size)))
+        if side * side != array.size:
+            return Image.new("RGBA", (tile_size, tile_size), (255, 255, 255, 180))
+        array = array.reshape(side, side)
+
+    low = float(image_value_range[0])
+    high = float(image_value_range[1])
+    denom = high - low if high > low else 1.0
+    scaled = np.clip((array.astype(np.float32, copy=False) - low) / denom, 0.0, 1.0)
+    scaled = np.rint(scaled * 255.0).astype(np.uint8)
+    if scaled.ndim == 2:
+        image = Image.fromarray(scaled, mode="L").convert("RGBA")
+    elif scaled.ndim == 3 and scaled.shape[-1] == 1:
+        image = Image.fromarray(scaled[..., 0], mode="L").convert("RGBA")
+    elif scaled.ndim == 3 and scaled.shape[-1] in {3, 4}:
+        mode = "RGB" if scaled.shape[-1] == 3 else "RGBA"
+        image = Image.fromarray(scaled, mode=mode).convert("RGBA")
+    else:
+        return Image.new("RGBA", (tile_size, tile_size), (255, 255, 255, 180))
+
+    image.thumbnail((tile_size, tile_size), Image.Resampling.NEAREST)
+    output = Image.new("RGBA", (tile_size, tile_size), (0, 0, 0, 0))
+    x = (tile_size - image.width) // 2
+    y = (tile_size - image.height) // 2
+    output.alpha_composite(image, (x, y))
+    return output
 
 
 def _tint_grayscale(image: Image.Image, color: tuple[int, int, int]) -> Image.Image:
@@ -384,6 +546,28 @@ def _atlas_digest(frame: pd.DataFrame, *, tile_size: int, atlas_size: int) -> st
             stat = path.stat()
             digest.update(str(stat.st_size).encode())
             digest.update(str(stat.st_mtime_ns).encode())
+    return digest.hexdigest()
+
+
+def _array_atlas_digest(
+    frame: pd.DataFrame,
+    images: np.ndarray,
+    *,
+    image_shape: list[int] | tuple[int, ...] | None,
+    image_value_range: list[float] | tuple[float, float],
+    tile_size: int,
+    atlas_size: int,
+) -> str:
+    digest = hashlib.sha256(
+        f"{tile_size}:{atlas_size}:{image_shape}:{tuple(image_value_range)}".encode()
+    )
+    digest.update(str(images.shape).encode())
+    digest.update(str(images.dtype).encode())
+    digest.update(np.ascontiguousarray(images).view(np.uint8))
+    for row in frame.itertuples(index=False):
+        digest.update(str(getattr(row, "label", "")).encode())
+        digest.update(str(getattr(row, "dataset", "")).encode())
+        digest.update(str(getattr(row, "kind", "")).encode())
     return digest.hexdigest()
 
 

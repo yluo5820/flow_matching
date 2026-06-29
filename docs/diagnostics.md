@@ -260,19 +260,26 @@ Read it as:
 ### `plots/trajectory_umap3d_*_nfe*.png`
 
 For high-dimensional runs such as MNIST, this plot fits a 3D UMAP embedding to
-the selected trajectory states plus saved target reference samples. It then
-draws the ODE paths in that learned 3D coordinate system. Blue points are source
-states, red points are final generated states, and black points are target
-references.
-
-The matching `trajectories/*_nfe*_umap3d.npz` file stores the projected
-trajectory coordinates and target coordinates. Treat the plot as qualitative:
-UMAP preserves local neighborhoods, not physical distances in pixel space.
+the selected trajectory states, saved target reference samples, and solver
+endpoint samples. It then draws the ODE paths in that learned 3D coordinate
+system. Blue points are trajectory source states, red points are trajectory final
+states, black points are target references, and orange points are generated
+solver endpoints. Treat the plot as qualitative: UMAP preserves local
+neighborhoods, not physical distances in pixel space.
 
 The same stem with `.html` is the interactive view. It has a time slider:
-at each selected step it shows only the current particle positions, plus the
-cumulative trajectory segments up to that step. Drag to rotate and use the
-mouse wheel to zoom.
+at each selected step it overlays current particle positions and cumulative
+trajectory segments on an explorer-style endpoint cloud. The left sidebar shows
+the selected endpoint image and local coordinates, matching the dataset explorer
+layout. MNIST target labels are saved as `samples/target_reference_labels.npy`;
+generated endpoint labels are inferred from nearest target neighbors in the
+projected UMAP space when target labels are available. Drag to rotate and use
+the mouse wheel to zoom.
+
+The matching `trajectories/*_nfe*_umap3d.npz` file stores projected trajectory,
+target, and generated endpoint coordinates. Older runs without saved labels can
+still be postprocessed, but class coloring falls back to generic target/generated
+labels until the run is rebuilt or resampled.
 
 ### `diagnostics/mnist_eval_*.json`
 
