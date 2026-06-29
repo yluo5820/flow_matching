@@ -154,12 +154,14 @@ def test_plot_umap_projected_trajectories_writes_endpoint_explorer(
     assert interactive_path.exists()
     html = interactive_path.read_text(encoding="utf-8")
     assert 'id="preview"' in html
-    assert "endpoint images" in html
+    assert "<title>Geometry Explorer</title>" in html
     assert "trajectoryLabels" in html
     assert "trajectoryPreviews" in html
     assert 'id="show-thumbnails"' in html
     assert '"drawThumbnailsDefault":false' in html
-    assert "showTrajectoryPoint" in html
+    assert "THREE.PerspectiveCamera" in html
+    assert 'id="show-trajectory"' in html
+    assert 'id="time"' in html
     assert "function initializeClassFilter(points, onChange)" in html
     assert "function drawPreviewTile(point, x, y, size)" in html
     assert result["generated_points"] == 5

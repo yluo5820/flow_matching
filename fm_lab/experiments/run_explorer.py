@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fm_lab.geometry_explorer.importers import import_existing_outputs
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
 from fm_lab.geometry_explorer.variants import build_dataset_variant, load_variant_config
@@ -51,13 +50,6 @@ def parse_args() -> argparse.Namespace:
     trajectory.add_argument("--min-dist", type=float, default=0.1)
     trajectory.add_argument("--metric", default="euclidean")
     trajectory.add_argument("--random-state", type=int, default=42)
-
-    importer = subparsers.add_parser("import-existing", help="Index existing outputs/runs.")
-    importer.add_argument(
-        "--dataset-root",
-        default=str(PROJECT_ROOT / "outputs" / "dataset_explorer"),
-    )
-    importer.add_argument("--runs-root", default=str(PROJECT_ROOT / "runs"))
 
     launch = subparsers.add_parser("launch", help="Launch the Streamlit geometry explorer.")
     launch.add_argument("--dry-run", action="store_true", help="Print the launch command only.")
@@ -103,17 +95,6 @@ def main() -> None:
         )
         print(f"Registered run: {result['run_id']}")
         print(f"Trajectory views: {', '.join(result['trajectory_views'])}")
-        return
-    if args.command == "import-existing":
-        result = import_existing_outputs(
-            workspace=workspace,
-            dataset_root=args.dataset_root,
-            runs_root=args.runs_root,
-        )
-        print(
-            "Imported existing outputs: "
-            f"{result['dataset_views']} dataset views, {result['runs']} runs"
-        )
         return
     if args.command == "launch":
         command = [

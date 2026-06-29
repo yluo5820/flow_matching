@@ -226,6 +226,7 @@ for (const name of DATA.projections) {
 }
 slider.max = Math.max(0, (DATA.trajectory || []).length - 1);
 timeControl.style.display = DATA.mode === "trajectory" ? "grid" : "none";
+thumbnailToggle.checked = Boolean(DATA.options.drawThumbnailsDefault);
 populateLegend(DATA.palette || {});
 
 function parseColor(label) {

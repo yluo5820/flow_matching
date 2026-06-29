@@ -58,7 +58,6 @@ fm-lab-run-comparison = "fm_lab.experiments.run_comparison:main"
 fm-lab-solver-sensitivity = "fm_lab.experiments.run_solver_sensitivity:main"
 fm-lab-sample-checkpoint = "fm_lab.experiments.run_sample_checkpoint:main"
 fm-lab-train = "fm_lab.experiments.run_train:main"
-fm-lab-trajectory-umap = "fm_lab.experiments.run_trajectory_umap:main"
 
 [tool.setuptools.packages.find]
 include = ["fm_lab*"]

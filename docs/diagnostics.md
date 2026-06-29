@@ -130,10 +130,10 @@ images into a shared 3D UMAP space and written as both a static preview and an
 interactive time-slider view.
 
 For an existing completed run that already has `trajectories/<solver>_nfe*.npy`,
-build only the UMAP trajectory plot without resampling:
+build and register only the UMAP trajectory view without resampling:
 
 ```bash
-.conda/fm_lab/bin/python -m fm_lab.experiments.run_trajectory_umap \
+fm-lab-explorer build-trajectory \
   --run-dir runs/mnist_image_unet_ot \
   --solver euler \
   --nfe 64
@@ -153,64 +153,28 @@ retraining, resample into a separate output directory:
   --trajectory-umap
 ```
 
-## Dataset Explorers
+## Geometry Explorer
 
-The image diagnostics explorer supports full MNIST, Fashion-MNIST, and CIFAR-10
-datasets. Each full config builds aligned 3D projections, projection diagnostics,
-and intrinsic-dimension estimates. The Streamlit app discovers all compatible
-precomputed views automatically.
-
-Full dataset configs include 3D UMAP views with `n_neighbors=15` and
-`n_neighbors=100`. CIFAR-10 configs also include PCA-preprocessed 3D UMAP views
-using the first 10, 15, 20, and 25 principal directions with UMAP
-`n_neighbors=15`. Run the normal build command without `--recompute-projection`:
-cached projections are reused and only missing views are computed.
-
-Fashion-MNIST uses the official 60,000 training and 10,000 test images. Its four
-IDX files are downloaded to `data/fashion_mnist` and checked against the official
-MD5 hashes. Raw-pixel builds do not require an embedding model. DINOv2 builds use
-`facebook/dinov2-base`.
-
-CIFAR-10 also supports `input.color_mode: grayscale`. This converts RGB images
-to luminance before raw features or DINOv2 extraction. Grayscale raw features
-have 1,024 dimensions; DINOv2 receives the luminance image replicated across
-three channels. Grayscale outputs use the separate dataset name
-`cifar10_grayscale`, so automatic discovery does not merge their atlases with
-the RGB dataset.
-
-Validate the dataset download and sample count without computing projections:
+The registry-backed explorer is the active dataset visualization path. It stores
+dataset variants, projection views, and optional model trajectory views under
+`outputs/geometry_explorer`.
 
 ```bash
-.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/fashion_mnist_raw_umap_full.yaml \
-  --dry-run
-```
+fm-lab-explorer build-dataset \
+  --config configs/geometry_explorer/mnist_original.yaml
 
-Build both Fashion-MNIST feature views:
+fm-lab-explorer build-variant \
+  --config configs/geometry_explorer/mnist_long_tail_001.yaml
 
-```bash
-.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/fashion_mnist_raw_umap_full.yaml
+fm-lab-explorer build-view \
+  --dataset mnist/original \
+  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
 
-.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/fashion_mnist_dinov2_umap_full.yaml
-```
+fm-lab-explorer build-view \
+  --dataset mnist/long_tail_001 \
+  --config configs/geometry_explorer/mnist_raw_geometry_view.yaml
 
-Build the full grayscale CIFAR-10 views:
-
-```bash
-.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/cifar10_grayscale_raw_umap_full.yaml
-
-.conda/fm_lab/bin/python experiments/image_diagnostics/build_explorer.py \
-  --config configs/image_diagnostics/cifar10_grayscale_dinov2_umap_full.yaml
-```
-
-Launch the automatic multi-dataset explorer:
-
-```bash
-.conda/fm_lab/bin/streamlit run \
-  experiments/image_diagnostics/explorer_app.py
+fm-lab-explorer launch
 ```
 
 ## Training Outputs

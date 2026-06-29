@@ -184,6 +184,7 @@ def load_trajectory_payload(
             "targetAlpha": 0.28,
             "generatedAlpha": 0.9,
             "lineAlpha": 0.34,
+            "drawThumbnailsDefault": False,
         },
         "counts": {
             "points": int(n_endpoint_rows),

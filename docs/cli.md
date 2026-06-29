@@ -45,7 +45,6 @@ When adding or changing a CLI:
 | `fm-lab-mnist-eval` | Evaluate a completed MNIST image-generation run. | MNIST run directory | pixel/classifier/nearest-neighbor metrics, nearest-neighbor plot |
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
-| `fm-lab-trajectory-umap` | Project saved trajectories into 3D UMAP space. | Saved trajectory arrays | UMAP trajectory PNG/HTML/NPZ, summary JSON |
 
 ## `fm-lab-train`
 
@@ -432,7 +431,6 @@ Key options:
 | `build-variant --config` | Build an edited dataset variant, such as long-tail MNIST. |
 | `build-view --dataset --config` | Build projections and diagnostics for a registered variant. |
 | `build-trajectory --run-dir` | Project and register saved trajectory arrays from a completed run. |
-| `import-existing` | Index existing `outputs/dataset_explorer/*` and `runs/*` artifacts. |
 | `launch` | Start the Streamlit UI. Use `--dry-run` to print the launch command. |
 
 Main workspace layout:
@@ -485,36 +483,6 @@ Key options:
 
 Use `--output-dir` when changing `--nfe`, `--n-samples`, or `--n-trajectories` if you
 want to preserve the original run artifacts.
-
-## `fm-lab-trajectory-umap`
-
-Project already-saved trajectories into a shared 3D UMAP space. This does not load a
-checkpoint or generate new ODE paths; it reads `trajectories/<solver>_nfe*.npy`.
-When matching `samples/<solver>_nfe*.npy` endpoint samples exist, the HTML output
-uses the explorer-style endpoint image preview and class filter.
-
-```bash
-fm-lab-trajectory-umap \
-  --run-dir runs/mnist_image_unet_ot \
-  --solver euler \
-  --nfe 64
-```
-
-Key options:
-
-| Option | Meaning |
-|---|---|
-| `--run-dir` | Completed training run directory. Required. |
-| `--output-dir` | Output directory; defaults to writing into `--run-dir`. |
-| `--solver` | Solver name, or `auto` to process all matching trajectory files. |
-| `--nfe` | NFE suffix to project. |
-| `--max-target-points` | Maximum target reference points included in the UMAP fit. |
-| `--max-trajectories` | Optional cap on trajectory paths included in the UMAP fit. |
-| `--n-neighbors` | UMAP `n_neighbors`. |
-| `--min-dist` | UMAP `min_dist`. |
-| `--metric` | UMAP input metric. |
-| `--random-state` | UMAP random seed. |
-| `--no-save-coordinates` | Skip writing the projected coordinate `.npz`. |
 
 ## `fm-lab-mnist-eval`
 
