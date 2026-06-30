@@ -46,6 +46,21 @@ def test_image_unet_velocity_preserves_flattened_image_shape() -> None:
     assert velocity.shape == x.shape
 
 
+def test_image_unet_velocity_supports_hwc_rgb_images() -> None:
+    model = ImageUNetVelocity(
+        dim=32 * 32 * 3,
+        image_shape=(32, 32, 3),
+        base_channels=8,
+        time_embedding_dim=16,
+    )
+    x = torch.randn(4, 32 * 32 * 3)
+    t = torch.linspace(0.0, 1.0, 4)
+
+    velocity = model(x, t)
+
+    assert velocity.shape == x.shape
+
+
 def test_direction_speed_image_unet_velocity_is_parallel_to_direction() -> None:
     model = DirectionSpeedImageUNet(
         dim=28 * 28,

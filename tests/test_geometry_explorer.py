@@ -193,6 +193,53 @@ def test_dataset_variant_builder_supports_fashion_mnist_and_cifar10(
     assert cifar_gray["label_counts"] == {"airplane": 2, "automobile": 1}
     assert np.load(cifar_gray["data_path"]).shape == (3, 32 * 32)
 
+    fashion_target = build_target(
+        {
+            "data": {
+                "name": "fashion_mnist",
+                "variant_id": "fashion_mnist/tiny",
+                "workspace": str(workspace),
+                "normalize": "zero_one",
+            }
+        }
+    )
+    fashion_samples, fashion_labels = fashion_target.sample_with_labels(5)
+    assert fashion_samples.shape == (5, 784)
+    assert set(fashion_labels.tolist()) <= {0, 1}
+    assert fashion_target.metadata()["image_shape"] == [28, 28]
+
+    cifar_target = build_target(
+        {
+            "data": {
+                "name": "cifar10",
+                "variant_id": "cifar10/tiny",
+                "workspace": str(workspace),
+                "normalize": "minus_one_one",
+            }
+        }
+    )
+    cifar_samples, cifar_labels = cifar_target.sample_with_labels(5)
+    assert cifar_samples.shape == (5, 32 * 32 * 3)
+    assert set(cifar_labels.tolist()) <= {0, 1}
+    assert cifar_target.metadata()["image_shape"] == [32, 32, 3]
+    assert cifar_target.metadata()["image_value_range"] == [-1.0, 1.0]
+    assert float(cifar_samples.min()) >= -1.0
+    assert float(cifar_samples.max()) <= 1.0
+
+    cifar_gray_target = build_target(
+        {
+            "data": {
+                "name": "cifar10_grayscale",
+                "variant_id": "cifar10_grayscale/tiny",
+                "workspace": str(workspace),
+                "normalize": "zero_one",
+            }
+        }
+    )
+    cifar_gray_samples, _ = cifar_gray_target.sample_with_labels(5)
+    assert cifar_gray_samples.shape == (5, 32 * 32)
+    assert cifar_gray_target.metadata()["image_shape"] == [32, 32]
+
 
 def test_build_projection_view_and_unified_dataset_payload(tmp_path: Path) -> None:
     data_root = tmp_path / "mnist"

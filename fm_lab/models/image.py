@@ -12,27 +12,31 @@ from fm_lab.models.mlp import SinusoidalTimeEmbedding, _activation, _source_labe
 
 
 class ImageUNetVelocity(nn.Module):
-    """Small time-conditioned U-Net velocity model for flattened grayscale images."""
+    """Small time-conditioned U-Net velocity model for flattened images."""
 
     def __init__(
         self,
         dim: int,
-        image_shape: tuple[int, int] = (28, 28),
+        image_shape: tuple[int, ...] = (28, 28),
         base_channels: int = 32,
         time_embedding_dim: int = 128,
         activation: str = "silu",
         zero_init_head: bool = True,
     ) -> None:
         super().__init__()
-        height, width = image_shape
-        if dim != height * width:
+        channels, height, width, layout = _parse_image_shape(image_shape)
+        if dim != channels * height * width:
             raise ValueError(
                 f"ImageUNetVelocity dim={dim} does not match image_shape={image_shape}."
             )
         if height % 4 != 0 or width % 4 != 0:
             raise ValueError("ImageUNetVelocity requires image dimensions divisible by 4.")
         self.dim = dim
-        self.image_shape = (height, width)
+        self.channels = channels
+        self.height = height
+        self.width = width
+        self.image_shape = tuple(int(value) for value in image_shape)
+        self.image_layout = layout
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(time_embedding_dim, time_embedding_dim),
@@ -43,7 +47,7 @@ class ImageUNetVelocity(nn.Module):
         c0 = int(base_channels)
         c1 = 2 * c0
         c2 = 4 * c0
-        self.input_block = TimeResBlock(1, c0, time_embedding_dim, activation)
+        self.input_block = TimeResBlock(channels, c0, time_embedding_dim, activation)
         self.down1 = nn.Sequential(nn.Conv2d(c0, c1, kernel_size=3, stride=2, padding=1))
         self.down1_block = TimeResBlock(c1, c1, time_embedding_dim, activation)
         self.down2 = nn.Sequential(nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1))
@@ -54,7 +58,7 @@ class ImageUNetVelocity(nn.Module):
         self.output_block = nn.Sequential(
             nn.GroupNorm(_group_count(c0), c0),
             _activation(activation),
-            nn.Conv2d(c0, 1, kernel_size=3, padding=1),
+            nn.Conv2d(c0, channels, kernel_size=3, padding=1),
         )
         if zero_init_head:
             nn.init.zeros_(self.output_block[-1].weight)
@@ -62,8 +66,13 @@ class ImageUNetVelocity(nn.Module):
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
         del context
-        batch_size = x.shape[0]
-        image = x.reshape(batch_size, 1, *self.image_shape)
+        image = _flat_to_image(
+            x,
+            channels=self.channels,
+            height=self.height,
+            width=self.width,
+            layout=self.image_layout,
+        )
         time_features = self.time_mlp(self.time_embedding(t))
 
         h0 = self.input_block(image, time_features)
@@ -75,7 +84,7 @@ class ImageUNetVelocity(nn.Module):
         u1 = self.up1_block(torch.cat([u1, h1], dim=1), time_features)
         u0 = F.interpolate(u1, size=h0.shape[-2:], mode="nearest")
         u0 = self.up0_block(torch.cat([u0, h0], dim=1), time_features)
-        return self.output_block(u0).reshape(batch_size, self.dim)
+        return _image_to_flat(self.output_block(u0), layout=self.image_layout)
 
 
 class DirectionSpeedImageUNet(nn.Module):
@@ -86,7 +95,7 @@ class DirectionSpeedImageUNet(nn.Module):
     def __init__(
         self,
         dim: int,
-        image_shape: tuple[int, int] = (28, 28),
+        image_shape: tuple[int, ...] = (28, 28),
         base_channels: int = 32,
         time_embedding_dim: int = 128,
         activation: str = "silu",
@@ -145,22 +154,26 @@ class ImagePairScalarUNet(nn.Module):
     def __init__(
         self,
         dim: int,
-        image_shape: tuple[int, int],
+        image_shape: tuple[int, ...],
         base_channels: int,
         time_embedding_dim: int,
         activation: str,
         zero_init_head: bool,
     ) -> None:
         super().__init__()
-        height, width = image_shape
-        if dim != height * width:
+        channels, height, width, layout = _parse_image_shape(image_shape)
+        if dim != channels * height * width:
             raise ValueError(
                 f"ImagePairScalarUNet dim={dim} does not match image_shape={image_shape}."
             )
         if height % 4 != 0 or width % 4 != 0:
             raise ValueError("ImagePairScalarUNet requires image dimensions divisible by 4.")
         self.dim = dim
-        self.image_shape = (height, width)
+        self.channels = channels
+        self.height = height
+        self.width = width
+        self.image_shape = tuple(int(value) for value in image_shape)
+        self.image_layout = layout
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(time_embedding_dim, time_embedding_dim),
@@ -171,7 +184,7 @@ class ImagePairScalarUNet(nn.Module):
         c0 = int(base_channels)
         c1 = 2 * c0
         c2 = 4 * c0
-        self.input_block = TimeResBlock(2, c0, time_embedding_dim, activation)
+        self.input_block = TimeResBlock(2 * channels, c0, time_embedding_dim, activation)
         self.down1 = nn.Sequential(nn.Conv2d(c0, c1, kernel_size=3, stride=2, padding=1))
         self.down1_block = TimeResBlock(c1, c1, time_embedding_dim, activation)
         self.down2 = nn.Sequential(nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1))
@@ -197,11 +210,22 @@ class ImagePairScalarUNet(nn.Module):
         t: torch.Tensor,
         source_label: torch.Tensor,
     ) -> torch.Tensor:
-        batch_size = x.shape[0]
-        image = torch.stack(
+        image = torch.cat(
             (
-                x.reshape(batch_size, *self.image_shape),
-                source_label.reshape(batch_size, *self.image_shape),
+                _flat_to_image(
+                    x,
+                    channels=self.channels,
+                    height=self.height,
+                    width=self.width,
+                    layout=self.image_layout,
+                ),
+                _flat_to_image(
+                    source_label,
+                    channels=self.channels,
+                    height=self.height,
+                    width=self.width,
+                    layout=self.image_layout,
+                ),
             ),
             dim=1,
         )
@@ -254,3 +278,48 @@ def _group_count(channels: int) -> int:
         if channels % groups == 0:
             return groups
     return 1
+
+
+def _parse_image_shape(image_shape: tuple[int, ...]) -> tuple[int, int, int, str]:
+    shape = tuple(int(value) for value in image_shape)
+    if len(shape) == 2:
+        height, width = shape
+        return 1, height, width, "hw"
+    if len(shape) == 3 and shape[-1] in {1, 3, 4}:
+        height, width, channels = shape
+        return channels, height, width, "hwc"
+    if len(shape) == 3 and shape[0] in {1, 3, 4}:
+        channels, height, width = shape
+        return channels, height, width, "chw"
+    raise ValueError(
+        "image_shape must be [height, width], [height, width, channels], "
+        f"or [channels, height, width], got {shape}."
+    )
+
+
+def _flat_to_image(
+    x: torch.Tensor,
+    *,
+    channels: int,
+    height: int,
+    width: int,
+    layout: str,
+) -> torch.Tensor:
+    batch_size = x.shape[0]
+    if layout == "hw":
+        return x.reshape(batch_size, 1, height, width)
+    if layout == "hwc":
+        return x.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
+    if layout == "chw":
+        return x.reshape(batch_size, channels, height, width)
+    raise ValueError(f"Unsupported image layout: {layout}")
+
+
+def _image_to_flat(image: torch.Tensor, *, layout: str) -> torch.Tensor:
+    if layout == "hw":
+        return image.reshape(image.shape[0], -1)
+    if layout == "hwc":
+        return image.permute(0, 2, 3, 1).reshape(image.shape[0], -1)
+    if layout == "chw":
+        return image.reshape(image.shape[0], -1)
+    raise ValueError(f"Unsupported image layout: {layout}")

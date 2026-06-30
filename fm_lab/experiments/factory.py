@@ -19,9 +19,9 @@ from fm_lab.data import (
     GaussianMixture2D,
     GaussianMixture3D,
     HelixMixture,
+    ImageVariantImages,
     LineSegment3D,
     MNISTImages,
-    MNISTVariantImages,
     MoebiusStrip,
     MultiSwissRoll,
     MultiTorus,
@@ -55,6 +55,13 @@ from fm_lab.utils.checkpoints import load_checkpoint
 def build_target(config: dict[str, Any]):
     data_config = config.get("data", {})
     name = data_config.get("name", "two_moons").lower()
+    if data_config.get("variant_id"):
+        return ImageVariantImages(
+            variant_id=str(data_config["variant_id"]),
+            workspace=data_config.get("workspace", "outputs/geometry_explorer"),
+            normalize=str(data_config.get("normalize", "zero_one")),
+            dequantize=bool(data_config.get("dequantize", False)),
+        )
     if name in {"two_moons", "moons"}:
         return TwoMoons(
             noise=float(data_config.get("noise", 0.05)),
@@ -79,13 +86,6 @@ def build_target(config: dict[str, Any]):
             std=float(data_config.get("std", 0.08)),
         )
     if name == "mnist":
-        if data_config.get("variant_id"):
-            return MNISTVariantImages(
-                variant_id=str(data_config["variant_id"]),
-                workspace=data_config.get("workspace", "outputs/geometry_explorer"),
-                normalize=str(data_config.get("normalize", "zero_one")),
-                dequantize=bool(data_config.get("dequantize", False)),
-            )
         return MNISTImages(
             root=data_config.get("root", "data/mnist"),
             train=bool(data_config.get("train", True)),

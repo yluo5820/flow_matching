@@ -839,7 +839,10 @@ def _plot_generated_image_samples(
     vmin, vmax = float(image_value_range[0]), float(image_value_range[1])
     for axis, (name, samples) in zip(axes.ravel(), panels.items(), strict=True):
         grid = _make_image_grid(samples, image_shape=image_shape, value_range=(vmin, vmax))
-        axis.imshow(grid, cmap="gray", vmin=vmin, vmax=vmax)
+        if grid.ndim == 3:
+            axis.imshow(_scale_rgb_for_display(grid, value_range=(vmin, vmax)))
+        else:
+            axis.imshow(grid, cmap="gray", vmin=vmin, vmax=vmax)
         axis.set_title(name)
         axis.axis("off")
     fig.tight_layout()
@@ -874,7 +877,15 @@ def _plot_image_trajectories(
                 trajectory_np[time_idx, row : row + 1],
                 image_shape=image_shape,
             )[0]
-            axes[row, col].imshow(np.clip(image, vmin, vmax), cmap="gray", vmin=vmin, vmax=vmax)
+            if image.ndim == 3:
+                axes[row, col].imshow(_scale_rgb_for_display(image, value_range=(vmin, vmax)))
+            else:
+                axes[row, col].imshow(
+                    np.clip(image, vmin, vmax),
+                    cmap="gray",
+                    vmin=vmin,
+                    vmax=vmax,
+                )
             axes[row, col].axis("off")
             if row == 0:
                 axes[row, col].set_title(f"t{time_idx}", fontsize=8)
@@ -890,19 +901,23 @@ def _make_image_grid(
     value_range: tuple[float, float],
 ) -> np.ndarray:
     images = _reshape_image_samples(samples, image_shape=image_shape)
-    n_images, height, width = images.shape
+    n_images, height, width = images.shape[:3]
     grid_cols = int(np.ceil(np.sqrt(n_images)))
     grid_rows = int(np.ceil(n_images / grid_cols))
     vmin, vmax = value_range
-    grid = np.full((grid_rows * height, grid_cols * width), vmin, dtype=np.float32)
+    if images.ndim == 4:
+        grid_shape = (grid_rows * height, grid_cols * width, images.shape[-1])
+    else:
+        grid_shape = (grid_rows * height, grid_cols * width)
+    grid = np.full(grid_shape, vmin, dtype=np.float32)
     for idx, image in enumerate(images):
         row = idx // grid_cols
         col = idx % grid_cols
-        grid[row * height : (row + 1) * height, col * width : (col + 1) * width] = np.clip(
-            image,
-            vmin,
-            vmax,
-        )
+        grid[
+            row * height : (row + 1) * height,
+            col * width : (col + 1) * width,
+            ...,
+        ] = np.clip(image, vmin, vmax)
     return grid
 
 
@@ -911,19 +926,47 @@ def _reshape_image_samples(
     *,
     image_shape: list[int] | tuple[int, ...],
 ) -> np.ndarray:
-    height, width = _normalize_image_shape(image_shape)
-    if samples.shape[-1] != height * width:
+    channels, height, width, layout = _normalize_image_shape(image_shape)
+    expected_dim = channels * height * width
+    if samples.shape[-1] != expected_dim:
         raise ValueError(
-            f"Image samples have dim {samples.shape[-1]}, expected {height * width} "
+            f"Image samples have dim {samples.shape[-1]}, expected {expected_dim} "
             f"for image_shape={tuple(image_shape)}."
         )
-    return samples.reshape(-1, height, width)
+    if layout == "hw":
+        return samples.reshape(-1, height, width)
+    if layout == "hwc":
+        images = samples.reshape(-1, height, width, channels)
+    else:
+        images = samples.reshape(-1, channels, height, width).transpose(0, 2, 3, 1)
+    if channels == 1:
+        return images[..., 0]
+    return images
 
 
-def _normalize_image_shape(image_shape: list[int] | tuple[int, ...]) -> tuple[int, int]:
+def _normalize_image_shape(
+    image_shape: list[int] | tuple[int, ...],
+) -> tuple[int, int, int, str]:
     shape = tuple(int(value) for value in image_shape)
     if len(shape) == 2:
-        return shape
-    if len(shape) == 3 and shape[0] == 1:
-        return shape[1], shape[2]
-    raise ValueError(f"Only grayscale image shapes are supported, got {shape}.")
+        height, width = shape
+        return 1, height, width, "hw"
+    if len(shape) == 3 and shape[-1] in {1, 3, 4}:
+        height, width, channels = shape
+        return channels, height, width, "hwc"
+    if len(shape) == 3 and shape[0] in {1, 3, 4}:
+        channels, height, width = shape
+        return channels, height, width, "chw"
+    raise ValueError(
+        "image_shape must be [height, width], [height, width, channels], "
+        f"or [channels, height, width], got {shape}."
+    )
+
+
+def _scale_rgb_for_display(
+    image: np.ndarray,
+    *,
+    value_range: tuple[float, float],
+) -> np.ndarray:
+    vmin, vmax = value_range
+    return np.clip((image - vmin) / (vmax - vmin), 0.0, 1.0)

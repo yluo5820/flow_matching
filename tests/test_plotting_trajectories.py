@@ -59,6 +59,22 @@ def test_plot_generated_samples_supports_image_grid(tmp_path) -> None:
     assert output_path.stat().st_size > 0
 
 
+def test_plot_generated_samples_supports_rgb_image_grid(tmp_path) -> None:
+    output_path = tmp_path / "plots" / "generated_rgb_images.png"
+
+    plot_generated_samples(
+        target_samples=torch.rand(16, 32 * 32 * 3),
+        generated={"euler": torch.rand(16, 32 * 32 * 3)},
+        output_path=output_path,
+        image_shape=[32, 32, 3],
+        image_value_range=[0.0, 1.0],
+        max_points=16,
+    )
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+
 def test_plot_trajectories_supports_image_snapshots(tmp_path) -> None:
     output_path = tmp_path / "plots" / "trajectory_images.png"
     trajectory = torch.rand(5, 4, 28 * 28)

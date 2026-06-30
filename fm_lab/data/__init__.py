@@ -1,6 +1,7 @@
 """Data distributions for flow matching experiments."""
 
 from fm_lab.data.base import TargetDistribution
+from fm_lab.data.image_variant import ImageVariantImages
 from fm_lab.data.manifold_toys import (
     GaussianMixture3D,
     HelixMixture,
@@ -26,6 +27,7 @@ __all__ = [
     "GaussianMixture3D",
     "GaussianMixture2D",
     "HelixMixture",
+    "ImageVariantImages",
     "LineSegment3D",
     "MoebiusStrip",
     "MultiSwissRoll",
