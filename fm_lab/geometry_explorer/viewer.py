@@ -51,8 +51,8 @@ def _html_template(
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; overflow: hidden; background: #111; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f2f2f2; }}
-  #app {{ display: grid; grid-template-columns: 310px 1fr; height: {height}px; background: #111; }}
-  #sidebar {{ background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; }}
+  #app {{ display: grid; grid-template-columns: 310px 1fr; height: {height}px; min-height: 0; background: #111; overflow: hidden; }}
+  #sidebar {{ background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; overflow: hidden; }}
   .control {{ display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 9px; }}
   label, .muted {{ color: #c8c8c8; font-size: 13px; }}
   select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
@@ -69,16 +69,16 @@ def _html_template(
   .class-option:hover {{ background: #ddd; }}
   .class-option input {{ margin: 0; }}
   .class-count {{ margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }}
-  #preview-wrap {{ width: 100%; aspect-ratio: 1; background: #191919; display: grid; place-items: center; }}
+  #preview-wrap {{ width: 100%; aspect-ratio: 1; flex: 0 0 auto; background: #191919; display: grid; place-items: center; }}
   #preview {{ width: 100%; height: 100%; image-rendering: pixelated; }}
-  #sample-info {{ min-height: 116px; display: grid; gap: 5px; align-content: start; }}
+  #sample-info {{ min-height: 0; flex: 1 1 auto; display: grid; gap: 5px; align-content: start; overflow-y: auto; overscroll-behavior: contain; }}
   #sample-label {{ font-size: 24px; font-weight: 650; }}
   #sample-index {{ color: #a9a9a9; font-variant-numeric: tabular-nums; }}
   #metrics {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; margin-top: 8px; padding-top: 10px; border-top: 1px solid #3a3a3a; font-size: 12px; color: #bdbdbd; }}
   .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
   .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }}
   .metric-value {{ color: #eee; font-variant-numeric: tabular-nums; text-align: right; }}
-  #main {{ position: relative; min-width: 0; overflow: hidden; background: #111; }}
+  #main {{ position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #111; }}
   #main canvas {{ position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }}
   #main canvas.dragging {{ cursor: grabbing; }}
   #status {{ position: absolute; right: 14px; bottom: 12px; color: #777; font-size: 12px; pointer-events: none; }}
@@ -485,8 +485,10 @@ function requestRender() {
 
 function resize() {
   const rect = main.getBoundingClientRect();
-  renderer.setSize(rect.width, rect.height, false);
-  camera.aspect = Math.max(1e-3, rect.width / Math.max(1, rect.height));
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
+  renderer.setSize(width, height, false);
+  camera.aspect = Math.max(1e-3, width / height);
   camera.updateProjectionMatrix();
   preview.width = Math.max(1, Math.round(preview.clientWidth * window.devicePixelRatio));
   preview.height = Math.max(1, Math.round(preview.clientHeight * window.devicePixelRatio));
@@ -498,6 +500,12 @@ function selectionLabel(selection) {
   if (!selection) return "-";
   if (selection.kind === "trajectory") return DATA.trajectoryLabels[selection.index] || "trajectory";
   return DATA.points[selection.index].label || "-";
+}
+
+function sameSelection(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return left.kind === right.kind && left.index === right.index;
 }
 
 function showSelection(selection) {
@@ -611,9 +619,12 @@ window.addEventListener("pointermove", event => {
     requestRender();
     return;
   }
-  hoverSelection = intersectSelection(event);
-  if (!pinnedSelection) showSelection(hoverSelection);
-  updateStatus();
+  const nextSelection = intersectSelection(event);
+  if (!sameSelection(hoverSelection, nextSelection)) {
+    hoverSelection = nextSelection;
+    if (!pinnedSelection) showSelection(hoverSelection);
+    updateStatus();
+  }
 });
 window.addEventListener("pointerup", event => {
   if (!dragging) return;
@@ -646,6 +657,11 @@ zoomOutButton.addEventListener("click", () => {
   requestRender();
 });
 window.addEventListener("resize", resize);
+if (window.ResizeObserver) {
+  const resizeObserver = new ResizeObserver(() => resize());
+  resizeObserver.observe(main);
+  resizeObserver.observe(document.getElementById("preview-wrap"));
+}
 
 initializeClassFilter(DATA.points, onClassFilterChange);
 loadAtlases(DATA.atlases).then(() => {

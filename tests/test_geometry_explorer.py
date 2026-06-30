@@ -300,6 +300,8 @@ id_estimation:
     assert "THREE.PerspectiveCamera" in html
     assert "texture2D(textureAtlas" in html
     assert "Diagnostics · ${projection}" in html
+    assert "ResizeObserver" in html
+    assert "overflow-y: auto" in html
     assert 'id="show-thumbnails"' in html
     assert 'id="class-filter"' in html
 
