@@ -199,7 +199,8 @@ scene.add(group);
 const endpointGroup = new THREE.Group();
 const lineGroup = new THREE.Group();
 const particleGroup = new THREE.Group();
-group.add(lineGroup, endpointGroup, particleGroup);
+const hoverGroup = new THREE.Group();
+group.add(lineGroup, endpointGroup, particleGroup, hoverGroup);
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points.threshold = 0.75;
 const mouse = new THREE.Vector2();
@@ -275,6 +276,7 @@ function rebuildScene() {
     buildTrajectoryParticles();
   }
   updateStatus();
+  updateHoverMarker();
   requestRender();
 }
 
@@ -301,19 +303,12 @@ function buildEndpoints() {
     positions.set([coordinate[0] || 0, coordinate[1] || 0, coordinate[2] || 0], visiblePosition * 3);
     colors.set(parseColor(point.label), visiblePosition * 3);
   });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  const material = new THREE.PointsMaterial({
-    size: thumbnailToggle.checked ? DATA.options.pointSize * 0.07 : DATA.options.pointSize * 0.045,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.9,
-    sizeAttenuation: true,
-  });
-  const points = new THREE.Points(geometry, material);
-  points.userData = { kind: "endpoint", indices: visibleIndices };
-  endpointGroup.add(points);
+  endpointGroup.add(coloredPointCloud(positions, colors, {
+    pointSize: Math.max(5.5, DATA.options.pointSize * 0.72),
+    opacity: 0.88,
+    kind: "endpoint",
+    indices: visibleIndices,
+  }));
 }
 
 function canUseAtlasPointCloud() {
@@ -452,13 +447,54 @@ function buildTrajectoryParticles() {
     positions.set([coordinate[0], coordinate[1], coordinate[2]], visiblePosition * 3);
     colors.set(parseColor(label), visiblePosition * 3);
   });
+  const points = coloredPointCloud(positions, colors, {
+    pointSize: Math.max(5.0, DATA.options.pointSize * 0.62),
+    opacity: 0.92,
+    kind: "trajectory",
+    indices,
+  });
+  particleGroup.add(points);
+}
+
+function coloredPointCloud(positions, colors, options) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  const material = new THREE.PointsMaterial({ size: 0.72, vertexColors: true, sizeAttenuation: true });
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      pointSize: { value: options.pointSize },
+      opacity: { value: options.opacity },
+    },
+    vertexShader: `
+      attribute vec3 color;
+      varying vec3 vColor;
+      uniform float pointSize;
+      void main() {
+        vColor = color;
+        gl_PointSize = pointSize;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      uniform float opacity;
+      void main() {
+        vec2 centered = gl_PointCoord * 2.0 - 1.0;
+        float distance = length(centered);
+        if (distance > 1.0) discard;
+        float edge = smoothstep(0.78, 1.0, distance);
+        float alpha = opacity * (1.0 - smoothstep(0.86, 1.0, distance));
+        vec3 color = mix(vColor, vec3(0.03, 0.03, 0.03), edge * 0.28);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  });
   const points = new THREE.Points(geometry, material);
-  points.userData = { kind: "trajectory", indices };
-  particleGroup.add(points);
+  points.userData = { kind: options.kind, indices: options.indices };
+  return points;
 }
 
 function updateCamera() {
@@ -509,6 +545,7 @@ function sameSelection(left, right) {
 }
 
 function showSelection(selection) {
+  updateHoverMarker();
   clearPreview();
   metricsElement.replaceChildren();
   labelElement.textContent = "-";
@@ -554,6 +591,96 @@ function appendMetricHeading(text) {
 function drawPreview(point) {
   const margin = 12;
   drawPreviewTile(point, margin, margin, preview.clientWidth - margin * 2, preview.clientHeight - margin * 2);
+}
+
+function updateHoverMarker() {
+  clearObject(hoverGroup);
+  const selection = pinnedSelection || hoverSelection;
+  if (!selection) {
+    requestRender();
+    return;
+  }
+  if (selection.kind === "trajectory") {
+    const previewPoint = DATA.trajectoryPreviews[selection.index];
+    const coordinate = (DATA.trajectory[step] || [])[selection.index];
+    if (previewPoint && coordinate && thumbnailToggle.checked && addHoverAtlasThumbnail(previewPoint, coordinate)) {
+      requestRender();
+      return;
+    }
+    addHoverColorPoint(coordinate, selectionLabel(selection));
+    requestRender();
+    return;
+  }
+  const point = DATA.points[selection.index];
+  if (!point || !pointVisible(point)) {
+    requestRender();
+    return;
+  }
+  const coordinate = pointCoordinate(point);
+  if (thumbnailToggle.checked && addHoverAtlasThumbnail(point, coordinate)) {
+    requestRender();
+    return;
+  }
+  addHoverColorPoint(coordinate, point.label);
+  requestRender();
+}
+
+function addHoverAtlasThumbnail(point, coordinate) {
+  const texture = atlasTextures[point.atlas];
+  if (!texture || !coordinate) return false;
+  const positions = new Float32Array([coordinate[0] || 0, coordinate[1] || 0, coordinate[2] || 0]);
+  const offsets = new Float32Array([
+    point.column * DATA.tileSize / DATA.atlasSize,
+    point.row * DATA.tileSize / DATA.atlasSize,
+  ]);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("offset", new THREE.BufferAttribute(offsets, 2));
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      textureAtlas: { value: texture },
+      repeat: { value: new THREE.Vector2(DATA.tileSize / DATA.atlasSize, DATA.tileSize / DATA.atlasSize) },
+      pointSize: { value: Math.max(DATA.options.hoverSize || 0, DATA.options.pointSize * 3.5) },
+    },
+    vertexShader: `
+      attribute vec2 offset;
+      varying vec2 vOffset;
+      uniform float pointSize;
+      void main() {
+        vOffset = offset;
+        gl_PointSize = pointSize;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D textureAtlas;
+      uniform vec2 repeat;
+      varying vec2 vOffset;
+      void main() {
+        vec2 uv = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
+        vec4 texel = texture2D(textureAtlas, vOffset + uv * repeat);
+        if (texel.a < 0.04) discard;
+        gl_FragColor = texel;
+      }
+    `,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  hoverGroup.add(new THREE.Points(geometry, material));
+  return true;
+}
+
+function addHoverColorPoint(coordinate, label) {
+  if (!coordinate) return;
+  const positions = new Float32Array([coordinate[0] || 0, coordinate[1] || 0, coordinate[2] || 0]);
+  const colors = new Float32Array(parseColor(label));
+  hoverGroup.add(coloredPointCloud(positions, colors, {
+    pointSize: Math.max(18, (DATA.options.hoverSize || DATA.options.pointSize * 3.0) * 0.55),
+    opacity: 0.98,
+    kind: "hover",
+    indices: [0],
+  }));
 }
 
 function intersectSelection(event) {
