@@ -493,6 +493,126 @@ def test_explorer_cli_launch_dry_run(tmp_path: Path, monkeypatch, capsys) -> Non
     assert "geometry_explorer_app.py" in output
 
 
+def test_explorer_cli_build_all_dry_run_discovers_dataset_configs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "mnist_original.yaml").write_text(
+        """
+family: mnist
+variant: original
+input:
+  dataset_root: data/mnist
+""",
+        encoding="utf-8",
+    )
+    (config_dir / "raw_geometry_view.yaml").write_text(
+        """
+explorer_name: raw_geometry_view
+features:
+  name: raw_pixels
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fm-lab-explorer",
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "build-all",
+            "--config-dir",
+            str(config_dir),
+            "--view-config",
+            str(config_dir / "raw_geometry_view.yaml"),
+            "--dry-run",
+        ],
+    )
+
+    explorer_cli_main()
+
+    output = capsys.readouterr().out
+    assert "Geometry explorer build plan" in output
+    assert "mnist/original" in output
+    assert "raw_geometry_view.yaml" in output
+
+
+def test_explorer_cli_build_all_runs_dataset_then_view(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "mnist_original.yaml").write_text(
+        """
+family: mnist
+variant: original
+input:
+  dataset_root: data/mnist
+""",
+        encoding="utf-8",
+    )
+    view_config = config_dir / "raw_geometry_view.yaml"
+    view_config.write_text(
+        """
+explorer_name: raw_geometry_view
+features:
+  name: raw_pixels
+""",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_build_dataset_variant(config, **kwargs):
+        calls.append(("dataset", f"{config.family}/{config.variant}", kwargs))
+        return {
+            "variant_id": f"{config.family}/{config.variant}",
+            "dataset_path": tmp_path / "dataset.parquet",
+        }
+
+    def fake_build_projection_view(**kwargs):
+        calls.append(("view", kwargs["variant_id"], kwargs))
+        return {
+            "view_id": "mnist__original__raw_pixels__raw_geometry_view",
+            "explorer_data": tmp_path / "explorer.parquet",
+        }
+
+    monkeypatch.setattr(
+        "fm_lab.experiments.run_explorer.build_dataset_variant",
+        fake_build_dataset_variant,
+    )
+    monkeypatch.setattr(
+        "fm_lab.experiments.run_explorer.build_projection_view",
+        fake_build_projection_view,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fm-lab-explorer",
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "build-all",
+            "--config-dir",
+            str(config_dir),
+            "--view-config",
+            str(view_config),
+            "--dataset",
+            "mnist/original",
+        ],
+    )
+
+    explorer_cli_main()
+
+    assert [call[:2] for call in calls] == [
+        ("dataset", "mnist/original"),
+        ("view", "mnist/original"),
+    ]
+    assert calls[1][2]["config_path"] == view_config
+
+
 def _write_fake_mnist(root: Path, *, split: str, count: int) -> None:
     root.mkdir(parents=True, exist_ok=True)
     prefix = "train" if split == "train" else "t10k"
