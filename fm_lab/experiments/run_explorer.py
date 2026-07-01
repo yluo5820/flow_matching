@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fm_lab.geometry_explorer.bundles import load_projection_group_diagnostics
 from fm_lab.geometry_explorer.display import metric_label
+from fm_lab.geometry_explorer.model_diagnostics import build_model_diagnostics
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
 from fm_lab.geometry_explorer.variants import build_dataset_variant, load_variant_config
@@ -97,6 +98,49 @@ def parse_args() -> argparse.Namespace:
     trajectory.add_argument("--metric", default="euclidean")
     trajectory.add_argument("--random-state", type=int, default=42)
 
+    model_diag = subparsers.add_parser(
+        "build-model-diagnostics",
+        help="Compute model-dependent diagnostics and merge them into registered views.",
+    )
+    model_diag.add_argument("--dataset", required=True, help="Dataset variant id.")
+    model_diag.add_argument("--run-dir", required=True, help="Completed training run directory.")
+    model_diag.add_argument(
+        "--estimator",
+        action="append",
+        choices=("fm_jacobian",),
+        default=None,
+        help="Model diagnostic estimator to run. Repeatable. Default: fm_jacobian.",
+    )
+    model_diag.add_argument(
+        "--t-values",
+        type=float,
+        nargs="+",
+        default=[0.6, 0.8, 0.9, 0.95],
+        help="Intermediate FM times for model-dependent diagnostics.",
+    )
+    model_diag.add_argument("--eps", type=float, default=1e-2)
+    model_diag.add_argument("--num-directions", type=int, default=64)
+    model_diag.add_argument("--threshold", type=float, default=1e-2)
+    model_diag.add_argument("--nfe", type=int, default=32)
+    model_diag.add_argument(
+        "--solver",
+        default="rk4",
+        choices=("euler", "heun", "midpoint", "rk4"),
+    )
+    model_diag.add_argument("--max-samples", type=int, default=None)
+    model_diag.add_argument("--sample-seed", type=int, default=0)
+    model_diag.add_argument("--device", default="auto")
+    model_diag.add_argument(
+        "--normalize",
+        default="auto",
+        help="Input normalization for checkpoint evaluation. Default: checkpoint data.normalize.",
+    )
+    model_diag.add_argument(
+        "--view-id",
+        default=None,
+        help="Only merge into this projection view. Defaults to all views for the dataset.",
+    )
+
     launch = subparsers.add_parser("launch", help="Launch the Streamlit geometry explorer.")
     launch.add_argument("--dry-run", action="store_true", help="Print the launch command only.")
 
@@ -165,6 +209,28 @@ def main() -> None:
         )
         print(f"Registered run: {result['run_id']}")
         print(f"Trajectory views: {', '.join(result['trajectory_views'])}")
+        return
+    if args.command == "build-model-diagnostics":
+        result = build_model_diagnostics(
+            variant_id=args.dataset,
+            run_dir=args.run_dir,
+            workspace=workspace,
+            estimators=tuple(args.estimator or ["fm_jacobian"]),
+            t_values=tuple(args.t_values),
+            eps=args.eps,
+            num_directions=args.num_directions,
+            threshold=args.threshold,
+            nfe=args.nfe,
+            solver=args.solver,
+            max_samples=args.max_samples,
+            sample_seed=args.sample_seed,
+            device=args.device,
+            normalize=args.normalize,
+            view_id=args.view_id,
+        )
+        print(f"Built model diagnostics for run: {result['run_id']}")
+        print(f"Local diagnostics: {result['local_path']}")
+        print(f"Merged views: {len(result['merged_views'])}")
         return
     if args.command == "launch":
         command = [

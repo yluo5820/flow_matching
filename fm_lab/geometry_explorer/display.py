@@ -53,6 +53,9 @@ def trajectory_view_label(*, run_id: str, solver: str, nfe: int) -> str:
 
 
 def metric_label(key: str) -> str:
+    fm_jacobian = _fm_jacobian_metric_label(key)
+    if fm_jacobian is not None:
+        return fm_jacobian
     patterns = (
         (r"^mle_lid_k(\d+)$", "MLE intrinsic dimension (k={})"),
         (r"^global_mle_lid_k(\d+)$", "Global MLE intrinsic dimension (k={})"),
@@ -86,6 +89,27 @@ def metric_label(key: str) -> str:
         "label_agreement": "Local label agreement",
     }
     return exact.get(key, humanize_identifier(key))
+
+
+def _fm_jacobian_metric_label(key: str) -> str | None:
+    match = re.fullmatch(
+        r"^(mean_|median_)?fm_jacobian_(participation|entropy|threshold)_rank_t(\d{4})$",
+        key,
+    )
+    if not match:
+        return None
+    aggregate, kind, time_value = match.groups()
+    kind_label = {
+        "participation": "participation rank",
+        "entropy": "entropy rank",
+        "threshold": "threshold rank",
+    }[kind]
+    prefix = ""
+    if aggregate == "mean_":
+        prefix = "Mean "
+    elif aggregate == "median_":
+        prefix = "Median "
+    return f"{prefix}FM Jacobian {kind_label} (t={int(time_value) / 1000:.3f})"
 
 
 def humanize_identifier(value: str) -> str:

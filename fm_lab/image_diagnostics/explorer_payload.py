@@ -187,6 +187,9 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "pca_dim_",
         "ball_scaling_dim_k",
         "ball_scaling_r2_k",
+        "fm_jacobian_participation_rank_",
+        "fm_jacobian_entropy_rank_",
+        "fm_jacobian_threshold_rank_",
     )
     exact = {
         "two_nn_lid",

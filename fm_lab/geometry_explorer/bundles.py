@@ -398,6 +398,13 @@ def _primary_group_metric(metrics: list[str]) -> str:
     for column in GROUP_ID_PRIMARY_CANDIDATES:
         if column in metrics:
             return column
+    for prefix in (
+        "median_fm_jacobian_participation_rank_",
+        "mean_fm_jacobian_participation_rank_",
+    ):
+        for column in metrics:
+            if column.startswith(prefix):
+                return column
     return metrics[0]
 
 
