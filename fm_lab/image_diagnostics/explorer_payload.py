@@ -190,6 +190,13 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "fm_jacobian_participation_rank_",
         "fm_jacobian_entropy_rank_",
         "fm_jacobian_threshold_rank_",
+        "fm_flipd_lid_",
+        "fm_flipd_divergence_",
+        "fm_flipd_score_norm_",
+        "diffusion_normal_bundle_lid_",
+        "diffusion_normal_bundle_normal_dim_",
+        "diffusion_flipd_lid_",
+        "diffusion_flipd_divergence_",
     )
     exact = {
         "two_nn_lid",

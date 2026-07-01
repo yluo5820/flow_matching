@@ -107,7 +107,12 @@ def parse_args() -> argparse.Namespace:
     model_diag.add_argument(
         "--estimator",
         action="append",
-        choices=("fm_jacobian",),
+        choices=(
+            "fm_jacobian",
+            "fm_flipd",
+            "diffusion_normal_bundle",
+            "diffusion_flipd",
+        ),
         default=None,
         help="Model diagnostic estimator to run. Repeatable. Default: fm_jacobian.",
     )
@@ -121,6 +126,37 @@ def parse_args() -> argparse.Namespace:
     model_diag.add_argument("--eps", type=float, default=1e-2)
     model_diag.add_argument("--num-directions", type=int, default=64)
     model_diag.add_argument("--threshold", type=float, default=1e-2)
+    model_diag.add_argument(
+        "--num-trace-samples",
+        type=int,
+        default=1,
+        help="Hutchinson trace probes for FLIPD estimators. Use 0 for exact divergence.",
+    )
+    model_diag.add_argument(
+        "--num-perturbations",
+        type=int,
+        default=64,
+        help="Score perturbations for diffusion_normal_bundle.",
+    )
+    model_diag.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size for batchable model diagnostics.",
+    )
+    model_diag.add_argument(
+        "--fm-schedule",
+        default="auto",
+        choices=("auto", "linear", "trig", "cosine"),
+        help="Gaussian FM schedule used by fm_flipd. Default infers from checkpoint config.",
+    )
+    model_diag.add_argument(
+        "--diffusion-sigmas",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Optional diffusion sigma values. Supply one value or one per --t-values.",
+    )
     model_diag.add_argument("--nfe", type=int, default=32)
     model_diag.add_argument(
         "--solver",
@@ -220,6 +256,13 @@ def main() -> None:
             eps=args.eps,
             num_directions=args.num_directions,
             threshold=args.threshold,
+            num_trace_samples=None if args.num_trace_samples == 0 else args.num_trace_samples,
+            num_perturbations=args.num_perturbations,
+            batch_size=args.batch_size,
+            fm_schedule=args.fm_schedule,
+            diffusion_sigmas=(
+                tuple(args.diffusion_sigmas) if args.diffusion_sigmas is not None else None
+            ),
             nfe=args.nfe,
             solver=args.solver,
             max_samples=args.max_samples,

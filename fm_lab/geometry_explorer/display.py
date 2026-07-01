@@ -53,9 +53,9 @@ def trajectory_view_label(*, run_id: str, solver: str, nfe: int) -> str:
 
 
 def metric_label(key: str) -> str:
-    fm_jacobian = _fm_jacobian_metric_label(key)
-    if fm_jacobian is not None:
-        return fm_jacobian
+    model_diagnostic = _model_diagnostic_metric_label(key)
+    if model_diagnostic is not None:
+        return model_diagnostic
     patterns = (
         (r"^mle_lid_k(\d+)$", "MLE intrinsic dimension (k={})"),
         (r"^global_mle_lid_k(\d+)$", "Global MLE intrinsic dimension (k={})"),
@@ -91,25 +91,69 @@ def metric_label(key: str) -> str:
     return exact.get(key, humanize_identifier(key))
 
 
-def _fm_jacobian_metric_label(key: str) -> str | None:
+def _model_diagnostic_metric_label(key: str) -> str | None:
     match = re.fullmatch(
         r"^(mean_|median_)?fm_jacobian_(participation|entropy|threshold)_rank_t(\d{4})$",
         key,
     )
-    if not match:
-        return None
-    aggregate, kind, time_value = match.groups()
-    kind_label = {
-        "participation": "participation rank",
-        "entropy": "entropy rank",
-        "threshold": "threshold rank",
-    }[kind]
-    prefix = ""
-    if aggregate == "mean_":
-        prefix = "Mean "
-    elif aggregate == "median_":
-        prefix = "Median "
-    return f"{prefix}FM Jacobian {kind_label} (t={int(time_value) / 1000:.3f})"
+    if match:
+        aggregate, kind, time_value = match.groups()
+        kind_label = {
+            "participation": "participation rank",
+            "entropy": "entropy rank",
+            "threshold": "threshold rank",
+        }[kind]
+        return (
+            f"{_aggregate_prefix(aggregate)}FM Jacobian {kind_label} "
+            f"(t={int(time_value) / 1000:.3f})"
+        )
+    patterns = (
+        (
+            r"^(mean_|median_)?fm_flipd_lid_t(\d{4})$",
+            "FM-FLIPD intrinsic dimension",
+        ),
+        (
+            r"^(mean_|median_)?fm_flipd_divergence_t(\d{4})$",
+            "FM-FLIPD velocity divergence",
+        ),
+        (
+            r"^(mean_|median_)?fm_flipd_score_norm_t(\d{4})$",
+            "FM-FLIPD recovered score norm",
+        ),
+        (
+            r"^(mean_|median_)?diffusion_normal_bundle_lid_t(\d{4})$",
+            "Diffusion normal-bundle intrinsic dimension",
+        ),
+        (
+            r"^(mean_|median_)?diffusion_normal_bundle_normal_dim_t(\d{4})$",
+            "Diffusion normal-bundle normal dimension",
+        ),
+        (
+            r"^(mean_|median_)?diffusion_flipd_lid_t(\d{4})$",
+            "Diffusion FLIPD intrinsic dimension",
+        ),
+        (
+            r"^(mean_|median_)?diffusion_flipd_divergence_t(\d{4})$",
+            "Diffusion FLIPD score divergence",
+        ),
+    )
+    for pattern, label in patterns:
+        match = re.fullmatch(pattern, key)
+        if match:
+            aggregate, time_value = match.groups()
+            return (
+                f"{_aggregate_prefix(aggregate)}{label} "
+                f"(t={int(time_value) / 1000:.3f})"
+            )
+    return None
+
+
+def _aggregate_prefix(value: str | None) -> str:
+    if value == "mean_":
+        return "Mean "
+    if value == "median_":
+        return "Median "
+    return ""
 
 
 def humanize_identifier(value: str) -> str:

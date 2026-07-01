@@ -11,8 +11,13 @@ import pandas as pd
 import torch
 from tqdm.auto import tqdm
 
-from fm_lab.diagnostics.fm_lid import FMJacobianSpectrumEstimator
-from fm_lab.experiments.factory import build_model, build_source, resolve_device
+from fm_lab.diagnostics.diffusion_lid import flipd_dimension, normal_bundle_dimension
+from fm_lab.diagnostics.fm_lid import (
+    FMFLIPDEstimator,
+    FMJacobianSpectrumEstimator,
+    GaussianFMSchedule,
+)
+from fm_lab.experiments.factory import build_model, build_path, build_source, resolve_device
 from fm_lab.geometry_explorer.bundles import build_and_register_projection_payload_index
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.variants import load_variant_bundle
@@ -21,6 +26,15 @@ from fm_lab.solvers import EulerSolver, HeunSolver, MidpointSolver, RK4Solver
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.config import ConfigError, load_config
 from fm_lab.utils.logging import write_json
+
+MODEL_DIAGNOSTIC_ESTIMATORS = {
+    "fm_jacobian",
+    "fm_flipd",
+    "diffusion_normal_bundle",
+    "diffusion_flipd",
+}
+FM_ESTIMATORS = {"fm_jacobian", "fm_flipd"}
+DIFFUSION_ESTIMATORS = {"diffusion_normal_bundle", "diffusion_flipd"}
 
 
 def build_model_diagnostics(
@@ -33,6 +47,11 @@ def build_model_diagnostics(
     eps: float = 1e-2,
     num_directions: int = 64,
     threshold: float = 1e-2,
+    num_trace_samples: int | None = 1,
+    num_perturbations: int = 64,
+    batch_size: int = 64,
+    fm_schedule: str = "auto",
+    diffusion_sigmas: tuple[float, ...] | None = None,
     nfe: int = 32,
     solver: str = "rk4",
     max_samples: int | None = None,
@@ -44,12 +63,23 @@ def build_model_diagnostics(
 ) -> dict[str, Any]:
     """Compute and merge model-dependent diagnostics for one dataset variant."""
 
-    unsupported = set(estimators) - {"fm_jacobian"}
+    estimators = tuple(dict.fromkeys(estimators))
+    if not estimators:
+        raise ConfigError("At least one model diagnostic estimator is required.")
+    unsupported = set(estimators) - MODEL_DIAGNOSTIC_ESTIMATORS
     if unsupported:
         raise ConfigError(
-            "Only the fm_jacobian model diagnostic is wired into the explorer "
-            f"pipeline for now. Unsupported: {', '.join(sorted(unsupported))}"
+            "Unsupported model diagnostic estimator(s): "
+            f"{', '.join(sorted(unsupported))}. Supported: "
+            f"{', '.join(sorted(MODEL_DIAGNOSTIC_ESTIMATORS))}"
         )
+    if batch_size < 1:
+        raise ConfigError("--batch-size must be positive.")
+    if num_trace_samples is not None and num_trace_samples < 1:
+        raise ConfigError("--num-trace-samples must be positive, or 0 for exact divergence.")
+    if num_perturbations < 1:
+        raise ConfigError("--num-perturbations must be positive.")
+
     started = time.perf_counter()
     registry = GeometryRegistry(workspace)
     variant = registry.get_dataset_variant(variant_id)
@@ -64,6 +94,7 @@ def build_model_diagnostics(
     config = checkpoint.get("config")
     if not isinstance(config, dict):
         config = load_config(source_run_dir / "config.yaml")
+    _validate_checkpoint_estimator_match(config, estimators)
     run_id = source_run_dir.name
     registry.register_model_run(
         run_id=run_id,
@@ -95,44 +126,133 @@ def build_model_diagnostics(
     model.to(torch_device)
     model.eval()
     if bool(getattr(model, "requires_source_label", False)):
-        raise ConfigError("FM Jacobian diagnostics do not support source-label models yet.")
+        raise ConfigError("Model diagnostics do not support source-label models yet.")
 
-    diagnostic_dir = (
-        registry.workspace
-        / "model_runs"
-        / family
-        / variant_name
-        / run_id
-        / "model_diagnostics"
-        / "fm_jacobian"
+    torch.manual_seed(sample_seed)
+    diagnostic_root = (
+        registry.workspace / "model_runs" / family / variant_name / run_id / "model_diagnostics"
     )
-    diagnostic_dir.mkdir(parents=True, exist_ok=True)
-    local, spectra = _compute_fm_jacobian(
-        model=model,
-        values=input_vectors,
-        local=local,
-        t_values=t_values,
-        eps=eps,
-        num_directions=num_directions,
-        threshold=threshold,
-        nfe=nfe,
-        solver=solver,
-        device=torch_device,
-    )
-    local_path = write_parquet(local, diagnostic_dir / "local_fm_jacobian.parquet")
-    spectra_path = diagnostic_dir / "spectra_fm_jacobian.npz"
-    np.savez_compressed(
-        spectra_path,
-        row_id=local["row_id"].to_numpy(dtype=np.int64),
-        t_values=np.asarray(t_values, dtype=np.float32),
-        singular_values=spectra,
-    )
+    diagnostic_root.mkdir(parents=True, exist_ok=True)
+    local_parts = [local]
+    local_paths: dict[str, str] = {}
+    artifact_paths: dict[str, str] = {}
+    resolved_diffusion_sigmas: tuple[float, ...] | None = None
+
+    if "fm_jacobian" in estimators:
+        estimator_dir = diagnostic_root / "fm_jacobian"
+        estimator_dir.mkdir(parents=True, exist_ok=True)
+        fm_local, spectra = _compute_fm_jacobian(
+            model=model,
+            values=input_vectors,
+            local=selected_metadata[["row_id"]].copy(),
+            t_values=t_values,
+            eps=eps,
+            num_directions=num_directions,
+            threshold=threshold,
+            nfe=nfe,
+            solver=solver,
+            device=torch_device,
+        )
+        local_paths["fm_jacobian"] = str(
+            write_parquet(fm_local, estimator_dir / "local_fm_jacobian.parquet")
+        )
+        spectra_path = estimator_dir / "spectra_fm_jacobian.npz"
+        np.savez_compressed(
+            spectra_path,
+            row_id=fm_local["row_id"].to_numpy(dtype=np.int64),
+            t_values=np.asarray(t_values, dtype=np.float32),
+            singular_values=spectra,
+        )
+        artifact_paths["fm_jacobian_spectra"] = str(spectra_path)
+        local_parts.append(fm_local.drop(columns=["row_id"]))
+
+    if "fm_flipd" in estimators:
+        estimator_dir = diagnostic_root / "fm_flipd"
+        estimator_dir.mkdir(parents=True, exist_ok=True)
+        fm_flipd_local = _compute_fm_flipd(
+            model=model,
+            values=input_vectors,
+            local=selected_metadata[["row_id"]].copy(),
+            t_values=t_values,
+            num_trace_samples=num_trace_samples,
+            schedule=_resolved_fm_schedule(config, fm_schedule),
+            batch_size=batch_size,
+            device=torch_device,
+        )
+        local_paths["fm_flipd"] = str(
+            write_parquet(fm_flipd_local, estimator_dir / "local_fm_flipd.parquet")
+        )
+        local_parts.append(fm_flipd_local.drop(columns=["row_id"]))
+
+    if "diffusion_normal_bundle" in estimators or "diffusion_flipd" in estimators:
+        score_model = _DiffusionScoreModel(model, config)
+        sigma_values = _resolved_diffusion_sigmas(
+            config,
+            t_values=t_values,
+            diffusion_sigmas=diffusion_sigmas,
+            device=torch_device,
+        )
+        resolved_diffusion_sigmas = sigma_values
+        if "diffusion_normal_bundle" in estimators:
+            estimator_dir = diagnostic_root / "diffusion_normal_bundle"
+            estimator_dir.mkdir(parents=True, exist_ok=True)
+            normal_local, normal_spectra = _compute_diffusion_normal_bundle(
+                score_model=score_model,
+                values=input_vectors,
+                local=selected_metadata[["row_id"]].copy(),
+                t_values=t_values,
+                sigma_values=sigma_values,
+                num_perturbations=num_perturbations,
+                threshold=threshold,
+                batch_size=batch_size,
+                device=torch_device,
+            )
+            local_paths["diffusion_normal_bundle"] = str(
+                write_parquet(
+                    normal_local,
+                    estimator_dir / "local_diffusion_normal_bundle.parquet",
+                )
+            )
+            spectra_path = estimator_dir / "spectra_diffusion_normal_bundle.npz"
+            np.savez_compressed(
+                spectra_path,
+                row_id=normal_local["row_id"].to_numpy(dtype=np.int64),
+                t_values=np.asarray(t_values, dtype=np.float32),
+                sigma_values=np.asarray(sigma_values, dtype=np.float32),
+                singular_values=normal_spectra,
+            )
+            artifact_paths["diffusion_normal_bundle_spectra"] = str(spectra_path)
+            local_parts.append(normal_local.drop(columns=["row_id"]))
+
+        if "diffusion_flipd" in estimators:
+            estimator_dir = diagnostic_root / "diffusion_flipd"
+            estimator_dir.mkdir(parents=True, exist_ok=True)
+            diffusion_flipd_local = _compute_diffusion_flipd(
+                score_model=score_model,
+                values=input_vectors,
+                local=selected_metadata[["row_id"]].copy(),
+                t_values=t_values,
+                sigma_values=sigma_values,
+                num_trace_samples=num_trace_samples,
+                batch_size=batch_size,
+                device=torch_device,
+            )
+            local_paths["diffusion_flipd"] = str(
+                write_parquet(
+                    diffusion_flipd_local,
+                    estimator_dir / "local_diffusion_flipd.parquet",
+                )
+            )
+            local_parts.append(diffusion_flipd_local.drop(columns=["row_id"]))
+
+    local = pd.concat([part.reset_index(drop=True) for part in local_parts], axis=1)
+    local_path = write_parquet(local, diagnostic_root / "local_model_diagnostics.parquet")
     group = _group_summary(
         selected_metadata.merge(local, on="row_id", how="left", validate="one_to_one"),
         metric_columns=[column for column in local.columns if column != "row_id"],
-        feature_space=f"fm_jacobian:{run_id}",
+        feature_space=f"model_diagnostics:{run_id}:{'+'.join(estimators)}",
     )
-    group_path = diagnostic_dir / "group_id_fm_jacobian.csv"
+    group_path = diagnostic_root / "group_id_model_diagnostics.csv"
     group.to_csv(group_path, index=False)
     write_parquet(group, group_path.with_suffix(".parquet"))
 
@@ -146,6 +266,7 @@ def build_model_diagnostics(
                 local=local,
                 group=group,
                 run_id=run_id,
+                estimator_slug=_estimator_slug(estimators),
                 rebuild_payload=rebuild_payload,
             )
         )
@@ -160,18 +281,30 @@ def build_model_diagnostics(
         "eps": eps,
         "num_directions": num_directions,
         "threshold": threshold,
+        "num_trace_samples": num_trace_samples,
+        "num_perturbations": num_perturbations,
+        "batch_size": batch_size,
+        "fm_schedule": _resolved_fm_schedule(config, fm_schedule)
+        if "fm_flipd" in estimators
+        else None,
+        "diffusion_sigmas": (
+            list(resolved_diffusion_sigmas)
+            if resolved_diffusion_sigmas is not None
+            else None
+        ),
         "nfe": nfe,
         "solver": solver,
         "rows_total": int(len(metadata)),
         "rows_computed": int(len(local)),
         "normalize": _resolved_normalize(config, normalize),
         "local_path": str(local_path),
-        "spectra_path": str(spectra_path),
+        "local_paths": local_paths,
+        "artifact_paths": artifact_paths,
         "group_id_path": str(group_path),
         "merged_views": merged_views,
         "runtime_seconds": time.perf_counter() - started,
     }
-    write_json(manifest, diagnostic_dir / "manifest.json")
+    write_json(manifest, diagnostic_root / "manifest.json")
     return manifest
 
 
@@ -226,6 +359,138 @@ def _compute_fm_jacobian(
     return pd.concat([local.reset_index(drop=True), metrics], axis=1), np.stack(spectra)
 
 
+def _compute_fm_flipd(
+    *,
+    model: torch.nn.Module,
+    values: np.ndarray,
+    local: pd.DataFrame,
+    t_values: tuple[float, ...],
+    num_trace_samples: int | None,
+    schedule: str,
+    batch_size: int,
+    device: torch.device,
+) -> pd.DataFrame:
+    estimator = FMFLIPDEstimator(
+        model=model,
+        path_schedule=GaussianFMSchedule(schedule),
+        t_values=t_values,
+        num_trace_samples=num_trace_samples,
+        device=device,
+    )
+    rows: list[dict[str, float]] = []
+    for start in tqdm(range(0, len(values), batch_size), desc="fm-flipd", dynamic_ncols=True):
+        batch = torch.as_tensor(
+            values[start : start + batch_size],
+            dtype=torch.float32,
+            device=device,
+        )
+        estimate = estimator.estimate_batch(batch)
+        for batch_index in range(batch.shape[0]):
+            row: dict[str, float] = {}
+            for time_index, t_value in enumerate(t_values):
+                suffix = _time_suffix(t_value)
+                row[f"fm_flipd_lid_{suffix}"] = float(
+                    estimate.lid[time_index, batch_index].detach().cpu()
+                )
+                row[f"fm_flipd_divergence_{suffix}"] = float(
+                    estimate.divergence[time_index, batch_index].detach().cpu()
+                )
+                row[f"fm_flipd_score_norm_{suffix}"] = float(
+                    estimate.recovered_score_norm[time_index, batch_index].detach().cpu()
+                )
+            rows.append(row)
+    return pd.concat([local.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+
+
+def _compute_diffusion_normal_bundle(
+    *,
+    score_model: torch.nn.Module,
+    values: np.ndarray,
+    local: pd.DataFrame,
+    t_values: tuple[float, ...],
+    sigma_values: tuple[float, ...],
+    num_perturbations: int,
+    threshold: float,
+    batch_size: int,
+    device: torch.device,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    rows: list[dict[str, float]] = []
+    spectra_by_time: list[list[np.ndarray]] = [[] for _ in t_values]
+    for start in tqdm(
+        range(0, len(values), batch_size),
+        desc="diffusion-normal-bundle",
+        dynamic_ncols=True,
+    ):
+        batch = torch.as_tensor(
+            values[start : start + batch_size],
+            dtype=torch.float32,
+            device=device,
+        )
+        batch_rows = [{} for _ in range(batch.shape[0])]
+        for time_index, (t_value, sigma_value) in enumerate(zip(t_values, sigma_values)):
+            estimate = normal_bundle_dimension(
+                score_model,
+                batch,
+                sigma=sigma_value,
+                t=t_value,
+                n_perturbations=num_perturbations,
+                rank_threshold=threshold,
+            )
+            suffix = _time_suffix(t_value)
+            lid = estimate.intrinsic_dimension.detach().cpu().numpy()
+            normal_dim = estimate.normal_dimension.detach().cpu().numpy()
+            spectra_by_time[time_index].append(estimate.singular_values.detach().cpu().numpy())
+            for batch_index, row in enumerate(batch_rows):
+                row[f"diffusion_normal_bundle_lid_{suffix}"] = float(lid[batch_index])
+                row[f"diffusion_normal_bundle_normal_dim_{suffix}"] = float(
+                    normal_dim[batch_index]
+                )
+        rows.extend(batch_rows)
+    spectra = np.stack([np.concatenate(parts, axis=0) for parts in spectra_by_time], axis=1)
+    return pd.concat([local.reset_index(drop=True), pd.DataFrame(rows)], axis=1), spectra
+
+
+def _compute_diffusion_flipd(
+    *,
+    score_model: torch.nn.Module,
+    values: np.ndarray,
+    local: pd.DataFrame,
+    t_values: tuple[float, ...],
+    sigma_values: tuple[float, ...],
+    num_trace_samples: int | None,
+    batch_size: int,
+    device: torch.device,
+) -> pd.DataFrame:
+    rows: list[dict[str, float]] = []
+    for start in tqdm(
+        range(0, len(values), batch_size),
+        desc="diffusion-flipd",
+        dynamic_ncols=True,
+    ):
+        batch = torch.as_tensor(
+            values[start : start + batch_size],
+            dtype=torch.float32,
+            device=device,
+        )
+        batch_rows = [{} for _ in range(batch.shape[0])]
+        for t_value, sigma_value in zip(t_values, sigma_values):
+            estimate = flipd_dimension(
+                score_model,
+                batch,
+                sigma=sigma_value,
+                t=t_value,
+                hutchinson_samples=num_trace_samples,
+            )
+            suffix = _time_suffix(t_value)
+            lid = estimate.intrinsic_dimension.detach().cpu().numpy()
+            divergence = estimate.divergence.detach().cpu().numpy()
+            for batch_index, row in enumerate(batch_rows):
+                row[f"diffusion_flipd_lid_{suffix}"] = float(lid[batch_index])
+                row[f"diffusion_flipd_divergence_{suffix}"] = float(divergence[batch_index])
+        rows.extend(batch_rows)
+    return pd.concat([local.reset_index(drop=True), pd.DataFrame(rows)], axis=1)
+
+
 def _merge_into_projection_view(
     *,
     registry: GeometryRegistry,
@@ -233,6 +498,7 @@ def _merge_into_projection_view(
     local: pd.DataFrame,
     group: pd.DataFrame,
     run_id: str,
+    estimator_slug: str,
     rebuild_payload: bool,
 ) -> dict[str, Any]:
     row = registry.get_projection_view(view_id)
@@ -255,7 +521,7 @@ def _merge_into_projection_view(
         / "intrinsic_dimension"
     )
     summary_dir.mkdir(parents=True, exist_ok=True)
-    group_path = summary_dir / f"group_id_fm_jacobian_{_safe_name(run_id)}.csv"
+    group_path = summary_dir / f"group_id_{_safe_name(estimator_slug)}_{_safe_name(run_id)}.csv"
     group.to_csv(group_path, index=False)
     write_parquet(group, group_path.with_suffix(".parquet"))
     if rebuild_payload:
@@ -354,6 +620,141 @@ def _selected_projection_views(
     return views
 
 
+def _validate_checkpoint_estimator_match(config: dict[str, Any], estimators: tuple[str, ...]) -> None:
+    requested = set(estimators)
+    is_diffusion = _is_diffusion_checkpoint(config)
+    if requested & DIFFUSION_ESTIMATORS and not is_diffusion:
+        raise ConfigError(
+            "Diffusion model diagnostics require a checkpoint trained with "
+            "path.name: gaussian_diffusion and objective.name: diffusion."
+        )
+    if requested & FM_ESTIMATORS and is_diffusion:
+        raise ConfigError(
+            "FM diagnostics require a flow-matching velocity checkpoint. "
+            "Use diffusion_normal_bundle or diffusion_flipd for diffusion checkpoints."
+        )
+
+
+def _is_diffusion_checkpoint(config: dict[str, Any]) -> bool:
+    path_name = str(config.get("path", {}).get("name", "")).lower()
+    objective_name = str(config.get("objective", {}).get("name", "")).lower()
+    return path_name in {"gaussian_diffusion", "diffusion", "stochastic_interpolant"} or (
+        objective_name.startswith("diffusion")
+    )
+
+
+def _resolved_fm_schedule(config: dict[str, Any], schedule: str) -> str:
+    if schedule != "auto":
+        return schedule
+    path_name = str(config.get("path", {}).get("name", "linear")).lower()
+    if path_name in {"trig", "cosine"}:
+        return "trig"
+    return "linear"
+
+
+def _resolved_diffusion_sigmas(
+    config: dict[str, Any],
+    *,
+    t_values: tuple[float, ...],
+    diffusion_sigmas: tuple[float, ...] | None,
+    device: torch.device,
+) -> tuple[float, ...]:
+    if diffusion_sigmas is not None:
+        if len(diffusion_sigmas) == 1:
+            values = tuple(float(diffusion_sigmas[0]) for _ in t_values)
+        elif len(diffusion_sigmas) == len(t_values):
+            values = tuple(float(value) for value in diffusion_sigmas)
+        else:
+            raise ConfigError("--diffusion-sigmas must have one value or match --t-values.")
+        if any(value <= 0.0 for value in values):
+            raise ConfigError("--diffusion-sigmas values must be positive.")
+        return values
+
+    path = build_path(config)
+    if not hasattr(path, "_schedule"):
+        raise ConfigError("Diffusion diagnostics require a Gaussian diffusion path schedule.")
+    t_tensor = torch.tensor(t_values, dtype=torch.float32, device=device)
+    _, sigma, _, _ = path._schedule(t_tensor)  # noqa: SLF001 - no public schedule API yet.
+    sigma_min = float(getattr(path, "sigma_min", 1e-4))
+    return tuple(float(value) for value in sigma.clamp_min(sigma_min).detach().cpu())
+
+
+class _DiffusionScoreModel(torch.nn.Module):
+    """Convert diffusion checkpoint outputs into score estimates."""
+
+    def __init__(self, model: torch.nn.Module, config: dict[str, Any]) -> None:
+        super().__init__()
+        self.model = model
+        self.path = build_path(config)
+        if not hasattr(self.path, "_schedule"):
+            raise ConfigError("Diffusion diagnostics require path.name: gaussian_diffusion.")
+        self.prediction_type = _diffusion_prediction_type(config)
+        self.sigma_min = float(getattr(self.path, "sigma_min", 1e-4))
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        prediction = self.model(x, t)
+        alpha, sigma, alpha_dot, sigma_dot = self._expanded_schedule(t, x)
+        sigma = sigma.clamp_min(self.sigma_min)
+        if self.prediction_type == "score":
+            return prediction
+        if self.prediction_type == "epsilon":
+            return -prediction / sigma
+        if self.prediction_type == "velocity":
+            sigma_ratio = sigma_dot / sigma
+            coefficient = (alpha_dot - sigma_ratio * alpha).clamp_min(
+                torch.finfo(x.dtype).eps
+            )
+            posterior_mean = (prediction - sigma_ratio * x) / coefficient
+            return (alpha * posterior_mean - x) / sigma.square()
+        raise ConfigError(f"Unsupported diffusion prediction type: {self.prediction_type}")
+
+    def _expanded_schedule(
+        self,
+        t: torch.Tensor,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        time = t.to(device=x.device, dtype=x.dtype)
+        if time.ndim == 0:
+            time = time.expand(x.shape[0])
+        elif time.numel() == 1:
+            time = time.reshape(1).expand(x.shape[0])
+        elif time.shape[0] != x.shape[0]:
+            raise ConfigError("Diffusion diagnostic time tensor must match batch size.")
+        alpha, sigma, alpha_dot, sigma_dot = self.path._schedule(time)  # noqa: SLF001
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        return (
+            alpha.reshape(shape),
+            sigma.reshape(shape),
+            alpha_dot.reshape(shape),
+            sigma_dot.reshape(shape),
+        )
+
+
+def _diffusion_prediction_type(config: dict[str, Any]) -> str:
+    objective = config.get("objective", {})
+    name = str(objective.get("name", "diffusion")).lower()
+    aliases = {
+        "diffusion_epsilon": "epsilon",
+        "epsilon_prediction": "epsilon",
+        "noise_prediction": "epsilon",
+        "diffusion_score": "score",
+        "score_matching": "score",
+        "diffusion_velocity": "velocity",
+    }
+    prediction = str(objective.get("prediction_type", aliases.get(name, "epsilon"))).lower()
+    normalized = {
+        "eps": "epsilon",
+        "epsilon": "epsilon",
+        "noise": "epsilon",
+        "score": "score",
+        "velocity": "velocity",
+        "v": "velocity",
+    }.get(prediction)
+    if normalized is None:
+        raise ConfigError(f"Unsupported diffusion prediction type: {prediction}")
+    return normalized
+
+
 def _resolved_normalize(config: dict[str, Any], normalize: str) -> str:
     if normalize != "auto":
         return normalize
@@ -397,3 +798,9 @@ def _time_suffix(value: float) -> str:
 
 def _safe_name(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)
+
+
+def _estimator_slug(estimators: tuple[str, ...]) -> str:
+    if len(estimators) == 1:
+        return estimators[0]
+    return "model_diagnostics"

@@ -329,10 +329,13 @@ def test_model_diagnostics_merge_fm_jacobian_into_projection_view(tmp_path: Path
         variant_id="mnist/tiny_model_diag",
         run_dir=run_dir,
         workspace=workspace,
+        estimators=("fm_jacobian", "fm_flipd"),
         t_values=(0.8,),
         eps=1e-2,
         num_directions=4,
         threshold=1e-3,
+        num_trace_samples=1,
+        batch_size=2,
         nfe=1,
         solver="euler",
         max_samples=3,
@@ -347,11 +350,132 @@ def test_model_diagnostics_merge_fm_jacobian_into_projection_view(tmp_path: Path
     assert int(merged[metric].notna().sum()) == 3
     assert metric in sample_metric_columns(merged)
     assert metric_label(metric) == "FM Jacobian participation rank (t=0.800)"
+    assert "fm_flipd_lid_t0800" in merged
+    assert "fm_flipd_lid_t0800" in sample_metric_columns(merged)
+    assert metric_label("fm_flipd_lid_t0800") == "FM-FLIPD intrinsic dimension (t=0.800)"
     group_path = Path(result["merged_views"][0]["group_id_path"])
     group = pd.read_csv(group_path)
     assert "mean_fm_jacobian_participation_rank_t0800" in group
+    assert "mean_fm_flipd_lid_t0800" in group
     assert set(group["groupby_column"]) == {"__all__", "label"}
     assert result["rows_computed"] == 3
+
+
+def test_model_diagnostics_merge_diffusion_estimators_into_projection_view(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    registry = GeometryRegistry(workspace)
+    metadata = pd.DataFrame(
+        {
+            "row_id": [0, 1, 2],
+            "label": ["0", "1", "1"],
+            "source_index": [10, 11, 12],
+        }
+    )
+    dataset_path = tmp_path / "dataset.parquet"
+    data_path = tmp_path / "data.npy"
+    labels_path = tmp_path / "labels.npy"
+    write_parquet(metadata, dataset_path)
+    np.save(
+        data_path,
+        np.asarray(
+            [
+                [0.0, 0.2, 0.4],
+                [0.1, 0.3, 0.5],
+                [0.2, 0.4, 0.6],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    np.save(labels_path, np.asarray([0, 1, 1], dtype=np.int64))
+    registry.register_dataset_variant(
+        variant_id="mnist/tiny_diffusion_model_diag",
+        family="mnist",
+        variant="tiny_diffusion_model_diag",
+        base="original",
+        split="train",
+        dataset_path=dataset_path,
+        data_path=data_path,
+        labels_path=labels_path,
+        config_path=None,
+        row_count=3,
+        label_counts={"0": 1, "1": 2},
+        image_shape=(1, 3),
+        value_range=(0.0, 1.0),
+    )
+
+    view_dir = tmp_path / "view"
+    explorer_path = view_dir / "explorer" / "explorer_data.parquet"
+    explorer_path.parent.mkdir(parents=True)
+    explorer = metadata.assign(
+        pca_3d_x=[0.0, 1.0, 0.0],
+        pca_3d_y=[0.0, 0.0, 1.0],
+        pca_3d_z=[0.0, 0.0, 0.0],
+    )
+    write_parquet(explorer, explorer_path)
+    registry.register_projection_view(
+        view_id="tiny_diffusion_view",
+        variant_id="mnist/tiny_diffusion_model_diag",
+        feature_name="raw_pixels",
+        feature_mode="raw",
+        explorer_data_path=explorer_path,
+        output_dir=view_dir,
+        projection_names={"pca_3d": "PCA 3D"},
+        renderer="three3d",
+        row_count=3,
+    )
+
+    config = {
+        "source": {"name": "gaussian", "dim": 3},
+        "data": {"name": "mnist", "normalize": "zero_one"},
+        "path": {"name": "gaussian_diffusion", "schedule": "linear", "sigma_min": 1e-4},
+        "objective": {"name": "diffusion", "prediction_type": "score"},
+        "model": {"name": "mlp", "hidden_dim": 8, "depth": 1, "time_embedding_dim": 4},
+    }
+    model = build_model(config, dim=3)
+    run_dir = tmp_path / "runs" / "tiny_diffusion"
+    save_checkpoint(
+        run_dir / "checkpoint.pt",
+        model=model,
+        optimizer=None,
+        step=0,
+        config=config,
+        metrics={},
+    )
+
+    result = build_model_diagnostics(
+        variant_id="mnist/tiny_diffusion_model_diag",
+        run_dir=run_dir,
+        workspace=workspace,
+        estimators=("diffusion_normal_bundle", "diffusion_flipd"),
+        t_values=(0.8,),
+        threshold=1e-3,
+        num_trace_samples=1,
+        num_perturbations=4,
+        batch_size=2,
+        max_samples=2,
+        sample_seed=0,
+        device="cpu",
+        rebuild_payload=False,
+    )
+
+    merged = read_parquet(explorer_path)
+    normal_metric = "diffusion_normal_bundle_lid_t0800"
+    flipd_metric = "diffusion_flipd_lid_t0800"
+    assert normal_metric in merged
+    assert flipd_metric in merged
+    assert int(merged[normal_metric].notna().sum()) == 2
+    assert normal_metric in sample_metric_columns(merged)
+    assert flipd_metric in sample_metric_columns(merged)
+    assert (
+        metric_label(normal_metric)
+        == "Diffusion normal-bundle intrinsic dimension (t=0.800)"
+    )
+    assert metric_label(flipd_metric) == "Diffusion FLIPD intrinsic dimension (t=0.800)"
+    group = pd.read_csv(Path(result["merged_views"][0]["group_id_path"]))
+    assert "mean_diffusion_normal_bundle_lid_t0800" in group
+    assert "mean_diffusion_flipd_lid_t0800" in group
 
 
 def test_build_projection_view_and_unified_dataset_payload(tmp_path: Path) -> None:

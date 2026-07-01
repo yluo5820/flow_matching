@@ -425,6 +425,15 @@ fm-lab-explorer build-trajectory \
   --run-dir runs/mnist_image_unet_ot \
   --nfe 64
 
+fm-lab-explorer build-model-diagnostics \
+  --dataset mnist/tail_digit1 \
+  --run-dir runs/mnist_tail_digit1_unet_ot \
+  --estimator fm_jacobian \
+  --estimator fm_flipd \
+  --t-values 0.8 0.9 \
+  --max-samples 512 \
+  --device auto
+
 fm-lab-explorer summarize --include-classes
 
 fm-lab-explorer launch
@@ -438,8 +447,24 @@ Key options:
 | `build-dataset --config` | Build any dataset instance from config: original, edited, long-tail, grayscale, etc. |
 | `build-view --dataset --config` | Build projections and diagnostics for a registered variant. |
 | `build-trajectory --run-dir` | Project and register saved trajectory arrays from a completed run. |
+| `build-model-diagnostics --dataset --run-dir` | Compute checkpoint-dependent ID diagnostics and merge them into registered projection views. |
 | `summarize` | Print global and optional per-class intrinsic-dimension summaries for registered views. |
 | `launch` | Start the Streamlit UI. Use `--dry-run` to print the launch command. |
+
+Model diagnostics require a real `<run-dir>/checkpoint.pt`; saved samples or trajectory
+arrays are not enough because these estimators call the trained model. Available estimators:
+
+| Estimator | Checkpoint type | Main columns |
+|---|---|---|
+| `fm_jacobian` | Flow-matching velocity model | `fm_jacobian_*_rank_t*` |
+| `fm_flipd` | Flow-matching velocity model | `fm_flipd_lid_t*`, divergence, recovered score norm |
+| `diffusion_normal_bundle` | Gaussian diffusion score/noise model | `diffusion_normal_bundle_lid_t*`, normal dimension |
+| `diffusion_flipd` | Gaussian diffusion score/noise model | `diffusion_flipd_lid_t*`, score divergence |
+
+For FLIPD estimators, `--num-trace-samples` controls Hutchinson trace probes; pass `0`
+only for exact divergence in tiny ambient dimensions. For diffusion estimators,
+`--diffusion-sigmas` can override the sigma values inferred from the checkpoint's
+Gaussian diffusion schedule.
 
 To compare the raw-geometry class/global ID estimates without opening CSV files:
 
