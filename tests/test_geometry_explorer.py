@@ -394,8 +394,11 @@ id_estimation:
                     "n_samples": 6,
                     "feature_space": "raw_pixels_pca50",
                     "global_mle_lid_k20": 4.5,
+                    "global_two_nn_lid": 5.5,
                     "global_pca_dim_95": 3,
+                    "mean_local_mle_lid_k15": 1.6,
                     "median_local_mle_lid_k15": 1.5,
+                    "custom_numeric_diagnostic": 9.0,
                 },
                 {
                     "groupby_column": "label",
@@ -403,8 +406,11 @@ id_estimation:
                     "n_samples": 2,
                     "feature_space": "raw_pixels_pca50",
                     "global_mle_lid_k20": 3.2,
+                    "global_two_nn_lid": 4.2,
                     "global_pca_dim_95": 2,
+                    "mean_local_mle_lid_k15": 1.2,
                     "median_local_mle_lid_k15": 1.1,
+                    "custom_numeric_diagnostic": 8.0,
                 },
             ]
         ).to_csv(group_path, index=False)
@@ -428,6 +434,9 @@ id_estimation:
     assert payload["metricLabels"]["mle_lid_k15"] == "MLE intrinsic dimension (k=15)"
     assert payload["groupDiagnostics"]["overall"]["global_mle_lid_k20"] == 4.5
     assert payload["groupDiagnostics"]["groups"]["0"]["global_mle_lid_k20"] == 3.2
+    assert payload["groupDiagnostics"]["groups"]["0"]["class_share"] == 2 / 6
+    assert "global_two_nn_lid" in payload["groupDiagnostics"]["metrics"]
+    assert "custom_numeric_diagnostic" in payload["groupDiagnostics"]["metrics"]
     assert (
         payload["metricLabels"]["global_mle_lid_k20"]
         == "Global MLE intrinsic dimension (k=20)"
@@ -564,6 +573,90 @@ def test_explorer_cli_launch_dry_run(tmp_path: Path, monkeypatch, capsys) -> Non
     output = capsys.readouterr().out
     assert "streamlit run" in output
     assert "geometry_explorer_app.py" in output
+
+
+def test_explorer_cli_summarize_group_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    workspace = tmp_path / "workspace"
+    registry = GeometryRegistry(workspace)
+    dataset_path = tmp_path / "dataset.parquet"
+    write_parquet(pd.DataFrame({"row_id": [0, 1], "label": ["0", "1"]}), dataset_path)
+    output_dir = tmp_path / "view_output"
+    group_path = (
+        output_dir
+        / "id_estimation"
+        / "raw_geometry_view_raw_pixels_id"
+        / "intrinsic_dimension"
+        / "group_id_raw_pixels_pca50.csv"
+    )
+    group_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "groupby_column": "__all__",
+                "group_value": "__all__",
+                "n_samples": 2,
+                "feature_space": "raw_pixels_pca50",
+                "global_mle_lid_k20": 4.25,
+            },
+            {
+                "groupby_column": "label",
+                "group_value": "0",
+                "n_samples": 1,
+                "feature_space": "raw_pixels_pca50",
+                "global_mle_lid_k20": 3.25,
+            },
+        ]
+    ).to_csv(group_path, index=False)
+    registry.register_dataset_variant(
+        variant_id="mnist/small",
+        family="mnist",
+        variant="small",
+        base="original",
+        split="train",
+        dataset_path=dataset_path,
+        data_path=None,
+        labels_path=None,
+        config_path=None,
+        row_count=2,
+        label_counts={"0": 1, "1": 1},
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+    )
+    registry.register_projection_view(
+        view_id="mnist__small__raw_pixels__raw_geometry_view",
+        variant_id="mnist/small",
+        feature_name="raw_pixels",
+        feature_mode="raw",
+        explorer_data_path=dataset_path,
+        output_dir=output_dir,
+        projection_names={"umap_3d": "UMAP 3D"},
+        renderer="three3d",
+        row_count=2,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "fm-lab-explorer",
+            "--workspace",
+            str(workspace),
+            "summarize",
+            "--dataset",
+            "mnist/small",
+            "--include-classes",
+        ],
+    )
+
+    explorer_cli_main()
+
+    output = capsys.readouterr().out
+    assert "mnist/small | raw_pixels" in output
+    assert "Global MLE intrinsic dimension (k=20): 4.250" in output
+    assert "0: Global MLE intrinsic dimension (k=20)=3.250" in output
+    assert "share=50.0%" in output
 
 
 def test_explorer_cli_build_all_dry_run_discovers_dataset_configs(

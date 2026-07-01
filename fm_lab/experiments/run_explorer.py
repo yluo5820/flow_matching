@@ -8,7 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE
+from fm_lab.geometry_explorer.bundles import load_projection_group_diagnostics
+from fm_lab.geometry_explorer.display import metric_label
+from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
 from fm_lab.geometry_explorer.variants import build_dataset_variant, load_variant_config
 from fm_lab.geometry_explorer.views import build_projection_view
@@ -97,6 +99,27 @@ def parse_args() -> argparse.Namespace:
 
     launch = subparsers.add_parser("launch", help="Launch the Streamlit geometry explorer.")
     launch.add_argument("--dry-run", action="store_true", help="Print the launch command only.")
+
+    summarize = subparsers.add_parser(
+        "summarize",
+        help="Print global/class intrinsic-dimension summaries for registered views.",
+    )
+    summarize.add_argument(
+        "--dataset",
+        action="append",
+        default=None,
+        help="Only summarize this dataset variant id. Repeatable.",
+    )
+    summarize.add_argument(
+        "--metric",
+        default=None,
+        help="Metric column to print. Defaults to the view's primary global ID metric.",
+    )
+    summarize.add_argument(
+        "--include-classes",
+        action="store_true",
+        help="Print per-class rows below each dataset summary.",
+    )
     return parser.parse_args()
 
 
@@ -158,6 +181,9 @@ def main() -> None:
             print(" ".join(command))
             return
         raise SystemExit(subprocess.run(command, check=False).returncode)
+    if args.command == "summarize":
+        _summarize(args, workspace)
+        return
 
 
 def _build_all(args: argparse.Namespace, workspace: Path) -> None:
@@ -215,6 +241,79 @@ def _build_all(args: argparse.Namespace, workspace: Path) -> None:
             )
             print(f"Built projection view: {result['view_id']}")
             print(f"Explorer data: {result['explorer_data']}")
+
+
+def _summarize(args: argparse.Namespace, workspace: Path) -> None:
+    registry = GeometryRegistry(workspace)
+    selected = set(args.dataset or [])
+    variants = registry.dataset_variants()
+    if selected:
+        variants = [variant for variant in variants if variant.variant_id in selected]
+    if not variants:
+        raise SystemExit("No dataset variants matched the summarize request.")
+
+    print(f"Geometry explorer summary: {workspace}")
+    for variant in variants:
+        views = registry.projection_views(variant.variant_id)
+        if not views:
+            print(f"{variant.variant_id}: no projection views")
+            continue
+        view = _preferred_projection_view(views)
+        diagnostics = load_projection_group_diagnostics(
+            view.view_id,
+            workspace=workspace,
+        )
+        if not diagnostics:
+            print(f"{variant.variant_id}: no group intrinsic-dimension estimates")
+            continue
+        metric = args.metric or diagnostics.get("primaryMetric")
+        if metric not in diagnostics.get("metrics", []):
+            available = ", ".join(diagnostics.get("metrics", []))
+            print(f"{variant.variant_id}: metric {metric!r} not found. Available: {available}")
+            continue
+        label = metric_label(metric)
+        overall = diagnostics.get("overall") or {}
+        print(
+            f"{variant.variant_id} | {view.feature_name} | "
+            f"{label}: {_format_summary_value(overall.get(metric))} | "
+            f"n={_format_summary_value(overall.get('n_samples'))}"
+        )
+        if args.include_classes:
+            for class_label, values in sorted(
+                diagnostics.get("groups", {}).items(),
+                key=lambda item: item[0],
+            ):
+                print(
+                    f"  {class_label}: {label}={_format_summary_value(values.get(metric))}; "
+                    f"n={_format_summary_value(values.get('n_samples'))}; "
+                    f"share={_format_summary_percent(values.get('class_share'))}"
+                )
+
+
+def _preferred_projection_view(views: list[object]) -> object:
+    return sorted(
+        views,
+        key=lambda view: (
+            0 if view.feature_name == "raw_pixels" else 1,
+            view.view_id,
+        ),
+    )[0]
+
+
+def _format_summary_value(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _format_summary_percent(value: object) -> str:
+    if not isinstance(value, int | float):
+        return "-"
+    return f"{float(value) * 100:.1f}%"
 
 
 def _discover_dataset_configs(

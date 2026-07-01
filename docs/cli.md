@@ -425,6 +425,8 @@ fm-lab-explorer build-trajectory \
   --run-dir runs/mnist_image_unet_ot \
   --nfe 64
 
+fm-lab-explorer summarize --include-classes
+
 fm-lab-explorer launch
 ```
 
@@ -436,7 +438,19 @@ Key options:
 | `build-dataset --config` | Build any dataset instance from config: original, edited, long-tail, grayscale, etc. |
 | `build-view --dataset --config` | Build projections and diagnostics for a registered variant. |
 | `build-trajectory --run-dir` | Project and register saved trajectory arrays from a completed run. |
+| `summarize` | Print global and optional per-class intrinsic-dimension summaries for registered views. |
 | `launch` | Start the Streamlit UI. Use `--dry-run` to print the launch command. |
+
+To compare the raw-geometry class/global ID estimates without opening CSV files:
+
+```bash
+fm-lab-explorer summarize --include-classes
+
+fm-lab-explorer summarize \
+  --dataset mnist/tail_digit1 \
+  --metric global_mle_lid_k20 \
+  --include-classes
+```
 
 Main workspace layout:
 

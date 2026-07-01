@@ -37,13 +37,39 @@ from fm_lab.image_diagnostics.trajectory_explorer import (
 )
 from fm_lab.utils.config import load_config
 
-GROUP_ID_METRICS = (
+GROUP_ID_PREFERRED_METRICS = (
     "global_mle_lid_k20",
     "global_mle_lid_k10",
+    "global_two_nn_lid",
     "global_participation_ratio",
+    "global_pca_dim_80",
+    "global_pca_dim_90",
     "global_pca_dim_95",
+    "global_pca_dim_99",
     "correlation_dimension",
     "ball_scaling_dim",
+    "ball_scaling_r2",
+    "median_local_mle_lid_k15",
+    "mean_local_mle_lid_k15",
+    "median_participation_ratio_k15",
+    "mean_participation_ratio_k15",
+    "median_two_nn_lid_local",
+    "mean_two_nn_lid_local",
+)
+GROUP_ID_META_COLUMNS = {
+    "groupby_column",
+    "group_value",
+    "n_samples",
+    "feature_space",
+    "id_feature_fingerprint",
+    "ball_scaling_num_radii",
+}
+GROUP_ID_PRIMARY_CANDIDATES = (
+    "global_mle_lid_k20",
+    "global_mle_lid_k10",
+    "correlation_dimension",
+    "ball_scaling_dim",
+    "global_participation_ratio",
     "median_local_mle_lid_k15",
 )
 
@@ -67,6 +93,17 @@ def load_projection_payload(
         payload["metricLabels"].update(group_diagnostics.get("metricLabels", {}))
         return payload
     return build_and_register_projection_payload_index(view_id, workspace=workspace)
+
+
+def load_projection_group_diagnostics(
+    view_id: str,
+    *,
+    workspace: str | Path = DEFAULT_WORKSPACE,
+) -> dict[str, Any]:
+    """Load class/global intrinsic-dimension summaries for one projection view."""
+
+    registry = GeometryRegistry(workspace)
+    return _group_diagnostics_payload(registry, registry.get_projection_view(view_id))
 
 
 def build_and_register_projection_payload_index(
@@ -308,7 +345,7 @@ def _group_diagnostics_payload(
         return {}
     if frame.empty or "groupby_column" not in frame or "group_value" not in frame:
         return {}
-    metrics = [column for column in GROUP_ID_METRICS if column in frame.columns]
+    metrics = _group_metric_columns(frame)
     if not metrics:
         return {}
     labels = {column: metric_label(column) for column in metrics}
@@ -326,16 +363,59 @@ def _group_diagnostics_payload(
         if not overall_rows.empty
         else None
     )
+    total_samples = _total_group_samples(overall, groups)
+    for values in groups.values():
+        samples = values.get("n_samples")
+        if isinstance(samples, int | float) and total_samples > 0:
+            values["class_share"] = samples / total_samples
+    if overall is not None:
+        overall["class_share"] = 1.0
     if not groups and overall is None:
         return {}
     return {
         "source": _display_path(path, registry.workspace),
-        "primaryMetric": metrics[0],
+        "primaryMetric": _primary_group_metric(metrics),
         "metrics": metrics,
         "metricLabels": labels,
         "overall": overall,
         "groups": groups,
     }
+
+
+def _group_metric_columns(frame: pd.DataFrame) -> list[str]:
+    available = [
+        str(column)
+        for column in frame.columns
+        if str(column) not in GROUP_ID_META_COLUMNS
+        and pd.api.types.is_numeric_dtype(frame[column])
+    ]
+    preferred = [column for column in GROUP_ID_PREFERRED_METRICS if column in available]
+    remaining = sorted(column for column in available if column not in preferred)
+    return [*preferred, *remaining]
+
+
+def _primary_group_metric(metrics: list[str]) -> str:
+    for column in GROUP_ID_PRIMARY_CANDIDATES:
+        if column in metrics:
+            return column
+    return metrics[0]
+
+
+def _total_group_samples(
+    overall: dict[str, Any] | None,
+    groups: dict[str, dict[str, Any]],
+) -> float:
+    if overall is not None:
+        samples = overall.get("n_samples")
+        if isinstance(samples, int | float):
+            return float(samples)
+    return float(
+        sum(
+            float(values["n_samples"])
+            for values in groups.values()
+            if isinstance(values.get("n_samples"), int | float)
+        )
+    )
 
 
 def _find_group_id_path(registry: GeometryRegistry, row: Any) -> Path | None:

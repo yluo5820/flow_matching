@@ -398,7 +398,7 @@ function appendMetric(container, name, value) {
   const metric = document.createElement("span");
   metric.className = "metric-value";
   if (typeof value === "number") {
-    metric.textContent = name.includes("agreement")
+    metric.textContent = name.toLowerCase().includes("agreement") || name.toLowerCase().includes("share")
       ? `${(value * 100).toFixed(1)}%`
       : Number.isInteger(value)
         ? value.toLocaleString()

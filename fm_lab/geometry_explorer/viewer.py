@@ -704,6 +704,9 @@ function selectedGroupLabel(groups) {
 
 function appendGroupMetricRows(row, metrics) {
   appendMetric(metricsElement, "Samples", row.n_samples);
+  if (row.class_share !== null && row.class_share !== undefined && row.class_share < 0.9999) {
+    appendMetric(metricsElement, "Dataset share", row.class_share);
+  }
   for (const metric of metrics) appendMetric(metricsElement, metricLabel(metric), row[metric]);
 }
 
