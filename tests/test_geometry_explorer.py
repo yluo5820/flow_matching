@@ -389,6 +389,7 @@ id_estimation:
 
     assert Path(result["explorer_data"]).name == "explorer_data_with_raw_pixels_id.parquet"
     assert "mle_lid_k15" in payload["points"][0]["details"]
+    assert payload["metricLabels"]["mle_lid_k15"] == "MLE intrinsic dimension (k=15)"
 
 
 def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:

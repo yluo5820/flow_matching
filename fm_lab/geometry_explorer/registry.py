@@ -285,6 +285,7 @@ class GeometryRegistry:
         projections: list[str],
         projection_dimensions: dict[str, int],
         projection_diagnostics: dict[str, Any],
+        metric_labels: dict[str, str],
         tile_size: int,
         atlas_size: int,
         atlas_columns: int,
@@ -321,9 +322,10 @@ class GeometryRegistry:
                 INSERT INTO projection_payloads (
                     view_id, palette_json, projections_json,
                     projection_dimensions_json, projection_diagnostics_json,
-                    tile_size, atlas_size, atlas_columns, point_count, created_at
+                    metric_labels_json, tile_size, atlas_size, atlas_columns,
+                    point_count, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     view_id,
@@ -331,6 +333,7 @@ class GeometryRegistry:
                     json.dumps(projections),
                     json.dumps(projection_dimensions, sort_keys=True),
                     json.dumps(projection_diagnostics, sort_keys=True),
+                    json.dumps(metric_labels, sort_keys=True),
                     int(tile_size),
                     int(atlas_size),
                     int(atlas_columns),
@@ -510,6 +513,7 @@ class GeometryRegistry:
             "projection_diagnostics": json.loads(
                 metadata["projection_diagnostics_json"]
             ),
+            "metric_labels": json.loads(metadata["metric_labels_json"] or "{}"),
             "tile_size": int(metadata["tile_size"]),
             "atlas_size": int(metadata["atlas_size"]),
             "atlas_columns": int(metadata["atlas_columns"]),
@@ -657,6 +661,7 @@ class GeometryRegistry:
                     projections_json TEXT NOT NULL,
                     projection_dimensions_json TEXT NOT NULL,
                     projection_diagnostics_json TEXT NOT NULL,
+                    metric_labels_json TEXT NOT NULL DEFAULT '{}',
                     tile_size INTEGER NOT NULL,
                     atlas_size INTEGER NOT NULL,
                     atlas_columns INTEGER NOT NULL,
@@ -696,6 +701,15 @@ class GeometryRegistry:
                     ON projection_points(view_id, label);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(projection_payloads)")
+            }
+            if "metric_labels_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE projection_payloads "
+                    "ADD COLUMN metric_labels_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
 
 def variant_id(family: str, variant: str) -> str:

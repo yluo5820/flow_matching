@@ -576,9 +576,13 @@ function showSelection(selection) {
   appendMetric(metricsElement, "Map Y", coordinate[1]);
   if ((DATA.projectionDimensions || {})[projection] === 3) appendMetric(metricsElement, "Map Z", coordinate[2] || 0);
   const diagnostics = (DATA.projectionDiagnostics || {})[projection] || {};
-  for (const [key, values] of Object.entries(diagnostics)) appendMetric(metricsElement, key, values[selection.index]);
+  for (const [key, values] of Object.entries(diagnostics)) appendMetric(metricsElement, metricLabel(key), values[selection.index]);
   if (Object.keys(point.details || {}).length) appendMetricHeading("Sample");
-  for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, key.replaceAll("_", " "), value);
+  for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, metricLabel(key), value);
+}
+
+function metricLabel(key) {
+  return (DATA.metricLabels || {})[key] || key.replaceAll("_", " ");
 }
 
 function appendMetricHeading(text) {

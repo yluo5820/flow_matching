@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
+from fm_lab.geometry_explorer.display import metric_label
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.image_diagnostics.canvas_explorer import (
     prepare_array_sprite_atlases,
@@ -92,6 +93,7 @@ def _projection_payload_from_files(
     projection_dimensions_payload = projection_dimensions(projections)
     projection_diagnostics = projection_diagnostics_payload(bundle.frame, projections)
     palette = palette_payload(bundle.palette)
+    metric_labels = _metric_labels(points, projection_diagnostics)
     atlas_size = _atlas_size(bundle.atlas_paths)
     payload = {
         "mode": "dataset",
@@ -104,6 +106,7 @@ def _projection_payload_from_files(
         "projections": list(projections),
         "projectionDimensions": projection_dimensions_payload,
         "projectionDiagnostics": projection_diagnostics,
+        "metricLabels": metric_labels,
         "tileSize": bundle.tile_size,
         "atlasSize": atlas_size,
         "atlasColumns": bundle.atlas_columns,
@@ -121,6 +124,7 @@ def _projection_payload_from_files(
         "projections": list(projections),
         "projection_dimensions": projection_dimensions_payload,
         "projection_diagnostics": projection_diagnostics,
+        "metric_labels": metric_labels,
         "tile_size": bundle.tile_size,
         "atlas_size": atlas_size,
         "atlas_columns": bundle.atlas_columns,
@@ -140,6 +144,8 @@ def _projection_payload_from_index(indexed: dict[str, Any]) -> dict[str, Any]:
         "projections": indexed["projections"],
         "projectionDimensions": indexed["projection_dimensions"],
         "projectionDiagnostics": indexed["projection_diagnostics"],
+        "metricLabels": indexed.get("metric_labels")
+        or _metric_labels(indexed["points"], indexed["projection_diagnostics"]),
         "tileSize": indexed["tile_size"],
         "atlasSize": indexed["atlas_size"],
         "atlasColumns": indexed["atlas_columns"],
@@ -244,6 +250,7 @@ def load_trajectory_payload(
         "projections": ["Trajectory UMAP"],
         "projectionDimensions": {"Trajectory UMAP": 3},
         "projectionDiagnostics": {"Trajectory UMAP": {}},
+        "metricLabels": {},
         "tileSize": bundle.tile_size,
         "atlasSize": _atlas_size(bundle.atlas_paths),
         "atlasColumns": bundle.atlas_columns,
@@ -272,6 +279,23 @@ def _load_optional_array(registry: GeometryRegistry, value: str | None) -> np.nd
     if not path.exists():
         return None
     return np.load(path)
+
+
+def _metric_labels(
+    points: list[dict[str, Any]],
+    projection_diagnostics: dict[str, Any],
+) -> dict[str, str]:
+    keys = {
+        key
+        for point in points
+        for key in (point.get("details") or {})
+    }
+    keys.update(
+        key
+        for diagnostics in projection_diagnostics.values()
+        for key in diagnostics
+    )
+    return {key: metric_label(key) for key in sorted(keys)}
 
 
 def _atlas_size(paths: list[Path]) -> int:
