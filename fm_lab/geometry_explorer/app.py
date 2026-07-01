@@ -17,7 +17,8 @@ from fm_lab.geometry_explorer.display import (
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.viewer import build_geometry_html
 
-VIEWER_CACHE_VERSION = 2
+EXPLORER_HEIGHT = 920
+VIEWER_CACHE_VERSION = 3
 
 
 def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
@@ -42,6 +43,7 @@ def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
         [data-testid="stHeader"],
         [data-testid="stToolbar"],
         [data-testid="stSidebar"] { display: none; }
+        .stApp { background: #111; }
         .block-container { padding: 0; max-width: 100%; }
         iframe { display: block; border: 0; }
         .geometry-toolbar {
@@ -154,7 +156,7 @@ def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
         )
 
     st.markdown("</div>", unsafe_allow_html=True)
-    st.iframe(html, height=760, width="stretch", tab_index=0)
+    st.iframe(html, height=EXPLORER_HEIGHT, width="stretch", tab_index=0)
 
 
 def _cached_view_html(st, *, mode: str, view_id: str, workspace: Path) -> str:
@@ -171,7 +173,7 @@ def _cached_view_html(st, *, mode: str, view_id: str, workspace: Path) -> str:
             )
             cache[key] = build_geometry_html(
                 payload,
-                height=760,
+                height=EXPLORER_HEIGHT,
                 vendor_dir=workspace / "assets" / "vendor",
             )
         while len(cache) > 3:

@@ -312,6 +312,9 @@ id_estimation:
     assert "Diagnostics · ${projection}" in html
     assert "ResizeObserver" in html
     assert "overflow-y: auto" in html
+    assert 'id="diagnostics-dock"' in html
+    assert "grid-template-rows: minmax(0, 1fr) 190px" in html
+    assert ".legend-item" in html
     assert "addHoverAtlasThumbnail" in html
     assert "coloredPointCloud" in html
     assert 'id="show-thumbnails"' in html

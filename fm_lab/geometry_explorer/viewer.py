@@ -51,8 +51,8 @@ def _html_template(
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; overflow: hidden; background: #111; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f2f2f2; }}
-  #app {{ display: grid; grid-template-columns: 310px 1fr; height: {height}px; min-height: 0; background: #111; overflow: hidden; }}
-  #sidebar {{ background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; overflow: hidden; }}
+  #app {{ display: grid; grid-template-columns: 320px 1fr; grid-template-rows: minmax(0, 1fr) 190px; height: {height}px; min-height: 0; background: #111; overflow: hidden; }}
+  #sidebar {{ grid-row: 1 / span 2; background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; overflow: hidden; }}
   .control {{ display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 9px; }}
   label, .muted {{ color: #c8c8c8; font-size: 13px; }}
   select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
@@ -71,24 +71,35 @@ def _html_template(
   .class-count {{ margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }}
   #preview-wrap {{ width: 100%; aspect-ratio: 1; flex: 0 0 auto; background: #191919; display: grid; place-items: center; }}
   #preview {{ width: 100%; height: 100%; image-rendering: pixelated; }}
-  #sample-info {{ min-height: 0; flex: 1 1 auto; display: grid; gap: 5px; align-content: start; overflow-y: auto; overscroll-behavior: contain; }}
+  #sample-info {{ flex: 0 0 auto; display: grid; gap: 5px; align-content: start; min-height: 88px; }}
   #sample-label {{ font-size: 24px; font-weight: 650; }}
   #sample-index {{ color: #a9a9a9; font-variant-numeric: tabular-nums; }}
-  #metrics {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; margin-top: 8px; padding-top: 10px; border-top: 1px solid #3a3a3a; font-size: 12px; color: #bdbdbd; }}
+  #diagnostics-dock {{ grid-column: 2; grid-row: 2; min-height: 0; background: #202020; border-top: 1px solid #343434; padding: 12px 16px; overflow-y: auto; overscroll-behavior: contain; }}
+  #metrics {{ display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr) max-content); gap: 6px 14px; font-size: 12px; color: #bdbdbd; align-content: start; }}
   .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
   .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }}
   .metric-value {{ color: #eee; font-variant-numeric: tabular-nums; text-align: right; }}
-  #main {{ position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #111; }}
+  #legend {{ flex: 1 1 auto; min-height: 0; display: flex; align-content: start; align-items: flex-start; flex-wrap: wrap; gap: 6px 10px; overflow-y: auto; padding-top: 10px; border-top: 1px solid #333; }}
+  .legend-item {{ display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12px; color: #cfcfcf; }}
+  .legend-item span:last-child {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .swatch {{ width: 9px; height: 9px; flex: 0 0 auto; }}
+  #main {{ grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #111; }}
   #main canvas {{ position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }}
   #main canvas.dragging {{ cursor: grabbing; }}
   #status {{ position: absolute; right: 14px; bottom: 12px; color: #777; font-size: 12px; pointer-events: none; }}
   #view-controls {{ position: absolute; right: 14px; top: 12px; display: grid; gap: 5px; }}
   #view-controls button {{ width: 34px; height: 34px; font-size: 20px; }}
+  @media (max-width: 1180px) {{
+    #metrics {{ grid-template-columns: repeat(2, minmax(130px, 1fr) max-content); }}
+  }}
   @media (max-width: 760px) {{
-    #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 230px; }}
+    #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 230px 190px; }}
     #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 105px 145px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
     #preview-wrap {{ grid-column: 1; grid-row: 1 / span 2; }}
     #sample-info {{ grid-column: 3; grid-row: 1 / span 2; overflow-y: auto; }}
+    #diagnostics-dock {{ grid-column: 1; grid-row: 3; }}
+    #metrics {{ grid-template-columns: minmax(0, 1fr) max-content; }}
+    #main {{ grid-column: 1; grid-row: 1; }}
     .control {{ grid-template-columns: 1fr; gap: 4px; align-content: start; }}
     .toggle-grid, #legend {{ display: none; }}
   }}
@@ -129,7 +140,6 @@ def _html_template(
       <div class="muted">Label</div>
       <div id="sample-label">-</div>
       <div id="sample-index">Index: -</div>
-      <div id="metrics"></div>
     </div>
     <div id="legend"></div>
   </aside>
@@ -141,6 +151,9 @@ def _html_template(
     </div>
     <div id="status"></div>
   </main>
+  <section id="diagnostics-dock">
+    <div id="metrics"></div>
+  </section>
 </div>
 <script>{three_source}</script>
 <script>{script}</script>
@@ -641,7 +654,7 @@ function selectedGroupLabel(groups) {
 
 function appendGroupMetricRows(row, metrics) {
   appendMetric(metricsElement, "Samples", row.n_samples);
-  for (const metric of metrics.slice(0, 5)) appendMetric(metricsElement, metricLabel(metric), row[metric]);
+  for (const metric of metrics) appendMetric(metricsElement, metricLabel(metric), row[metric]);
 }
 
 function drawPreview(point) {
