@@ -20,6 +20,7 @@ from fm_lab.image_diagnostics.canvas_explorer import (
 from fm_lab.image_diagnostics.explorer_payload import (
     atlas_data_url,
     atlas_point_payload,
+    json_scalar,
     normalize_coordinate_arrays,
     palette_payload,
     projection_columns,
@@ -36,6 +37,16 @@ from fm_lab.image_diagnostics.trajectory_explorer import (
 )
 from fm_lab.utils.config import load_config
 
+GROUP_ID_METRICS = (
+    "global_mle_lid_k20",
+    "global_mle_lid_k10",
+    "global_participation_ratio",
+    "global_pca_dim_95",
+    "correlation_dimension",
+    "ball_scaling_dim",
+    "median_local_mle_lid_k15",
+)
+
 
 def load_projection_payload(
     view_id: str,
@@ -47,7 +58,14 @@ def load_projection_payload(
     registry = GeometryRegistry(workspace)
     indexed = registry.projection_payload(view_id)
     if indexed is not None:
-        return _projection_payload_from_index(indexed)
+        payload = _projection_payload_from_index(indexed)
+        group_diagnostics = _group_diagnostics_payload(
+            registry,
+            registry.get_projection_view(view_id),
+        )
+        payload["groupDiagnostics"] = group_diagnostics
+        payload["metricLabels"].update(group_diagnostics.get("metricLabels", {}))
+        return payload
     return build_and_register_projection_payload_index(view_id, workspace=workspace)
 
 
@@ -94,6 +112,8 @@ def _projection_payload_from_files(
     projection_diagnostics = projection_diagnostics_payload(bundle.frame, projections)
     palette = palette_payload(bundle.palette)
     metric_labels = _metric_labels(points, projection_diagnostics)
+    group_diagnostics = _group_diagnostics_payload(registry, row)
+    metric_labels.update(group_diagnostics.get("metricLabels", {}))
     atlas_size = _atlas_size(bundle.atlas_paths)
     payload = {
         "mode": "dataset",
@@ -106,6 +126,7 @@ def _projection_payload_from_files(
         "projections": list(projections),
         "projectionDimensions": projection_dimensions_payload,
         "projectionDiagnostics": projection_diagnostics,
+        "groupDiagnostics": group_diagnostics,
         "metricLabels": metric_labels,
         "tileSize": bundle.tile_size,
         "atlasSize": atlas_size,
@@ -144,6 +165,7 @@ def _projection_payload_from_index(indexed: dict[str, Any]) -> dict[str, Any]:
         "projections": indexed["projections"],
         "projectionDimensions": indexed["projection_dimensions"],
         "projectionDiagnostics": indexed["projection_diagnostics"],
+        "groupDiagnostics": {},
         "metricLabels": indexed.get("metric_labels")
         or _metric_labels(indexed["points"], indexed["projection_diagnostics"]),
         "tileSize": indexed["tile_size"],
@@ -250,6 +272,7 @@ def load_trajectory_payload(
         "projections": ["Trajectory UMAP"],
         "projectionDimensions": {"Trajectory UMAP": 3},
         "projectionDiagnostics": {"Trajectory UMAP": {}},
+        "groupDiagnostics": {},
         "metricLabels": {},
         "tileSize": bundle.tile_size,
         "atlasSize": _atlas_size(bundle.atlas_paths),
@@ -270,6 +293,104 @@ def load_trajectory_payload(
             "trajectories": int(trajectory.shape[1]),
         },
     }
+
+
+def _group_diagnostics_payload(
+    registry: GeometryRegistry,
+    row: Any,
+) -> dict[str, Any]:
+    path = _find_group_id_path(registry, row)
+    if path is None:
+        return {}
+    try:
+        frame = _read_group_id_frame(path)
+    except Exception:
+        return {}
+    if frame.empty or "groupby_column" not in frame or "group_value" not in frame:
+        return {}
+    metrics = [column for column in GROUP_ID_METRICS if column in frame.columns]
+    if not metrics:
+        return {}
+    labels = {column: metric_label(column) for column in metrics}
+    overall_rows = frame[
+        (frame["groupby_column"].astype(str) == "__all__")
+        & (frame["group_value"].astype(str) == "__all__")
+    ]
+    label_rows = frame[frame["groupby_column"].astype(str) == "label"]
+    groups = {
+        str(series.get("group_value", "")): _group_row_payload(series, metrics)
+        for _, series in label_rows.iterrows()
+    }
+    overall = (
+        _group_row_payload(overall_rows.iloc[0], metrics)
+        if not overall_rows.empty
+        else None
+    )
+    if not groups and overall is None:
+        return {}
+    return {
+        "source": _display_path(path, registry.workspace),
+        "primaryMetric": metrics[0],
+        "metrics": metrics,
+        "metricLabels": labels,
+        "overall": overall,
+        "groups": groups,
+    }
+
+
+def _find_group_id_path(registry: GeometryRegistry, row: Any) -> Path | None:
+    output_dir = registry.resolve(row["output_dir"])
+    id_root = output_dir / "id_estimation"
+    manifests = sorted(
+        id_root.glob("*/manifest.json"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for manifest in manifests:
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        value = data.get("group_id_path")
+        if not value:
+            continue
+        for candidate in _path_candidates(Path(str(value)), output_dir, manifest.parent):
+            if candidate.is_file():
+                return candidate
+    candidates = [
+        *id_root.glob("*/intrinsic_dimension/group_id_*.csv"),
+        *id_root.glob("*/intrinsic_dimension/group_id_*.parquet"),
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def _path_candidates(path: Path, output_dir: Path, manifest_dir: Path) -> list[Path]:
+    if path.is_absolute():
+        return [path]
+    return [output_dir / path, manifest_dir / path, path]
+
+
+def _read_group_id_frame(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".parquet":
+        return read_parquet(path)
+    return pd.read_csv(path)
+
+
+def _group_row_payload(row: pd.Series, metrics: list[str]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for column in ("n_samples", "feature_space", *metrics):
+        if column in row:
+            payload[column] = json_scalar(row[column])
+    return payload
+
+
+def _display_path(path: Path, workspace: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(workspace.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _load_optional_array(registry: GeometryRegistry, value: str | None) -> np.ndarray | None:

@@ -227,10 +227,16 @@ for (const name of DATA.projections) {
   option.textContent = name;
   projectionSelect.appendChild(option);
 }
+projection = defaultProjectionName(DATA.projections);
+projectionSelect.value = projection;
 slider.max = Math.max(0, (DATA.trajectory || []).length - 1);
 timeControl.style.display = DATA.mode === "trajectory" ? "grid" : "none";
 thumbnailToggle.checked = Boolean(DATA.options.drawThumbnailsDefault);
 populateLegend(DATA.palette || {});
+
+function defaultProjectionName(projections) {
+  return projections.find(name => name.toLowerCase().includes("umap")) || projections[0] || "";
+}
 
 function parseColor(label) {
   const fallback = "rgb(220, 220, 220)";
@@ -550,7 +556,10 @@ function showSelection(selection) {
   metricsElement.replaceChildren();
   labelElement.textContent = "-";
   indexElement.textContent = "Index: -";
-  if (!selection) return;
+  if (!selection) {
+    showGroupDiagnostics(null);
+    return;
+  }
   if (selection.kind === "trajectory") {
     const previewPoint = DATA.trajectoryPreviews[selection.index];
     if (previewPoint) drawPreview(previewPoint);
@@ -564,6 +573,7 @@ function showSelection(selection) {
     appendMetric(metricsElement, "Final UMAP X", final[0]);
     appendMetric(metricsElement, "Final UMAP Y", final[1]);
     appendMetric(metricsElement, "Final UMAP Z", final[2]);
+    showGroupDiagnostics(selectionLabel(selection));
     return;
   }
   const point = DATA.points[selection.index];
@@ -577,6 +587,7 @@ function showSelection(selection) {
   if ((DATA.projectionDimensions || {})[projection] === 3) appendMetric(metricsElement, "Map Z", coordinate[2] || 0);
   const diagnostics = (DATA.projectionDiagnostics || {})[projection] || {};
   for (const [key, values] of Object.entries(diagnostics)) appendMetric(metricsElement, metricLabel(key), values[selection.index]);
+  showGroupDiagnostics(point.label);
   if (Object.keys(point.details || {}).length) appendMetricHeading("Sample");
   for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, metricLabel(key), value);
 }
@@ -590,6 +601,47 @@ function appendMetricHeading(text) {
   heading.className = "metrics-heading";
   heading.textContent = text;
   metricsElement.appendChild(heading);
+}
+
+function showGroupDiagnostics(label) {
+  const diagnostics = DATA.groupDiagnostics || {};
+  const groups = diagnostics.groups || {};
+  const metrics = diagnostics.metrics || [];
+  if (!metrics.length) return;
+  const labelKey = label === null || label === undefined ? null : String(label);
+  if (labelKey && groups[labelKey]) {
+    appendMetricHeading(`Class ID · ${labelKey}`);
+    appendGroupMetricRows(groups[labelKey], metrics);
+    return;
+  }
+  const filteredLabel = selectedGroupLabel(groups);
+  if (filteredLabel) {
+    appendMetricHeading(`Class ID · ${filteredLabel}`);
+    appendGroupMetricRows(groups[filteredLabel], metrics);
+    return;
+  }
+  if (diagnostics.overall) {
+    appendMetricHeading("Global ID · All classes");
+    appendGroupMetricRows(diagnostics.overall, metrics);
+  }
+  const primary = diagnostics.primaryMetric || metrics[0];
+  const labels = Object.keys(groups)
+    .filter(value => selectedLabels.has(value))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
+  if (!labels.length) return;
+  appendMetricHeading(`Class ID · ${metricLabel(primary)}`);
+  for (const value of labels) appendMetric(metricsElement, value || "(empty)", groups[value][primary]);
+}
+
+function selectedGroupLabel(groups) {
+  if (selectedLabels.size !== 1) return null;
+  const [label] = Array.from(selectedLabels);
+  return groups[label] ? label : null;
+}
+
+function appendGroupMetricRows(row, metrics) {
+  appendMetric(metricsElement, "Samples", row.n_samples);
+  for (const metric of metrics.slice(0, 5)) appendMetric(metricsElement, metricLabel(metric), row[metric]);
 }
 
 function drawPreview(point) {

@@ -390,7 +390,7 @@ function nearestVisiblePoint(mouseX, mouseY, threshold, screenForIndex) {
 }
 
 function appendMetric(container, name, value) {
-  if (value === null) return;
+  if (value === null || value === undefined) return;
   const key = document.createElement("span");
   key.className = "metric-key";
   key.title = name;

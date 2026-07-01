@@ -17,6 +17,8 @@ from fm_lab.geometry_explorer.display import (
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.viewer import build_geometry_html
 
+VIEWER_CACHE_VERSION = 2
+
 
 def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
     """Run the registry-backed unified explorer in Streamlit."""
@@ -159,7 +161,7 @@ def _cached_view_html(st, *, mode: str, view_id: str, workspace: Path) -> str:
     cache = st.session_state.setdefault("_geometry_view_html_cache", {})
     registry_path = workspace / "registry.sqlite"
     registry_mtime = registry_path.stat().st_mtime_ns if registry_path.exists() else 0
-    key = (mode, view_id, str(workspace), registry_mtime)
+    key = (VIEWER_CACHE_VERSION, mode, view_id, str(workspace), registry_mtime)
     if key not in cache:
         with st.spinner("Loading geometry view..."):
             payload = (

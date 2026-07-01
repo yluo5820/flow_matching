@@ -168,7 +168,7 @@ class GeometryRegistry:
                     feature_mode,
                     self._relative(explorer_data_path),
                     self._relative(output_dir),
-                    json.dumps(projection_names, sort_keys=True),
+                    json.dumps(projection_names),
                     renderer,
                     int(row_count),
                     _timestamp(),

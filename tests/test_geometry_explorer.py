@@ -373,7 +373,35 @@ id_estimation:
         frame["mle_lid_k15"] = np.linspace(1.0, 2.0, len(frame))
         merged_path = explorer_path.with_name("explorer_data_with_raw_pixels_id.parquet")
         frame.to_parquet(merged_path, index=False)
-        return {"merged_explorer_path": str(merged_path)}
+        group_path = (
+            config.output_dir
+            / "intrinsic_dimension"
+            / "group_id_raw_pixels_pca50.csv"
+        )
+        group_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "groupby_column": "__all__",
+                    "group_value": "__all__",
+                    "n_samples": 6,
+                    "feature_space": "raw_pixels_pca50",
+                    "global_mle_lid_k20": 4.5,
+                    "global_pca_dim_95": 3,
+                    "median_local_mle_lid_k15": 1.5,
+                },
+                {
+                    "groupby_column": "label",
+                    "group_value": "0",
+                    "n_samples": 2,
+                    "feature_space": "raw_pixels_pca50",
+                    "global_mle_lid_k20": 3.2,
+                    "global_pca_dim_95": 2,
+                    "median_local_mle_lid_k15": 1.1,
+                },
+            ]
+        ).to_csv(group_path, index=False)
+        return {"merged_explorer_path": str(merged_path), "group_id_path": str(group_path)}
 
     monkeypatch.setattr(
         "fm_lab.geometry_explorer.views.run_id_estimation",
@@ -386,10 +414,20 @@ id_estimation:
         workspace=workspace,
     )
     payload = load_projection_payload(result["view_id"], workspace=workspace)
+    html = build_geometry_html(payload, three_source="window.THREE = {};")
 
     assert Path(result["explorer_data"]).name == "explorer_data_with_raw_pixels_id.parquet"
     assert "mle_lid_k15" in payload["points"][0]["details"]
     assert payload["metricLabels"]["mle_lid_k15"] == "MLE intrinsic dimension (k=15)"
+    assert payload["groupDiagnostics"]["overall"]["global_mle_lid_k20"] == 4.5
+    assert payload["groupDiagnostics"]["groups"]["0"]["global_mle_lid_k20"] == 3.2
+    assert (
+        payload["metricLabels"]["global_mle_lid_k20"]
+        == "Global MLE intrinsic dimension (k=20)"
+    )
+    assert "showGroupDiagnostics" in html
+    assert "Class ID ·" in html
+    assert "Global ID · All classes" in html
 
 
 def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
@@ -472,6 +510,34 @@ def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
     assert "texture2D(textureAtlas" in html
     assert 'id="time"' in html
     assert 'id="show-trajectory"' in html
+
+
+def test_geometry_viewer_defaults_to_umap_projection() -> None:
+    payload = {
+        "mode": "dataset",
+        "points": [],
+        "trajectory": [],
+        "trajectoryLabels": [],
+        "trajectoryPreviews": [],
+        "atlases": [],
+        "palette": {},
+        "projections": ["PCA 3D", "UMAP 3D (k=15)"],
+        "projectionDimensions": {"PCA 3D": 3, "UMAP 3D (k=15)": 3},
+        "projectionDiagnostics": {},
+        "groupDiagnostics": {},
+        "metricLabels": {},
+        "tileSize": 28,
+        "atlasSize": 2048,
+        "atlasColumns": 73,
+        "options": {"drawThumbnailsDefault": True},
+        "counts": {"points": 0, "trajectorySteps": 0, "trajectories": 0},
+    }
+
+    html = build_geometry_html(payload, three_source="window.THREE = {};")
+
+    assert "defaultProjectionName" in html
+    assert 'includes("umap")' in html
+    assert "projectionSelect.value = projection" in html
 
 
 def test_explorer_cli_launch_dry_run(tmp_path: Path, monkeypatch, capsys) -> None:
