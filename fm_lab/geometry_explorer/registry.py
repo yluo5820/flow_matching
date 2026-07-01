@@ -275,6 +275,90 @@ class GeometryRegistry:
                 ),
             )
 
+    def register_projection_payload(
+        self,
+        *,
+        view_id: str,
+        points: Iterable[dict[str, Any]],
+        atlas_paths: Iterable[str | Path],
+        palette: dict[str, str],
+        projections: list[str],
+        projection_dimensions: dict[str, int],
+        projection_diagnostics: dict[str, Any],
+        tile_size: int,
+        atlas_size: int,
+        atlas_columns: int,
+    ) -> None:
+        """Register a prebuilt projection payload index for fast viewer loading."""
+
+        point_rows = [
+            (
+                view_id,
+                index,
+                int(point["rowId"]),
+                json.dumps(point.get("sourceIndex")),
+                str(point.get("label", "")),
+                str(point.get("dataset", "")),
+                int(point["atlas"]),
+                int(point["column"]),
+                int(point["row"]),
+                json.dumps(point.get("coordinates", {}), sort_keys=True),
+                json.dumps(point.get("details", {}), sort_keys=True),
+            )
+            for index, point in enumerate(points)
+        ]
+        atlas_rows = [
+            (view_id, index, self._relative(path))
+            for index, path in enumerate(atlas_paths)
+        ]
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM projection_payloads WHERE view_id = ?",
+                (view_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO projection_payloads (
+                    view_id, palette_json, projections_json,
+                    projection_dimensions_json, projection_diagnostics_json,
+                    tile_size, atlas_size, atlas_columns, point_count, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    view_id,
+                    json.dumps(palette, sort_keys=True),
+                    json.dumps(projections),
+                    json.dumps(projection_dimensions, sort_keys=True),
+                    json.dumps(projection_diagnostics, sort_keys=True),
+                    int(tile_size),
+                    int(atlas_size),
+                    int(atlas_columns),
+                    len(point_rows),
+                    _timestamp(),
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO projection_atlases (
+                    view_id, atlas_index, path
+                )
+                VALUES (?, ?, ?)
+                """,
+                atlas_rows,
+            )
+            connection.executemany(
+                """
+                INSERT INTO projection_points (
+                    view_id, point_index, row_id, source_index_json, label,
+                    dataset, atlas_index, atlas_column, atlas_row,
+                    coordinates_json, details_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                point_rows,
+            )
+
     def dataset_variants(self) -> list[DatasetVariantRecord]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -372,6 +456,81 @@ class GeometryRegistry:
             )
             for row in rows
         ]
+
+    def projection_payload(self, view_id: str) -> dict[str, Any] | None:
+        """Load a prebuilt projection payload index, if one is registered."""
+
+        with self.connect() as connection:
+            metadata = connection.execute(
+                "SELECT * FROM projection_payloads WHERE view_id = ?",
+                (view_id,),
+            ).fetchone()
+            if metadata is None:
+                return None
+            atlas_rows = connection.execute(
+                """
+                SELECT path
+                FROM projection_atlases
+                WHERE view_id = ?
+                ORDER BY atlas_index
+                """,
+                (view_id,),
+            ).fetchall()
+            point_rows = connection.execute(
+                """
+                SELECT *
+                FROM projection_points
+                WHERE view_id = ?
+                ORDER BY point_index
+                """,
+                (view_id,),
+            ).fetchall()
+        points = [
+            {
+                "rowId": int(row["row_id"]),
+                "sourceIndex": json.loads(row["source_index_json"]),
+                "label": row["label"],
+                "dataset": row["dataset"],
+                "atlas": int(row["atlas_index"]),
+                "column": int(row["atlas_column"]),
+                "row": int(row["atlas_row"]),
+                "coordinates": json.loads(row["coordinates_json"]),
+                "details": json.loads(row["details_json"]),
+            }
+            for row in point_rows
+        ]
+        return {
+            "points": points,
+            "atlas_paths": [self.resolve(row["path"]) for row in atlas_rows],
+            "palette": json.loads(metadata["palette_json"]),
+            "projections": json.loads(metadata["projections_json"]),
+            "projection_dimensions": json.loads(
+                metadata["projection_dimensions_json"]
+            ),
+            "projection_diagnostics": json.loads(
+                metadata["projection_diagnostics_json"]
+            ),
+            "tile_size": int(metadata["tile_size"]),
+            "atlas_size": int(metadata["atlas_size"]),
+            "atlas_columns": int(metadata["atlas_columns"]),
+            "point_count": int(metadata["point_count"]),
+        }
+
+    def projection_label_counts(self, view_id: str) -> dict[str, int]:
+        """Return indexed label counts for a projection view."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT label, COUNT(*) AS count
+                FROM projection_points
+                WHERE view_id = ?
+                GROUP BY label
+                ORDER BY label
+                """,
+                (view_id,),
+            ).fetchall()
+        return {row["label"]: int(row["count"]) for row in rows}
 
     def get_dataset_variant(self, variant_id: str) -> sqlite3.Row:
         with self.connect() as connection:
@@ -491,6 +650,50 @@ class GeometryRegistry:
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS projection_payloads (
+                    view_id TEXT PRIMARY KEY,
+                    palette_json TEXT NOT NULL,
+                    projections_json TEXT NOT NULL,
+                    projection_dimensions_json TEXT NOT NULL,
+                    projection_diagnostics_json TEXT NOT NULL,
+                    tile_size INTEGER NOT NULL,
+                    atlas_size INTEGER NOT NULL,
+                    atlas_columns INTEGER NOT NULL,
+                    point_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(view_id) REFERENCES projection_views(view_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS projection_atlases (
+                    view_id TEXT NOT NULL,
+                    atlas_index INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    PRIMARY KEY(view_id, atlas_index),
+                    FOREIGN KEY(view_id) REFERENCES projection_payloads(view_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS projection_points (
+                    view_id TEXT NOT NULL,
+                    point_index INTEGER NOT NULL,
+                    row_id INTEGER NOT NULL,
+                    source_index_json TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    dataset TEXT NOT NULL,
+                    atlas_index INTEGER NOT NULL,
+                    atlas_column INTEGER NOT NULL,
+                    atlas_row INTEGER NOT NULL,
+                    coordinates_json TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    PRIMARY KEY(view_id, point_index),
+                    FOREIGN KEY(view_id) REFERENCES projection_payloads(view_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_projection_points_label
+                    ON projection_points(view_id, label);
                 """
             )
 

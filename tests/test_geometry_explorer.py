@@ -290,6 +290,16 @@ id_estimation:
         config_path=config_path,
         workspace=workspace,
     )
+    registry = GeometryRegistry(workspace)
+    indexed = registry.projection_payload(result["view_id"])
+    assert indexed is not None
+    assert len(indexed["points"]) == 6
+    assert registry.projection_label_counts(result["view_id"]) == {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+    }
+    Path(result["explorer_data"]).unlink()
     payload = load_projection_payload(result["view_id"], workspace=workspace)
     html = build_geometry_html(payload, three_source="window.THREE = {};")
 

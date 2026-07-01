@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from fm_lab.geometry_explorer.bundles import build_and_register_projection_payload_index
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.variants import load_variant_bundle
 from fm_lab.image_diagnostics.config import (
@@ -156,6 +157,7 @@ def build_projection_view(
         renderer=config.explorer.renderer,
         row_count=len(explorer_data),
     )
+    build_and_register_projection_payload_index(view_id, workspace=workspace)
     elapsed = time.perf_counter() - started
     logger.info("Registered geometry projection view %s in %.2f seconds.", view_id, elapsed)
     return {

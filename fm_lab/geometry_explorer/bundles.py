@@ -44,7 +44,30 @@ def load_projection_payload(
     """Load a registered dataset projection view into viewer payload JSON."""
 
     registry = GeometryRegistry(workspace)
+    indexed = registry.projection_payload(view_id)
+    if indexed is not None:
+        return _projection_payload_from_index(indexed)
+    return build_and_register_projection_payload_index(view_id, workspace=workspace)
+
+
+def build_and_register_projection_payload_index(
+    view_id: str,
+    *,
+    workspace: str | Path = DEFAULT_WORKSPACE,
+) -> dict[str, Any]:
+    """Build and register the SQLite-backed projection payload index."""
+
+    registry = GeometryRegistry(workspace)
     row = registry.get_projection_view(view_id)
+    payload, index = _projection_payload_from_files(registry, row)
+    registry.register_projection_payload(view_id=view_id, **index)
+    return payload
+
+
+def _projection_payload_from_files(
+    registry: GeometryRegistry,
+    row: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     frame = read_parquet(registry.resolve(row["explorer_data_path"]))
     output_dir = registry.resolve(row["output_dir"])
     bundle = prepare_sprite_atlases(
@@ -58,28 +81,71 @@ def load_projection_payload(
         include_z=True,
     )
     if not projections:
-        raise ValueError(f"Projection view {view_id} has no projection columns.")
-    return {
+        raise ValueError(
+            f"Projection view {row['view_id']} has no projection columns."
+        )
+    points = projection_point_payload(
+        bundle.frame,
+        projections,
+        output_dimensions=3,
+    )
+    projection_dimensions_payload = projection_dimensions(projections)
+    projection_diagnostics = projection_diagnostics_payload(bundle.frame, projections)
+    palette = palette_payload(bundle.palette)
+    atlas_size = _atlas_size(bundle.atlas_paths)
+    payload = {
         "mode": "dataset",
-        "points": projection_point_payload(
-            bundle.frame,
-            projections,
-            output_dimensions=3,
-        ),
+        "points": points,
         "trajectory": [],
         "trajectoryLabels": [],
         "trajectoryPreviews": [],
         "atlases": [atlas_data_url(path) for path in bundle.atlas_paths],
-        "palette": palette_payload(bundle.palette),
+        "palette": palette,
         "projections": list(projections),
-        "projectionDimensions": projection_dimensions(projections),
-        "projectionDiagnostics": projection_diagnostics_payload(bundle.frame, projections),
+        "projectionDimensions": projection_dimensions_payload,
+        "projectionDiagnostics": projection_diagnostics,
         "tileSize": bundle.tile_size,
-        "atlasSize": _atlas_size(bundle.atlas_paths),
+        "atlasSize": atlas_size,
         "atlasColumns": bundle.atlas_columns,
         "options": _default_options(),
         "counts": {
             "points": int(len(bundle.frame)),
+            "trajectorySteps": 0,
+            "trajectories": 0,
+        },
+    }
+    index = {
+        "points": points,
+        "atlas_paths": bundle.atlas_paths,
+        "palette": palette,
+        "projections": list(projections),
+        "projection_dimensions": projection_dimensions_payload,
+        "projection_diagnostics": projection_diagnostics,
+        "tile_size": bundle.tile_size,
+        "atlas_size": atlas_size,
+        "atlas_columns": bundle.atlas_columns,
+    }
+    return payload, index
+
+
+def _projection_payload_from_index(indexed: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": "dataset",
+        "points": indexed["points"],
+        "trajectory": [],
+        "trajectoryLabels": [],
+        "trajectoryPreviews": [],
+        "atlases": [atlas_data_url(path) for path in indexed["atlas_paths"]],
+        "palette": indexed["palette"],
+        "projections": indexed["projections"],
+        "projectionDimensions": indexed["projection_dimensions"],
+        "projectionDiagnostics": indexed["projection_diagnostics"],
+        "tileSize": indexed["tile_size"],
+        "atlasSize": indexed["atlas_size"],
+        "atlasColumns": indexed["atlas_columns"],
+        "options": _default_options(),
+        "counts": {
+            "points": int(indexed["point_count"]),
             "trajectorySteps": 0,
             "trajectories": 0,
         },
