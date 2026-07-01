@@ -1,6 +1,7 @@
 """Training loops, objectives, and callbacks."""
 
 from fm_lab.training.losses import (
+    DiffusionObjective,
     DirectionOnlyStraightObjective,
     FlowMatchingObjective,
     KernelVStarConfig,
@@ -14,6 +15,7 @@ from fm_lab.training.trainer import train_flow_matching
 
 __all__ = [
     "FlowMatchingObjective",
+    "DiffusionObjective",
     "DirectionOnlyStraightObjective",
     "KernelVStarConfig",
     "kernel_vstar_estimate",

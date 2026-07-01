@@ -39,7 +39,13 @@ from fm_lab.models import (
     ImageUNetVelocity,
     MLPVelocity,
 )
-from fm_lab.paths import LearnedAccelerationPath, LinearPath, SphericalPath, TangentNormalPath
+from fm_lab.paths import (
+    GaussianDiffusionPath,
+    LearnedAccelerationPath,
+    LinearPath,
+    SphericalPath,
+    TangentNormalPath,
+)
 from fm_lab.solvers import (
     EulerSolver,
     HeunSolver,
@@ -230,6 +236,11 @@ def build_path(config: dict[str, Any]):
     name = path_config.get("name", "linear").lower()
     if name in {"linear", "rectified"}:
         return LinearPath()
+    if name in {"gaussian_diffusion", "diffusion", "stochastic_interpolant"}:
+        return GaussianDiffusionPath(
+            schedule=str(path_config.get("schedule", "trig")),
+            sigma_min=float(path_config.get("sigma_min", 1e-4)),
+        )
     if name in {"learned_acceleration", "acceleration", "quadratic_acceleration"}:
         source_dim = int(config.get("source", {}).get("dim", config.get("data", {}).get("dim", 2)))
         return LearnedAccelerationPath(

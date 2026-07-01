@@ -3,7 +3,8 @@ from pathlib import Path
 import torch
 
 from fm_lab.experiments.factory import build_model, build_path, build_source, build_target
-from fm_lab.training.losses import FlowMatchingObjective, build_objective
+from fm_lab.paths import GaussianDiffusionPath
+from fm_lab.training.losses import DiffusionObjective, FlowMatchingObjective, build_objective
 from fm_lab.utils.config import deep_update, load_config
 from fm_lab.utils.logging import create_run_dir
 
@@ -152,6 +153,29 @@ def test_mnist_config_builds_matching_components_without_loading_data() -> None:
     x = torch.zeros(2, 784)
     t = torch.zeros(2)
     assert model(x, t).shape == (2, 784)
+
+
+def test_diffusion_config_builds_path_and_objective() -> None:
+    config = {
+        "source": {"name": "gaussian", "dim": 3},
+        "data": {"name": "gaussian_mixture_3d"},
+        "path": {"name": "gaussian_diffusion", "schedule": "linear"},
+        "model": {"name": "mlp", "hidden_dim": 8, "depth": 1},
+        "objective": {"name": "diffusion", "prediction_type": "epsilon"},
+    }
+
+    source = build_source(config)
+    path = build_path(config)
+    model = build_model(config, dim=source.dim)
+    objective = build_objective(config["objective"])
+
+    assert isinstance(path, GaussianDiffusionPath)
+    assert isinstance(objective, DiffusionObjective)
+    x0 = torch.zeros(2, 3)
+    x1 = torch.ones(2, 3)
+    t = torch.full((2,), 0.5)
+    assert path.sample_training_tuple(x0, x1, t).xt.shape == (2, 3)
+    assert model(x0, t).shape == (2, 3)
 
 
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:

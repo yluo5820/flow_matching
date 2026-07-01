@@ -231,6 +231,15 @@ def train_flow_matching(
         metrics=metrics,
     )
 
+    sampling_skip_reason = _velocity_sampling_skip_reason(objective)
+    if sampling_skip_reason is not None:
+        metrics["sampling"] = {
+            "skipped": True,
+            "reason": sampling_skip_reason,
+        }
+        write_json(metrics, run_dir / "metrics.json")
+        return metrics
+
     sample_artifacts = sample_and_plot(
         config=config,
         run_dir=run_dir,
@@ -625,6 +634,16 @@ def _validate_training_compatibility(
         raise ValueError("direction_only_straight requires a linear path in v1.")
     if not _requires_source_label(model):
         raise ValueError("direction_only_straight requires a source-label-conditioned model.")
+
+
+def _velocity_sampling_skip_reason(objective: Any) -> str | None:
+    prediction_type = getattr(objective, "prediction_type", None)
+    if prediction_type is None or prediction_type == "velocity":
+        return None
+    return (
+        "FM-style ODE sampling expects model(x, t) to return a velocity field. "
+        f"The diffusion objective was trained for {prediction_type} prediction."
+    )
 
 
 def _validate_trainable_path_objective(objective: Any) -> None:

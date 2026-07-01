@@ -7,6 +7,12 @@ from fm_lab.diagnostics.ambiguity import (
     knn_ambiguity,
 )
 from fm_lab.diagnostics.curvature import curvature_stats, material_acceleration
+from fm_lab.diagnostics.diffusion_lid import (
+    FlipdEstimate,
+    NormalBundleEstimate,
+    flipd_dimension,
+    normal_bundle_dimension,
+)
 from fm_lab.diagnostics.geometry import radial_deviation, radial_tangent_velocity_2d
 from fm_lab.diagnostics.jacobian import exact_jacobian, jacobian_stats
 from fm_lab.diagnostics.metrics import sliced_wasserstein, squared_mmd
@@ -22,15 +28,19 @@ from fm_lab.diagnostics.trajectory_umap import (
 
 __all__ = [
     "GridAmbiguityResult",
+    "FlipdEstimate",
+    "NormalBundleEstimate",
     "TrajectoryUMAPConfig",
     "bayes_regression_gap_knn",
     "curvature_stats",
     "exact_jacobian",
+    "flipd_dimension",
     "generate_solver_samples",
     "grid_ambiguity",
     "jacobian_stats",
     "knn_ambiguity",
     "material_acceleration",
+    "normal_bundle_dimension",
     "pairwise_solver_distances",
     "project_saved_trajectories",
     "radial_deviation",

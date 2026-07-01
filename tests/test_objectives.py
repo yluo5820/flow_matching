@@ -1,8 +1,9 @@
 import torch
 from torch import nn
 
-from fm_lab.paths import LearnedAccelerationPath, LinearPath
+from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearPath
 from fm_lab.training.losses import (
+    DiffusionObjective,
     KernelVStarConfig,
     build_objective,
     flow_matching_loss,
@@ -188,6 +189,52 @@ def test_objective_adds_interpolant_acceleration_metrics() -> None:
     assert metrics["interpolant_acceleration_loss"] == 8.0
     assert metrics["interpolant_acceleration_weighted"] == 4.0
     assert metrics["interpolant_acceleration_norm_mean"] > 0
+
+
+def test_diffusion_epsilon_objective_matches_noise_target() -> None:
+    objective = build_objective({"name": "diffusion", "prediction_type": "epsilon"})
+    model = ConstantVelocity(dim=2, value=0.0)
+    path = GaussianDiffusionPath(schedule="linear")
+    epsilon = torch.tensor([[1.0, -2.0], [0.5, 1.5]])
+    data = torch.tensor([[3.0, 4.0], [-1.0, 2.0]])
+    t = torch.full((2,), 0.5)
+
+    loss, metrics = objective(model=model, path=path, x0=epsilon, x1=data, t=t)
+
+    assert isinstance(objective, DiffusionObjective)
+    assert torch.allclose(loss, epsilon.square().mean())
+    assert metrics["diffusion_loss"] == metrics["loss"]
+    assert metrics["diffusion_sigma_mean"] == 0.5
+    assert objective.metadata()["prediction_type"] == "epsilon"
+
+
+def test_diffusion_score_objective_matches_conditional_score_target() -> None:
+    objective = build_objective({"name": "diffusion_score"})
+    model = ConstantVelocity(dim=2, value=0.0)
+    path = GaussianDiffusionPath(schedule="linear")
+    epsilon = torch.tensor([[1.0, -2.0], [0.5, 1.5]])
+    data = torch.zeros_like(epsilon)
+    t = torch.full((2,), 0.5)
+    expected_score = -epsilon / 0.5
+
+    loss, _ = objective(model=model, path=path, x0=epsilon, x1=data, t=t)
+
+    assert torch.allclose(loss, expected_score.square().mean())
+
+
+def test_diffusion_objective_requires_gaussian_diffusion_path() -> None:
+    objective = build_objective({"name": "noise_prediction"})
+    model = ConstantVelocity(dim=2, value=0.0)
+    x0 = torch.zeros(2, 2)
+    x1 = torch.ones(2, 2)
+    t = torch.full((2,), 0.5)
+
+    try:
+        objective(model=model, path=LinearPath(), x0=x0, x1=x1, t=t)
+    except ValueError as exc:
+        assert "gaussian_diffusion" in str(exc)
+    else:
+        raise AssertionError("Expected diffusion objective to reject non-diffusion paths.")
 
 
 def test_direction_only_objective_computes_decomposed_losses() -> None:

@@ -17,6 +17,7 @@ def test_objective_overrides_from_cli_args() -> None:
     args = Namespace(
         objective="flow_matching",
         objective_loss="mse",
+        diffusion_prediction_type=None,
         straightness_weight=0.01,
         straightness_sample_size=128,
         direction_weight=None,
@@ -34,6 +35,7 @@ def test_objective_overrides_allows_disabling_straightness() -> None:
     args = Namespace(
         objective=None,
         objective_loss=None,
+        diffusion_prediction_type=None,
         straightness_weight=0.0,
         straightness_sample_size=None,
         direction_weight=None,
@@ -47,6 +49,7 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
     args = Namespace(
         objective="direction_only_straight",
         objective_loss=None,
+        diffusion_prediction_type=None,
         straightness_weight=None,
         straightness_sample_size=None,
         direction_weight=10.0,
@@ -57,6 +60,23 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
         "name": "direction_only_straight",
         "direction_weight": 10.0,
         "speed_weight": 1.0,
+    }
+
+
+def test_diffusion_prediction_type_override_from_cli_args() -> None:
+    args = Namespace(
+        objective="diffusion",
+        objective_loss=None,
+        diffusion_prediction_type="score",
+        straightness_weight=None,
+        straightness_sample_size=None,
+        direction_weight=None,
+        speed_weight=None,
+    )
+
+    assert _objective_overrides(args) == {
+        "name": "diffusion",
+        "prediction_type": "score",
     }
 
 

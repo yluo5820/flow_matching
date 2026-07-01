@@ -83,6 +83,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--objective", default=None, help="Override objective.name.")
     parser.add_argument("--objective-loss", default=None, help="Override objective.loss.")
     parser.add_argument(
+        "--diffusion-prediction-type",
+        default=None,
+        choices=("epsilon", "score", "velocity"),
+        help="Override objective.prediction_type for diffusion objectives.",
+    )
+    parser.add_argument(
         "--straightness-weight",
         type=float,
         default=None,
@@ -190,6 +196,8 @@ def _objective_overrides(args: argparse.Namespace) -> dict:
         objective["name"] = args.objective
     if args.objective_loss is not None:
         objective["loss"] = args.objective_loss
+    if args.diffusion_prediction_type is not None:
+        objective["prediction_type"] = args.diffusion_prediction_type
     if args.direction_weight is not None:
         objective["direction_weight"] = args.direction_weight
     if args.speed_weight is not None:

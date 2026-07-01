@@ -248,6 +248,66 @@ class FlowMatchingObjective:
 
 
 @dataclass
+class DiffusionObjective:
+    """Gaussian diffusion objective for epsilon, score, or velocity prediction."""
+
+    prediction_type: str = "epsilon"
+    loss: str = "mse"
+    name: str = "diffusion"
+
+    def __post_init__(self) -> None:
+        self.prediction_type = _normalize_diffusion_prediction_type(self.prediction_type)
+        self.loss = self.loss.lower()
+        if self.loss != "mse":
+            raise ValueError("DiffusionObjective currently supports only mse loss.")
+
+    def __call__(
+        self,
+        *,
+        model: torch.nn.Module,
+        path: FlowPath,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+        compute_diagnostics: bool = True,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if not hasattr(path, "sample_training_tuple"):
+            raise ValueError("diffusion objective requires path.name: gaussian_diffusion.")
+
+        sample = path.sample_training_tuple(x0, x1, t)
+        target = self._target(sample)
+        prediction = model(sample.xt, t)
+        diffusion_loss = F.mse_loss(prediction, target)
+        metrics = {
+            "diffusion_loss": float(diffusion_loss.detach().cpu()),
+            "diffusion_prediction_norm_mean": _mean_stat(prediction.detach().norm(dim=1)),
+            "diffusion_target_norm_mean": _mean_stat(target.detach().norm(dim=1)),
+            "diffusion_alpha_mean": _mean_stat(sample.alpha_t.detach()),
+            "diffusion_sigma_mean": _mean_stat(sample.sigma_t.detach()),
+            "loss": float(diffusion_loss.detach().cpu()),
+        }
+        if compute_diagnostics and hasattr(path, "diagnostics"):
+            metrics.update(path.diagnostics(x0=x0, x1=x1, t=t))
+        return diffusion_loss, metrics
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "prediction_type": self.prediction_type,
+            "loss": self.loss,
+        }
+
+    def _target(self, sample: Any) -> torch.Tensor:
+        if self.prediction_type == "epsilon":
+            return sample.epsilon
+        if self.prediction_type == "score":
+            return sample.score_target
+        if self.prediction_type == "velocity":
+            return sample.velocity_target
+        raise ValueError(f"Unsupported diffusion prediction type: {self.prediction_type}")
+
+
+@dataclass
 class DirectionOnlyStraightObjective:
     """Label-conditioned direction-only straight flow objective."""
 
@@ -504,6 +564,28 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
+    diffusion_prediction_aliases = {
+        "diffusion_epsilon": "epsilon",
+        "epsilon_prediction": "epsilon",
+        "noise_prediction": "epsilon",
+        "diffusion_score": "score",
+        "score_matching": "score",
+        "diffusion_velocity": "velocity",
+    }
+    if name in {
+        "diffusion",
+        "gaussian_diffusion",
+        "diffusion_objective",
+        *diffusion_prediction_aliases.keys(),
+    }:
+        prediction_type = str(
+            config.get("prediction_type", diffusion_prediction_aliases.get(name, "epsilon"))
+        )
+        return DiffusionObjective(
+            prediction_type=prediction_type,
+            loss=str(config.get("loss", "mse")).lower(),
+            name=name,
+        )
     if name in {"direction_only_straight", "direction_speed", "lagrangian_direction"}:
         direction_weight = float(config.get("direction_weight", 1.0))
         speed_weight = float(config.get("speed_weight", 1.0))
@@ -592,6 +674,23 @@ def _velocity_loss(
     if loss == "mse":
         return F.mse_loss(predicted_velocity, target_velocity)
     raise ValueError(f"Unsupported velocity loss: {loss}")
+
+
+def _normalize_diffusion_prediction_type(prediction_type: str) -> str:
+    normalized = prediction_type.lower()
+    aliases = {
+        "eps": "epsilon",
+        "epsilon": "epsilon",
+        "noise": "epsilon",
+        "score": "score",
+        "velocity": "velocity",
+        "v": "velocity",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "DiffusionObjective prediction_type must be epsilon, score, or velocity."
+        )
+    return aliases[normalized]
 
 
 def _interpolant_acceleration_loss(

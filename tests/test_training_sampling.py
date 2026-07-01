@@ -4,7 +4,7 @@ from torch import nn
 
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling
 from fm_lab.data import GaussianMixture3D, TwoMoons
-from fm_lab.paths import LearnedAccelerationPath, LinearPath, SphericalPath
+from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearPath, SphericalPath
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
 from fm_lab.training.losses import build_objective
@@ -416,6 +416,34 @@ def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -
     assert (tmp_path / "plots" / "training_loss.png").exists()
     assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
     assert (tmp_path / "trajectories" / "euler_nfe3.npy").exists()
+
+
+def test_train_diffusion_epsilon_skips_velocity_sampling(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "diffusion", "prediction_type": "epsilon"},
+        "training": {"batch_size": 8, "steps": 1, "log_every": 1, "lr": 1.0e-3},
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=GaussianDiffusionPath(schedule="linear"),
+        model=TrainableConstantVelocity(dim=2, value=0.5),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert metrics["sampling"]["skipped"] is True
+    assert "epsilon" in metrics["sampling"]["reason"]
+    assert (tmp_path / "checkpoint.pt").exists()
+    assert not (tmp_path / "samples").exists()
+    assert not (tmp_path / "trajectories").exists()
 
 
 class TrainableTimeScaledVelocity(nn.Module):

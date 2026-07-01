@@ -1,0 +1,51 @@
+experiment:
+  name: two_moons_diffusion_epsilon
+  seed: 0
+  output_dir: runs/two_moons_diffusion_epsilon
+
+data:
+  name: two_moons
+  n_train: 100000
+  noise: 0.05
+
+source:
+  name: gaussian
+  dim: 2
+  std: 1.0
+
+coupling:
+  name: independent
+
+path:
+  name: gaussian_diffusion
+  schedule: trig
+  sigma_min: 1.0e-4
+
+model:
+  name: mlp
+  hidden_dim: 256
+  depth: 4
+  activation: silu
+  time_embedding: sinusoidal
+
+objective:
+  name: diffusion
+  prediction_type: epsilon
+  loss: mse
+
+training:
+  batch_size: 1024
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  time_sampling: uniform
+
+solvers:
+  names: [rk4]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 8192
+  n_trajectories: 128
+  nfe: 64
