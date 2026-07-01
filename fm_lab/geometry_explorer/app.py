@@ -18,7 +18,7 @@ from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistr
 from fm_lab.geometry_explorer.viewer import build_geometry_html
 
 EXPLORER_HEIGHT = 920
-VIEWER_CACHE_VERSION = 3
+VIEWER_CACHE_VERSION = 4
 
 
 def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:

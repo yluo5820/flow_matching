@@ -51,8 +51,8 @@ def _html_template(
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; overflow: hidden; background: #111; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f2f2f2; }}
-  #app {{ display: grid; grid-template-columns: 320px 1fr; grid-template-rows: minmax(0, 1fr) 190px; height: {height}px; min-height: 0; background: #111; overflow: hidden; }}
-  #sidebar {{ grid-row: 1 / span 2; background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; overflow: hidden; }}
+  #app {{ --sidebar-width: 320px; --dock-height: 190px; display: grid; grid-template-columns: var(--sidebar-width) 7px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 7px var(--dock-height); height: {height}px; min-height: 0; background: #111; overflow: hidden; }}
+  #sidebar {{ grid-column: 1; grid-row: 1 / span 3; background: #222; padding: 16px; display: flex; flex-direction: column; gap: 13px; min-width: 0; min-height: 0; overflow: hidden; }}
   .control {{ display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 9px; }}
   label, .muted {{ color: #c8c8c8; font-size: 13px; }}
   select {{ width: 100%; height: 32px; background: #f3f3f3; color: #111; border: 0; border-radius: 2px; padding: 0 8px; }}
@@ -74,7 +74,13 @@ def _html_template(
   #sample-info {{ flex: 0 0 auto; display: grid; gap: 5px; align-content: start; min-height: 88px; }}
   #sample-label {{ font-size: 24px; font-weight: 650; }}
   #sample-index {{ color: #a9a9a9; font-variant-numeric: tabular-nums; }}
-  #diagnostics-dock {{ grid-column: 2; grid-row: 2; min-height: 0; background: #202020; border-top: 1px solid #343434; padding: 12px 16px; overflow-y: auto; overscroll-behavior: contain; }}
+  .splitter {{ position: relative; z-index: 8; background: #171717; transition: background 120ms ease; }}
+  .splitter::after {{ content: ""; position: absolute; inset: 0; background: transparent; }}
+  .splitter:hover, .splitter.active {{ background: #3a3a3a; }}
+  #sidebar-splitter {{ grid-column: 2; grid-row: 1 / span 3; cursor: col-resize; }}
+  #dock-splitter {{ grid-column: 3; grid-row: 2; cursor: row-resize; }}
+  body.resizing-layout, body.resizing-layout * {{ user-select: none; }}
+  #diagnostics-dock {{ grid-column: 3; grid-row: 3; min-height: 0; background: #202020; border-top: 1px solid #343434; padding: 12px 16px; overflow-y: auto; overscroll-behavior: contain; }}
   #metrics {{ display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr) max-content); gap: 6px 14px; font-size: 12px; color: #bdbdbd; align-content: start; }}
   .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
   .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }}
@@ -83,7 +89,7 @@ def _html_template(
   .legend-item {{ display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12px; color: #cfcfcf; }}
   .legend-item span:last-child {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
   .swatch {{ width: 9px; height: 9px; flex: 0 0 auto; }}
-  #main {{ grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #111; }}
+  #main {{ grid-column: 3; grid-row: 1; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #111; }}
   #main canvas {{ position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }}
   #main canvas.dragging {{ cursor: grabbing; }}
   #status {{ position: absolute; right: 14px; bottom: 12px; color: #777; font-size: 12px; pointer-events: none; }}
@@ -93,11 +99,13 @@ def _html_template(
     #metrics {{ grid-template-columns: repeat(2, minmax(130px, 1fr) max-content); }}
   }}
   @media (max-width: 760px) {{
-    #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 230px 190px; }}
-    #sidebar {{ grid-row: 2; display: grid; grid-template-columns: 105px 145px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
+    #app {{ grid-template-columns: 1fr; grid-template-rows: 1fr 7px 230px 7px var(--dock-height); }}
+    #sidebar {{ grid-column: 1; grid-row: 3; display: grid; grid-template-columns: 105px 145px minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 8px 10px; padding: 10px; overflow: hidden; }}
     #preview-wrap {{ grid-column: 1; grid-row: 1 / span 2; }}
     #sample-info {{ grid-column: 3; grid-row: 1 / span 2; overflow-y: auto; }}
-    #diagnostics-dock {{ grid-column: 1; grid-row: 3; }}
+    #sidebar-splitter {{ display: none; }}
+    #dock-splitter {{ grid-column: 1; grid-row: 4; }}
+    #diagnostics-dock {{ grid-column: 1; grid-row: 5; }}
     #metrics {{ grid-template-columns: minmax(0, 1fr) max-content; }}
     #main {{ grid-column: 1; grid-row: 1; }}
     .control {{ grid-template-columns: 1fr; gap: 4px; align-content: start; }}
@@ -143,6 +151,7 @@ def _html_template(
     </div>
     <div id="legend"></div>
   </aside>
+  <div id="sidebar-splitter" class="splitter" role="separator" aria-orientation="vertical" title="Drag to resize sidebar"></div>
   <main id="main">
     <div id="view-controls">
       <button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
@@ -151,6 +160,7 @@ def _html_template(
     </div>
     <div id="status"></div>
   </main>
+  <div id="dock-splitter" class="splitter" role="separator" aria-orientation="horizontal" title="Drag to resize diagnostics"></div>
   <section id="diagnostics-dock">
     <div id="metrics"></div>
   </section>
@@ -173,6 +183,7 @@ for (const details of Object.values(DATA.projectionDiagnostics || {})) {
   }
 }
 
+const app = document.getElementById("app");
 const main = document.getElementById("main");
 const preview = document.getElementById("preview");
 const previewContext = preview.getContext("2d");
@@ -197,6 +208,8 @@ const thumbnailToggle = document.getElementById("show-thumbnails");
 const resetButton = document.getElementById("reset");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
+const sidebarSplitter = document.getElementById("sidebar-splitter");
+const dockSplitter = document.getElementById("dock-splitter");
 const atlasImages = [];
 let atlasTextures = [];
 
@@ -233,6 +246,7 @@ let pinnedSelection = null;
 let selectedLabels = new Set(DATA.points.map(point => point.label));
 let visibleIndices = DATA.points.map((_, index) => index);
 let renderRequested = false;
+let layoutDragMode = null;
 
 for (const name of DATA.projections) {
   const option = document.createElement("option");
@@ -249,6 +263,42 @@ populateLegend(DATA.palette || {});
 
 function defaultProjectionName(projections) {
   return projections.find(name => name.toLowerCase().includes("umap")) || projections[0] || "";
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function startLayoutDrag(mode, event) {
+  layoutDragMode = mode;
+  event.preventDefault();
+  event.stopPropagation();
+  document.body.classList.add("resizing-layout");
+  (mode === "sidebar" ? sidebarSplitter : dockSplitter).classList.add("active");
+  updateLayoutDrag(event);
+}
+
+function updateLayoutDrag(event) {
+  const rect = app.getBoundingClientRect();
+  if (layoutDragMode === "sidebar") {
+    const maximum = Math.max(260, Math.min(560, rect.width - 420));
+    const width = clamp(event.clientX - rect.left, 240, maximum);
+    app.style.setProperty("--sidebar-width", `${width}px`);
+  } else if (layoutDragMode === "dock") {
+    const maximum = Math.max(150, rect.height - 260);
+    const height = clamp(rect.bottom - event.clientY, 120, Math.min(420, maximum));
+    app.style.setProperty("--dock-height", `${height}px`);
+  }
+  resize();
+}
+
+function finishLayoutDrag() {
+  if (!layoutDragMode) return;
+  layoutDragMode = null;
+  document.body.classList.remove("resizing-layout");
+  sidebarSplitter.classList.remove("active");
+  dockSplitter.classList.remove("active");
+  resize();
 }
 
 function parseColor(label) {
@@ -796,6 +846,8 @@ slider.addEventListener("input", () => {
 for (const control of [showTarget, showGenerated, showTrajectory, thumbnailToggle]) {
   control.addEventListener("change", rebuildScene);
 }
+sidebarSplitter.addEventListener("pointerdown", event => startLayoutDrag("sidebar", event));
+dockSplitter.addEventListener("pointerdown", event => startLayoutDrag("dock", event));
 renderer.domElement.addEventListener("pointerdown", event => {
   dragging = true;
   moved = false;
@@ -804,6 +856,10 @@ renderer.domElement.addEventListener("pointerdown", event => {
   renderer.domElement.classList.add("dragging");
 });
 window.addEventListener("pointermove", event => {
+  if (layoutDragMode) {
+    updateLayoutDrag(event);
+    return;
+  }
   if (dragging) {
     const dx = event.clientX - pointerX;
     const dy = event.clientY - pointerY;
@@ -823,6 +879,10 @@ window.addEventListener("pointermove", event => {
   }
 });
 window.addEventListener("pointerup", event => {
+  if (layoutDragMode) {
+    finishLayoutDrag();
+    return;
+  }
   if (!dragging) return;
   dragging = false;
   renderer.domElement.classList.remove("dragging");
