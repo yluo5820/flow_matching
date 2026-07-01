@@ -791,7 +791,7 @@ def _load_numpy(
             float(np.nanmin(selected)),
             float(np.nanmax(selected)),
         )
-        image_paths = _export_grayscale_thumbnails(
+        image_paths = _export_array_thumbnails(
             selected,
             image_shape=config.image_shape,
             value_range=value_range,
@@ -852,10 +852,10 @@ def _load_image_metadata(config: InputConfig, project_root: Path) -> DatasetBund
     )
 
 
-def _export_grayscale_thumbnails(
+def _export_array_thumbnails(
     vectors: np.ndarray,
     *,
-    image_shape: tuple[int, int],
+    image_shape: tuple[int, ...],
     value_range: tuple[float, float],
     source_indices: np.ndarray,
     output_dir: str | Path | None,
@@ -875,9 +875,37 @@ def _export_grayscale_thumbnails(
         pixels = np.asarray(np.round(normalized * 255.0), dtype=np.uint8)
         path = directory / f"{prefix}_{int(source_index):05d}.png"
         if not path.exists():
-            Image.fromarray(pixels, mode="L").save(path)
+            if pixels.ndim == 2:
+                image = Image.fromarray(pixels, mode="L")
+            elif pixels.ndim == 3 and pixels.shape[-1] == 1:
+                image = Image.fromarray(pixels[..., 0], mode="L")
+            elif pixels.ndim == 3 and pixels.shape[-1] in {3, 4}:
+                mode = "RGB" if pixels.shape[-1] == 3 else "RGBA"
+                image = Image.fromarray(pixels, mode=mode)
+            else:
+                raise ConfigError(f"Unsupported thumbnail image shape: {image_shape}")
+            image.save(path)
         paths.append(str(path.resolve()))
     return paths
+
+
+def _export_grayscale_thumbnails(
+    vectors: np.ndarray,
+    *,
+    image_shape: tuple[int, int],
+    value_range: tuple[float, float],
+    source_indices: np.ndarray,
+    output_dir: str | Path | None,
+    prefix: str,
+) -> list[str]:
+    return _export_array_thumbnails(
+        vectors,
+        image_shape=image_shape,
+        value_range=value_range,
+        source_indices=source_indices,
+        output_dir=output_dir,
+        prefix=prefix,
+    )
 
 
 def _load_labels(

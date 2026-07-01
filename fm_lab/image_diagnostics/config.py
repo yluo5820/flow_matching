@@ -23,7 +23,7 @@ class InputConfig:
     download: bool = False
     data_path: str = ""
     labels_path: str | None = None
-    image_shape: tuple[int, int] | None = None
+    image_shape: tuple[int, ...] | None = None
     value_range: tuple[float, float] | None = None
     experiment_dir: str = ""
     metadata_path: str = "metadata/per_image_metadata.jsonl"
@@ -275,8 +275,13 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     elif not input_config.experiment_dir:
         raise ConfigError("Image metadata input requires input.experiment_dir.")
     if input_config.image_shape is not None:
-        if len(input_config.image_shape) != 2 or min(input_config.image_shape) < 1:
-            raise ConfigError("input.image_shape must contain two positive dimensions.")
+        shape = input_config.image_shape
+        if len(shape) not in {2, 3} or min(shape) < 1:
+            raise ConfigError(
+                "input.image_shape must contain two or three positive dimensions."
+            )
+        if len(shape) == 3 and shape[-1] not in {1, 3, 4}:
+            raise ConfigError("input.image_shape channel dimension must be 1, 3, or 4.")
 
     features = config.features
     if features.mode not in {"raw", "dinov2"}:

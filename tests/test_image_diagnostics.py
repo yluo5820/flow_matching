@@ -88,6 +88,23 @@ def test_input_config_does_not_sample_by_default() -> None:
     assert InputConfig().max_samples is None
 
 
+def test_numpy_config_accepts_rgb_image_shape() -> None:
+    config = diagnostics_config_from_dict(
+        {
+            "explorer_name": "rgb_numpy",
+            "input": {
+                "type": "numpy",
+                "data_path": "unused.npy",
+                "image_shape": [32, 32, 3],
+                "value_range": [0.0, 255.0],
+            },
+        }
+    )
+
+    assert config.input.image_shape == (32, 32, 3)
+    assert config.input.value_range == (0.0, 255.0)
+
+
 def test_full_dataset_configs_are_3d_and_compare_umap_variants() -> None:
     root = Path(__file__).resolve().parents[1]
     config_names = (
@@ -409,6 +426,35 @@ def test_numpy_loader_supports_vectors_and_image_preview(tmp_path: Path) -> None
     assert bundle.vectors.shape == (3, 16)
     assert len(bundle.metadata) == 3
     assert bundle.metadata["image_path"].map(lambda value: Path(value).is_file()).all()
+
+
+def test_numpy_loader_supports_rgb_image_preview(tmp_path: Path) -> None:
+    data_path = tmp_path / "rgb.npy"
+    image = np.zeros((2, 2, 3), dtype=np.float32)
+    image[0, 0] = [255.0, 0.0, 0.0]
+    image[0, 1] = [0.0, 128.0, 0.0]
+    image[1, 0] = [0.0, 0.0, 64.0]
+    image[1, 1] = [12.0, 34.0, 56.0]
+    np.save(data_path, image.reshape(1, -1))
+
+    bundle = load_dataset(
+        InputConfig(
+            type="numpy",
+            data_path=str(data_path),
+            image_shape=(2, 2, 3),
+            value_range=(0.0, 255.0),
+        ),
+        project_root=tmp_path,
+        thumbnail_dir=tmp_path / "previews",
+    )
+
+    thumbnail_path = Path(bundle.metadata["image_path"].iloc[0])
+    assert bundle.image_shape == (2, 2, 3)
+    assert thumbnail_path.is_file()
+    with Image.open(thumbnail_path) as thumbnail:
+        assert thumbnail.mode == "RGB"
+        assert thumbnail.getpixel((0, 0)) == (255, 0, 0)
+        assert thumbnail.getpixel((1, 0)) == (0, 128, 0)
 
 
 def test_metadata_loader_filters_resolves_and_deduplicates(tmp_path: Path) -> None:
