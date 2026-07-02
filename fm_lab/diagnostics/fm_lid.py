@@ -10,6 +10,7 @@ from typing import Any
 import torch
 from torch import nn
 
+from fm_lab.diagnostics._linalg import svdvals
 from fm_lab.solvers import Solver
 
 RepresentationFn = Callable[[torch.Tensor], torch.Tensor]
@@ -195,7 +196,7 @@ class FMJacobianSpectrumEstimator:
                 -1,
             )
         delta = (perturbed - base) / self.eps
-        return torch.linalg.svdvals(delta.T)
+        return svdvals(delta.T)
 
     def estimate_point(self, x: torch.Tensor) -> FMJacobianSpectrumEstimate:
         spectra = tuple(self.compute_spectrum(x, t) for t in self.t_values)

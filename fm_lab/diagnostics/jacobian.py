@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from fm_lab.diagnostics._linalg import svdvals
+
 
 def exact_jacobian(model: torch.nn.Module, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     """Compute per-sample Jacobian `d v_theta(x,t) / d x` for low-dimensional models."""
@@ -33,7 +35,7 @@ def jacobian_stats(model: torch.nn.Module, x: torch.Tensor, t: torch.Tensor) -> 
 
     jacobian = exact_jacobian(model, x, t)
     frobenius = jacobian.square().sum(dim=(1, 2)).sqrt()
-    singular_values = torch.linalg.svdvals(jacobian)
+    singular_values = svdvals(jacobian)
     spectral = singular_values[:, 0]
     divergence = torch.diagonal(jacobian, dim1=1, dim2=2).sum(dim=1)
     return {

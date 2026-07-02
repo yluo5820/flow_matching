@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from fm_lab.diagnostics._linalg import svdvals
+
 
 @dataclass(frozen=True)
 class NormalBundleEstimate:
@@ -76,7 +78,7 @@ def normal_bundle_dimension(
     t_flat = _expand_time_argument(t, flat.shape[0], device=x.device, dtype=x.dtype)
     scores = score_model(flat, t_flat).reshape(batch_size, n_perturbations, ambient_dim)
     scores = scores - scores.mean(dim=1, keepdim=True)
-    singular_values = torch.linalg.svdvals(scores)
+    singular_values = svdvals(scores)
     normal_dimension = _rank_from_singular_values(
         singular_values,
         threshold=rank_threshold,
