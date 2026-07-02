@@ -651,6 +651,33 @@ id_estimation:
                 },
             ]
         ).to_csv(group_path, index=False)
+        model_group_path = (
+            config.output_dir.parent
+            / "model_diagnostics_run"
+            / "intrinsic_dimension"
+            / "group_id_model_diagnostics_run.csv"
+        )
+        model_group_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "groupby_column": "__all__",
+                    "group_value": "__all__",
+                    "n_samples": 4,
+                    "feature_space": "model_diagnostics:run",
+                    "mean_fm_flipd_lid_t0800": 7.0,
+                    "median_fm_flipd_lid_t0800": 6.5,
+                },
+                {
+                    "groupby_column": "label",
+                    "group_value": "0",
+                    "n_samples": 2,
+                    "feature_space": "model_diagnostics:run",
+                    "mean_fm_flipd_lid_t0800": 3.0,
+                    "median_fm_flipd_lid_t0800": 2.5,
+                },
+            ]
+        ).to_csv(model_group_path, index=False)
         return {"merged_explorer_path": str(merged_path), "group_id_path": str(group_path)}
 
     monkeypatch.setattr(
@@ -674,12 +701,21 @@ id_estimation:
     assert payload["groupDiagnostics"]["groups"]["0"]["class_share"] == 2 / 6
     assert "global_two_nn_lid" in payload["groupDiagnostics"]["metrics"]
     assert "custom_numeric_diagnostic" in payload["groupDiagnostics"]["metrics"]
+    assert "mean_fm_flipd_lid_t0800" in payload["groupDiagnostics"]["metrics"]
+    assert "mean_fm_flipd_lid_t0800" in payload["groupDiagnostics"]["modelMetrics"]
+    assert payload["groupDiagnostics"]["overall"]["mean_fm_flipd_lid_t0800"] == 7.0
+    assert payload["groupDiagnostics"]["groups"]["0"]["mean_fm_flipd_lid_t0800"] == 3.0
     assert (
         payload["metricLabels"]["global_mle_lid_k20"]
         == "Global MLE intrinsic dimension (k=20)"
     )
+    assert (
+        payload["metricLabels"]["mean_fm_flipd_lid_t0800"]
+        == "Mean FM-FLIPD intrinsic dimension (t=0.800)"
+    )
     assert "showGroupDiagnostics" in html
     assert "Class ID ·" in html
+    assert "Model ID ·" in html
     assert "Global ID · All classes" in html
 
 
@@ -727,6 +763,44 @@ def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
             dtype=np.float32,
         ),
     )
+    view_output = tmp_path / "view_output"
+    registry.register_projection_view(
+        view_id="view",
+        variant_id="mnist/small",
+        feature_name="raw_pixels",
+        feature_mode="raw",
+        explorer_data_path=dataset_path,
+        output_dir=view_output,
+        projection_names={"pca_3d": "PCA 3D"},
+        renderer="three3d",
+        row_count=2,
+    )
+    trajectory_group_path = (
+        view_output
+        / "id_estimation"
+        / "model_diagnostics_run"
+        / "intrinsic_dimension"
+        / "group_id_model_diagnostics_run.csv"
+    )
+    trajectory_group_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "groupby_column": "__all__",
+                "group_value": "__all__",
+                "n_samples": 2,
+                "feature_space": "model_diagnostics:run",
+                "mean_fm_flipd_lid_t0800": 4.0,
+            },
+            {
+                "groupby_column": "label",
+                "group_value": "1",
+                "n_samples": 1,
+                "feature_space": "model_diagnostics:run",
+                "mean_fm_flipd_lid_t0800": 5.0,
+            },
+        ]
+    ).to_csv(trajectory_group_path, index=False)
     registry.register_model_run(
         run_id="run",
         run_dir=run_dir,
@@ -760,6 +834,8 @@ def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:
     assert payload["counts"]["trajectories"] == 2
     assert len(payload["trajectoryPreviews"]) == 2
     assert payload["atlasSize"] >= payload["tileSize"]
+    assert payload["groupDiagnostics"]["overall"]["mean_fm_flipd_lid_t0800"] == 4.0
+    assert "mean_fm_flipd_lid_t0800" in payload["groupDiagnostics"]["modelMetrics"]
     assert "texture2D(textureAtlas" in html
     assert 'id="time"' in html
     assert 'id="show-trajectory"' in html

@@ -671,21 +671,24 @@ function showGroupDiagnostics(label) {
   const groups = diagnostics.groups || {};
   const metrics = diagnostics.metrics || [];
   if (!metrics.length) return;
+  const modelMetrics = new Set(diagnostics.modelMetrics || []);
+  const geometryMetrics = metrics.filter(metric => !modelMetrics.has(metric));
+  const modelMetricList = metrics.filter(metric => modelMetrics.has(metric));
   const labelKey = label === null || label === undefined ? null : String(label);
   if (labelKey && groups[labelKey]) {
-    appendMetricHeading(`Class ID · ${labelKey}`);
-    appendGroupMetricRows(groups[labelKey], metrics);
+    appendGroupedDiagnostics(`Class ID · ${labelKey}`, groups[labelKey], geometryMetrics, true);
+    appendGroupedDiagnostics(`Model ID · ${labelKey}`, groups[labelKey], modelMetricList, false);
     return;
   }
   const filteredLabel = selectedGroupLabel(groups);
   if (filteredLabel) {
-    appendMetricHeading(`Class ID · ${filteredLabel}`);
-    appendGroupMetricRows(groups[filteredLabel], metrics);
+    appendGroupedDiagnostics(`Class ID · ${filteredLabel}`, groups[filteredLabel], geometryMetrics, true);
+    appendGroupedDiagnostics(`Model ID · ${filteredLabel}`, groups[filteredLabel], modelMetricList, false);
     return;
   }
   if (diagnostics.overall) {
-    appendMetricHeading("Global ID · All classes");
-    appendGroupMetricRows(diagnostics.overall, metrics);
+    appendGroupedDiagnostics("Global ID · All classes", diagnostics.overall, geometryMetrics, true);
+    appendGroupedDiagnostics("Global Model ID · All classes", diagnostics.overall, modelMetricList, false);
   }
   const primary = diagnostics.primaryMetric || metrics[0];
   const labels = Object.keys(groups)
@@ -702,10 +705,18 @@ function selectedGroupLabel(groups) {
   return groups[label] ? label : null;
 }
 
-function appendGroupMetricRows(row, metrics) {
-  appendMetric(metricsElement, "Samples", row.n_samples);
-  if (row.class_share !== null && row.class_share !== undefined && row.class_share < 0.9999) {
-    appendMetric(metricsElement, "Dataset share", row.class_share);
+function appendGroupedDiagnostics(heading, row, metrics, includeMetadata) {
+  if (!metrics.length && !includeMetadata) return;
+  appendMetricHeading(heading);
+  appendGroupMetricRows(row, metrics, includeMetadata);
+}
+
+function appendGroupMetricRows(row, metrics, includeMetadata = true) {
+  if (includeMetadata) {
+    appendMetric(metricsElement, "Samples", row.n_samples);
+    if (row.class_share !== null && row.class_share !== undefined && row.class_share < 0.9999) {
+      appendMetric(metricsElement, "Dataset share", row.class_share);
+    }
   }
   for (const metric of metrics) appendMetric(metricsElement, metricLabel(metric), row[metric]);
 }

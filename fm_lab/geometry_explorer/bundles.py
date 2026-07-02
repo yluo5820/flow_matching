@@ -67,10 +67,28 @@ GROUP_ID_META_COLUMNS = {
 GROUP_ID_PRIMARY_CANDIDATES = (
     "global_mle_lid_k20",
     "global_mle_lid_k10",
+    "mean_fm_jacobian_participation_rank_t0900",
+    "mean_fm_jacobian_participation_rank_t0800",
+    "mean_fm_flipd_lid_t0900",
+    "mean_fm_flipd_lid_t0800",
+    "mean_diffusion_normal_bundle_lid_t0900",
+    "mean_diffusion_normal_bundle_lid_t0800",
+    "mean_diffusion_flipd_lid_t0900",
+    "mean_diffusion_flipd_lid_t0800",
     "correlation_dimension",
     "ball_scaling_dim",
     "global_participation_ratio",
     "median_local_mle_lid_k15",
+)
+MODEL_GROUP_METRIC_PREFIXES = (
+    "mean_fm_jacobian_",
+    "median_fm_jacobian_",
+    "mean_fm_flipd_",
+    "median_fm_flipd_",
+    "mean_diffusion_normal_bundle_",
+    "median_diffusion_normal_bundle_",
+    "mean_diffusion_flipd_",
+    "median_diffusion_flipd_",
 )
 
 
@@ -290,6 +308,7 @@ def load_trajectory_payload(
         output_dimensions=3,
     )
     palette = _palette_with_trajectory_labels(bundle.palette, trajectory_labels)
+    group_diagnostics = _variant_group_diagnostics_payload(registry, row["variant_id"])
     return {
         "mode": "trajectory",
         "points": atlas_point_payload(
@@ -309,8 +328,8 @@ def load_trajectory_payload(
         "projections": ["Trajectory UMAP"],
         "projectionDimensions": {"Trajectory UMAP": 3},
         "projectionDiagnostics": {"Trajectory UMAP": {}},
-        "groupDiagnostics": {},
-        "metricLabels": {},
+        "groupDiagnostics": group_diagnostics,
+        "metricLabels": group_diagnostics.get("metricLabels", {}),
         "tileSize": bundle.tile_size,
         "atlasSize": _atlas_size(bundle.atlas_paths),
         "atlasColumns": bundle.atlas_columns,
@@ -336,19 +355,29 @@ def _group_diagnostics_payload(
     registry: GeometryRegistry,
     row: Any,
 ) -> dict[str, Any]:
-    path = _find_group_id_path(registry, row)
-    if path is None:
+    frames = []
+    paths = []
+    for path in _find_group_id_paths(registry, row):
+        try:
+            frame = _read_group_id_frame(path)
+        except Exception:
+            continue
+        if frame.empty or "groupby_column" not in frame or "group_value" not in frame:
+            continue
+        if not _group_metric_columns(frame):
+            continue
+        frames.append(frame)
+        paths.append(path)
+    if not frames:
         return {}
-    try:
-        frame = _read_group_id_frame(path)
-    except Exception:
-        return {}
+    frame = _merge_group_id_frames(frames)
     if frame.empty or "groupby_column" not in frame or "group_value" not in frame:
         return {}
     metrics = _group_metric_columns(frame)
     if not metrics:
         return {}
     labels = {column: metric_label(column) for column in metrics}
+    model_metrics = _model_group_metric_columns(metrics)
     overall_rows = frame[
         (frame["groupby_column"].astype(str) == "__all__")
         & (frame["group_value"].astype(str) == "__all__")
@@ -373,13 +402,50 @@ def _group_diagnostics_payload(
     if not groups and overall is None:
         return {}
     return {
-        "source": _display_path(path, registry.workspace),
+        "source": _display_path(paths[0], registry.workspace),
+        "sources": [_display_path(path, registry.workspace) for path in paths],
         "primaryMetric": _primary_group_metric(metrics),
         "metrics": metrics,
+        "modelMetrics": model_metrics,
         "metricLabels": labels,
         "overall": overall,
         "groups": groups,
     }
+
+
+def _variant_group_diagnostics_payload(
+    registry: GeometryRegistry,
+    variant_id: str | None,
+) -> dict[str, Any]:
+    if not variant_id:
+        return {}
+    views = registry.projection_views(str(variant_id))
+    if not views:
+        return {}
+    return _group_diagnostics_payload(registry, registry.get_projection_view(views[0].view_id))
+
+
+def _merge_group_id_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    merged: pd.DataFrame | None = None
+    seen_metrics: set[str] = set()
+    join_columns = ["groupby_column", "group_value"]
+    for frame in frames:
+        metrics = [column for column in _group_metric_columns(frame) if column not in seen_metrics]
+        if merged is None:
+            columns = [*join_columns]
+            for column in ("n_samples", "feature_space"):
+                if column in frame:
+                    columns.append(column)
+            columns.extend(metrics)
+            merged = frame[columns].copy()
+        elif metrics:
+            merged = merged.merge(
+                frame[[*join_columns, *metrics]],
+                on=join_columns,
+                how="outer",
+            )
+        seen_metrics.update(metrics)
+    return merged if merged is not None else pd.DataFrame(columns=join_columns)
 
 
 def _group_metric_columns(frame: pd.DataFrame) -> list[str]:
@@ -390,8 +456,20 @@ def _group_metric_columns(frame: pd.DataFrame) -> list[str]:
         and pd.api.types.is_numeric_dtype(frame[column])
     ]
     preferred = [column for column in GROUP_ID_PREFERRED_METRICS if column in available]
-    remaining = sorted(column for column in available if column not in preferred)
-    return [*preferred, *remaining]
+    model_metrics = [
+        column
+        for column in sorted(available)
+        if column not in preferred
+        and column.startswith(MODEL_GROUP_METRIC_PREFIXES)
+    ]
+    remaining = sorted(
+        column for column in available if column not in preferred and column not in model_metrics
+    )
+    return [*preferred, *model_metrics, *remaining]
+
+
+def _model_group_metric_columns(metrics: list[str]) -> list[str]:
+    return [metric for metric in metrics if metric.startswith(MODEL_GROUP_METRIC_PREFIXES)]
 
 
 def _primary_group_metric(metrics: list[str]) -> str:
@@ -425,9 +503,10 @@ def _total_group_samples(
     )
 
 
-def _find_group_id_path(registry: GeometryRegistry, row: Any) -> Path | None:
+def _find_group_id_paths(registry: GeometryRegistry, row: Any) -> list[Path]:
     output_dir = registry.resolve(row["output_dir"])
     id_root = output_dir / "id_estimation"
+    paths: list[Path] = []
     manifests = sorted(
         id_root.glob("*/manifest.json"),
         key=lambda path: path.stat().st_mtime_ns,
@@ -443,14 +522,37 @@ def _find_group_id_path(registry: GeometryRegistry, row: Any) -> Path | None:
             continue
         for candidate in _path_candidates(Path(str(value)), output_dir, manifest.parent):
             if candidate.is_file():
-                return candidate
+                paths.append(candidate)
     candidates = [
         *id_root.glob("*/intrinsic_dimension/group_id_*.csv"),
         *id_root.glob("*/intrinsic_dimension/group_id_*.parquet"),
     ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+    paths.extend(candidates)
+    return _dedupe_group_id_paths(paths)
+
+
+def _dedupe_group_id_paths(paths: list[Path]) -> list[Path]:
+    by_stem: dict[str, Path] = {}
+    for path in paths:
+        resolved = path.resolve()
+        key = str(resolved.with_suffix(""))
+        current = by_stem.get(key)
+        if (
+            current is None
+            or _group_id_extension_priority(resolved) < _group_id_extension_priority(current)
+        ):
+            by_stem[key] = resolved
+    return sorted(by_stem.values(), key=_group_id_path_sort_key)
+
+
+def _group_id_path_sort_key(path: Path) -> tuple[int, str]:
+    text = str(path)
+    is_model = int("model_diagnostics_" in text)
+    return (is_model, text)
+
+
+def _group_id_extension_priority(path: Path) -> int:
+    return 0 if path.suffix.lower() == ".parquet" else 1
 
 
 def _path_candidates(path: Path, output_dir: Path, manifest_dir: Path) -> list[Path]:
