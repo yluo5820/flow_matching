@@ -80,7 +80,7 @@ Useful toy configs:
 configs/toy/two_moons_baseline.yaml       # independent coupling + linear path
 configs/toy/two_moons_ot.yaml             # minibatch OT coupling + linear path
 configs/toy/circles_tangent_normal.yaml   # polar tangent-normal path
-configs/mnist/mnist_image_unet_ot.yaml     # small image U-Net + minibatch OT for MNIST
+configs/geometry_explorer/datasets/mnist/original/models/image_unet_ot.yaml  # MNIST original image U-Net + minibatch OT
 configs/mnist/mnist_linear_baseline.yaml   # deliberately naive flattened MNIST baseline
 ```
 

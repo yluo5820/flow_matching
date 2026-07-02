@@ -1,13 +1,12 @@
 experiment:
-  name: mnist_image_unet_diffusion_epsilon
+  name: mnist_tail_digit1_image_unet_xpred
   seed: 0
-  output_dir: runs/mnist_image_unet_diffusion_epsilon
+  output_dir: runs/mnist_tail_digit1_unet_xpred
 
 data:
   name: mnist
-  root: data/mnist
-  train: true
-  download: true
+  variant_id: mnist/tail_digit1
+  workspace: outputs/geometry_explorer
   normalize: minus_one_one
   dequantize: true
 
@@ -17,12 +16,11 @@ source:
   std: 1.0
 
 coupling:
-  name: independent
+  name: minibatch_ot
+  max_exact_size: 128
 
 path:
-  name: gaussian_diffusion
-  schedule: trig
-  sigma_min: 1.0e-4
+  name: linear
 
 model:
   name: image_unet
@@ -33,9 +31,11 @@ model:
   zero_init_head: true
 
 objective:
-  name: diffusion
-  prediction_type: epsilon
-  loss: mse
+  name: flow_matching
+  model_output: x
+  x_prediction:
+    loss_space: clean
+    min_denom: 0.05
 
 training:
   batch_size: 128
@@ -61,6 +61,14 @@ sampling:
   nfe: 64
   plot_max_points: 64
   sample_batch_size: 256
+  trajectory_umap:
+    enabled: true
+    max_target_points: 3000
+    n_neighbors: 30
+    min_dist: 0.1
+    metric: euclidean
+    random_state: 42
+    save_coordinates: true
 
 diagnostics:
   ambiguity:

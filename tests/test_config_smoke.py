@@ -180,7 +180,6 @@ def test_diffusion_config_builds_path_and_objective() -> None:
 
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
-        "configs/mnist/mnist_image_unet_ot.yaml",
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",
         (
             "configs/mnist/"
@@ -207,5 +206,29 @@ def test_mnist_image_unet_configs_build_matching_components_without_loading_data
             assert path.name == "learned_acceleration"
             assert path.metadata()["network"] == "image_unet"
             assert path.sample_xt(x, x, t).shape == (2, 784)
+        else:
+            assert path.name == "linear"
+
+
+def test_geometry_explorer_model_configs_build_core_components_without_data() -> None:
+    config_paths = sorted(
+        Path("configs/geometry_explorer/datasets").glob("*/*/models/*.yaml")
+    )
+    assert config_paths
+
+    for config_path in config_paths:
+        config = load_config(config_path)
+        source = build_source(config)
+        path = build_path(config)
+        model = build_model(config, dim=source.dim)
+        objective = build_objective(config.get("objective", {}))
+
+        assert source.dim in {784, 1024, 3072}
+        assert isinstance(objective, FlowMatchingObjective | DiffusionObjective)
+        x = torch.zeros(2, source.dim)
+        t = torch.zeros(2)
+        assert model(x, t).shape == (2, source.dim)
+        if config["path"]["name"] == "gaussian_diffusion":
+            assert isinstance(path, GaussianDiffusionPath)
         else:
             assert path.name == "linear"

@@ -18,8 +18,9 @@ from fm_lab.geometry_explorer.views import build_projection_view
 from fm_lab.utils.config import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_DIR = PROJECT_ROOT / "configs" / "geometry_explorer"
-DEFAULT_VIEW_CONFIG = DEFAULT_CONFIG_DIR / "raw_geometry_view.yaml"
+DEFAULT_GEOMETRY_CONFIG_DIR = PROJECT_ROOT / "configs" / "geometry_explorer"
+DEFAULT_CONFIG_DIR = DEFAULT_GEOMETRY_CONFIG_DIR / "datasets"
+DEFAULT_VIEW_CONFIG = DEFAULT_GEOMETRY_CONFIG_DIR / "views" / "raw_pixels.yaml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -434,8 +435,10 @@ def _discover_dataset_configs(
         raise SystemExit(f"Geometry explorer config directory does not exist: {config_dir}")
     view_config_path = view_config.resolve()
     discovered = []
-    for path in sorted(config_dir.glob("*.yaml")):
+    for path in sorted(config_dir.rglob("*.yaml")):
         if path.resolve() == view_config_path:
+            continue
+        if "models" in path.relative_to(config_dir).parts:
             continue
         raw = load_config(path)
         if "family" not in raw or "variant" not in raw:

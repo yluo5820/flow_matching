@@ -1,13 +1,12 @@
 experiment:
-  name: mnist_image_unet_ot
+  name: mnist_original_image_unet_xpred
   seed: 0
-  output_dir: runs/mnist_image_unet_ot
+  output_dir: runs/mnist_original_unet_xpred
 
 data:
   name: mnist
-  root: data/mnist
-  train: true
-  download: true
+  variant_id: mnist/original
+  workspace: outputs/geometry_explorer
   normalize: minus_one_one
   dequantize: true
 
@@ -30,6 +29,13 @@ model:
   activation: silu
   time_embedding_dim: 128
   zero_init_head: true
+
+objective:
+  name: flow_matching
+  model_output: x
+  x_prediction:
+    loss_space: clean
+    min_denom: 0.05
 
 training:
   batch_size: 128

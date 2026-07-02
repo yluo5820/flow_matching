@@ -1121,8 +1121,11 @@ def test_explorer_cli_build_all_dry_run_discovers_dataset_configs(
     capsys,
 ) -> None:
     config_dir = tmp_path / "configs"
-    config_dir.mkdir()
-    (config_dir / "mnist_original.yaml").write_text(
+    dataset_config = config_dir / "datasets" / "mnist" / "original" / "dataset.yaml"
+    view_config = config_dir / "views" / "raw_pixels.yaml"
+    dataset_config.parent.mkdir(parents=True)
+    view_config.parent.mkdir(parents=True)
+    dataset_config.write_text(
         """
 family: mnist
 variant: original
@@ -1131,7 +1134,7 @@ input:
 """,
         encoding="utf-8",
     )
-    (config_dir / "raw_geometry_view.yaml").write_text(
+    view_config.write_text(
         """
 explorer_name: raw_geometry_view
 features:
@@ -1147,9 +1150,9 @@ features:
             str(tmp_path / "workspace"),
             "build-all",
             "--config-dir",
-            str(config_dir),
+            str(config_dir / "datasets"),
             "--view-config",
-            str(config_dir / "raw_geometry_view.yaml"),
+            str(view_config),
             "--dry-run",
         ],
     )
@@ -1159,7 +1162,7 @@ features:
     output = capsys.readouterr().out
     assert "Geometry explorer build plan" in output
     assert "mnist/original" in output
-    assert "raw_geometry_view.yaml" in output
+    assert "raw_pixels.yaml" in output
 
 
 def test_explorer_cli_build_all_runs_dataset_then_view(
@@ -1167,8 +1170,11 @@ def test_explorer_cli_build_all_runs_dataset_then_view(
     monkeypatch,
 ) -> None:
     config_dir = tmp_path / "configs"
-    config_dir.mkdir()
-    (config_dir / "mnist_original.yaml").write_text(
+    dataset_config = config_dir / "datasets" / "mnist" / "original" / "dataset.yaml"
+    view_config = config_dir / "views" / "raw_pixels.yaml"
+    dataset_config.parent.mkdir(parents=True)
+    view_config.parent.mkdir(parents=True)
+    dataset_config.write_text(
         """
 family: mnist
 variant: original
@@ -1177,7 +1183,6 @@ input:
 """,
         encoding="utf-8",
     )
-    view_config = config_dir / "raw_geometry_view.yaml"
     view_config.write_text(
         """
 explorer_name: raw_geometry_view
@@ -1218,7 +1223,7 @@ features:
             str(tmp_path / "workspace"),
             "build-all",
             "--config-dir",
-            str(config_dir),
+            str(config_dir / "datasets"),
             "--view-config",
             str(view_config),
             "--dataset",

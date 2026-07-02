@@ -19,25 +19,25 @@ Large artifacts stay outside SQLite: dataset indexes are Parquet, arrays are
 
 ```bash
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_original.yaml
+  --config configs/geometry_explorer/datasets/mnist/original/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit1/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit8/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
+  --config configs/geometry_explorer/datasets/mnist/long_tail_monotone/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/fashion_mnist_original.yaml
+  --config configs/geometry_explorer/datasets/fashion_mnist/original/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/cifar10_original.yaml
+  --config configs/geometry_explorer/datasets/cifar10/original/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/cifar10_grayscale_original.yaml
+  --config configs/geometry_explorer/datasets/cifar10_grayscale/original/dataset.yaml
 ```
 
 ## Build Projection Views
@@ -45,26 +45,26 @@ fm-lab-explorer build-dataset \
 ```bash
 fm-lab-explorer build-view \
   --dataset mnist/original \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer build-view \
   --dataset mnist/tail_digit1 \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer build-view \
   --dataset fashion_mnist/original \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer build-view \
   --dataset cifar10/original \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 ```
 
 ## Train On A Variant
 
 ```bash
 fm-lab-train \
-  --config configs/mnist/mnist_image_unet_ot.yaml \
+  --config configs/geometry_explorer/datasets/mnist/original/models/image_unet_ot.yaml \
   --dataset-variant mnist/tail_digit1 \
   --workspace outputs/geometry_explorer
 ```

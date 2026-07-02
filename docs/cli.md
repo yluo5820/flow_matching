@@ -182,7 +182,7 @@ To train the recommended local MNIST image-space check:
 
 ```bash
 fm-lab-train \
-  --config configs/mnist/mnist_image_unet_ot.yaml \
+  --config configs/geometry_explorer/datasets/mnist/original/models/image_unet_ot.yaml \
   --steps 100000 \
   --n-samples 256 \
   --n-trajectories 16 \
@@ -205,7 +205,7 @@ To train on a registered MNIST variant from the unified geometry explorer:
 
 ```bash
 fm-lab-train \
-  --config configs/mnist/mnist_image_unet_ot.yaml \
+  --config configs/geometry_explorer/datasets/mnist/original/models/image_unet_ot.yaml \
   --dataset-variant mnist/tail_digit1 \
   --workspace outputs/geometry_explorer \
   --device auto
@@ -406,20 +406,20 @@ Build and launch the unified registry-backed geometry explorer.
 
 ```bash
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_original.yaml
+  --config configs/geometry_explorer/datasets/mnist/original/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit1/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit8/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
+  --config configs/geometry_explorer/datasets/mnist/long_tail_monotone/dataset.yaml
 
 fm-lab-explorer build-view \
   --dataset mnist/tail_digit1 \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer build-trajectory \
   --run-dir runs/mnist_image_unet_ot \

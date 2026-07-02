@@ -1,11 +1,11 @@
 experiment:
-  name: mnist_image_unet_xpred
+  name: mnist_tail_digit8_image_unet_xpred
   seed: 0
-  output_dir: runs/mnist_original_unet_xpred
+  output_dir: runs/mnist_tail_digit8_unet_xpred
 
 data:
   name: mnist
-  variant_id: mnist/original
+  variant_id: mnist/tail_digit8
   workspace: outputs/geometry_explorer
   normalize: minus_one_one
   dequantize: true

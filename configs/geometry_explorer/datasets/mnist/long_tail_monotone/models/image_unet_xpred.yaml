@@ -1,13 +1,12 @@
 experiment:
-  name: mnist_image_unet_independent
+  name: mnist_long_tail_monotone_image_unet_xpred
   seed: 0
-  output_dir: runs/mnist_original_unet_independent
+  output_dir: runs/mnist_long_tail_monotone_unet_xpred
 
 data:
   name: mnist
-  root: data/mnist
-  train: true
-  download: true
+  variant_id: mnist/long_tail_monotone
+  workspace: outputs/geometry_explorer
   normalize: minus_one_one
   dequantize: true
 
@@ -17,7 +16,8 @@ source:
   std: 1.0
 
 coupling:
-  name: independent
+  name: minibatch_ot
+  max_exact_size: 128
 
 path:
   name: linear
@@ -29,6 +29,13 @@ model:
   activation: silu
   time_embedding_dim: 128
   zero_init_head: true
+
+objective:
+  name: flow_matching
+  model_output: x
+  x_prediction:
+    loss_space: clean
+    min_denom: 0.05
 
 training:
   batch_size: 128

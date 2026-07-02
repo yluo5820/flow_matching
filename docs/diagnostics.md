@@ -119,7 +119,7 @@ image U-Net, and minibatch OT:
 
 | Target | Config | What it stresses |
 |---|---|---|
-| MNIST image U-Net + OT | `configs/mnist/mnist_image_unet_ot.yaml` | Cost-effective image-space FM check with spatial inductive bias. |
+| MNIST image U-Net + OT | `configs/geometry_explorer/datasets/mnist/original/models/image_unet_ot.yaml` | Cost-effective image-space FM check with spatial inductive bias. |
 | MNIST direction-only image U-Net + OT | `configs/mnist/mnist_direction_only_image_unet_ot.yaml` | Checks whether direction-only failure is partly backbone capacity. |
 | MNIST learned-acceleration image U-Net + OT | `configs/mnist/mnist_learned_acceleration_kernel_vstar_factorized_polynomial_image_unet_ot.yaml` | Uses image U-Nets for both Eulerian velocity and learned interpolant coefficients. |
 | MNIST flat MLP | `configs/mnist/mnist_linear_baseline.yaml` | Deliberately naive flattened-pixel baseline. |
@@ -161,24 +161,24 @@ dataset variants, projection views, and optional model trajectory views under
 
 ```bash
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_original.yaml
+  --config configs/geometry_explorer/datasets/mnist/original/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit1.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit1/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_tail_digit8.yaml
+  --config configs/geometry_explorer/datasets/mnist/tail_digit8/dataset.yaml
 
 fm-lab-explorer build-dataset \
-  --config configs/geometry_explorer/mnist_long_tail_monotone.yaml
+  --config configs/geometry_explorer/datasets/mnist/long_tail_monotone/dataset.yaml
 
 fm-lab-explorer build-view \
   --dataset mnist/original \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer build-view \
   --dataset mnist/tail_digit1 \
-  --config configs/geometry_explorer/raw_geometry_view.yaml
+  --config configs/geometry_explorer/views/raw_pixels.yaml
 
 fm-lab-explorer launch
 ```
