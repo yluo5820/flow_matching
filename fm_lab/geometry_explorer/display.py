@@ -48,8 +48,31 @@ def projection_view_label(
     return f"{feature} · {count} projections"
 
 
+def model_run_label(*, run_id: str, config: dict | None = None) -> str:
+    if not config:
+        return humanize_identifier(run_id)
+    model = config.get("model", {}) if isinstance(config, dict) else {}
+    objective = config.get("objective", {}) if isinstance(config, dict) else {}
+    model_name = humanize_identifier(str(model.get("name", "model")))
+    objective_name = str(objective.get("name", "")).lower()
+    if objective_name == "flow_matching":
+        output = str(objective.get("model_output", "velocity")).lower()
+        target = "x-pred" if output in {"x", "clean", "data"} else "velocity"
+        objective_label = f"FM {target}"
+    elif objective_name == "diffusion":
+        prediction = str(objective.get("prediction_type", "epsilon")).lower()
+        objective_label = f"Diffusion {humanize_identifier(prediction)}"
+    else:
+        objective_label = humanize_identifier(objective_name or "model")
+    return f"{model_name} · {objective_label} · {humanize_identifier(run_id)}"
+
+
 def trajectory_view_label(*, run_id: str, solver: str, nfe: int) -> str:
     return f"{humanize_identifier(run_id)} · {humanize_identifier(solver)} · NFE {nfe}"
+
+
+def trajectory_option_label(*, solver: str, nfe: int) -> str:
+    return f"{humanize_identifier(solver)} · NFE {nfe}"
 
 
 def metric_label(key: str) -> str:

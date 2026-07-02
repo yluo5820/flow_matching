@@ -40,6 +40,8 @@ class ModelRunRecord:
     run_dir: Path
     family: str
     variant: str
+    config_path: Path | None
+    metrics_path: Path | None
 
 
 @dataclass(frozen=True)
@@ -416,6 +418,12 @@ class GeometryRegistry:
                 run_dir=self.resolve(row["run_dir"]),
                 family=row["family"],
                 variant=row["variant"],
+                config_path=(
+                    self.resolve(row["config_path"]) if row["config_path"] else None
+                ),
+                metrics_path=(
+                    self.resolve(row["metrics_path"]) if row["metrics_path"] else None
+                ),
             )
             for row in rows
         ]

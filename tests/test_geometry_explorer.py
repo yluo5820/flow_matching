@@ -9,11 +9,12 @@ import pandas as pd
 
 from fm_lab.experiments.factory import build_model, build_target
 from fm_lab.experiments.run_explorer import main as explorer_cli_main
+from fm_lab.geometry_explorer.app import _model_run_labels, _trajectory_views_by_run
 from fm_lab.geometry_explorer.bundles import (
     load_projection_payload,
     load_trajectory_payload,
 )
-from fm_lab.geometry_explorer.display import metric_label
+from fm_lab.geometry_explorer.display import metric_label, model_run_label
 from fm_lab.geometry_explorer.model_diagnostics import build_model_diagnostics
 from fm_lab.geometry_explorer.registry import GeometryRegistry
 from fm_lab.geometry_explorer.variants import (
@@ -96,7 +97,59 @@ def test_registry_registers_dataset_projection_and_trajectory(tmp_path: Path) ->
 
     assert registry.dataset_variants()[0].variant_id == "mnist/test"
     assert registry.projection_views("mnist/test")[0].view_id == "view"
+    assert registry.model_runs("mnist/test")[0].run_id == "run"
     assert registry.trajectory_views(variant_id="mnist/test")[0].view_id == "traj"
+    assert registry.trajectory_views(run_id="run")[0].view_id == "traj"
+    grouped = _trajectory_views_by_run(registry.trajectory_views(variant_id="mnist/test"))
+    assert list(grouped) == ["run"]
+    assert grouped["run"][0].view_id == "traj"
+
+
+def test_model_run_labels_describe_model_and_prediction_target(tmp_path: Path) -> None:
+    registry = GeometryRegistry(tmp_path / "workspace")
+    dataset_path = tmp_path / "dataset.parquet"
+    write_parquet(pd.DataFrame({"row_id": [0], "label": ["1"]}), dataset_path)
+    config_path = tmp_path / "run" / "config.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """
+model:
+  name: image_unet
+objective:
+  name: flow_matching
+  model_output: x
+""",
+        encoding="utf-8",
+    )
+    registry.register_dataset_variant(
+        variant_id="mnist/test",
+        family="mnist",
+        variant="test",
+        base="original",
+        split="train",
+        dataset_path=dataset_path,
+        data_path=None,
+        labels_path=None,
+        config_path=None,
+        row_count=1,
+        label_counts={"1": 1},
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+    )
+    registry.register_model_run(
+        run_id="run_xpred",
+        run_dir=config_path.parent,
+        variant_id="mnist/test",
+        family="mnist",
+        variant="test",
+        config_path=config_path,
+        metrics_path=None,
+    )
+
+    labels = _model_run_labels(registry.model_runs("mnist/test"))
+
+    assert labels["run_xpred"] == "Image U-Net · FM x-pred · Run Xpred"
+    assert model_run_label(run_id="run_velocity") == "Run Velocity"
 
 
 def test_mnist_long_tail_variant_has_exact_counts_and_training_target(
