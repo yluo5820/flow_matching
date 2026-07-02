@@ -354,7 +354,7 @@ function buildEndpoints() {
     .map((point, index) => pointVisible(point) ? index : -1)
     .filter(index => index >= 0);
   if (!visibleIndices.length) return;
-  if (thumbnailToggle.checked && canUseAtlasPointCloud()) {
+  if (thumbnailToggle.checked && canUseAtlasPointCloud() && visibleIndices.length <= thumbnailPointLimit()) {
     buildAtlasPointClouds(visibleIndices);
     return;
   }
@@ -373,8 +373,8 @@ function buildEndpoints() {
     colors.set(parseColor(point.label), visiblePosition * 3);
   });
   endpointGroup.add(coloredPointCloud(positions, colors, {
-    pointSize: Math.max(5.5, DATA.options.pointSize * 0.72),
-    opacity: 0.88,
+    pointSize: endpointPointSize(visibleIndices.length),
+    opacity: endpointOpacity(visibleIndices.length),
     kind: "endpoint",
     indices: visibleIndices,
   }));
@@ -382,6 +382,19 @@ function buildEndpoints() {
 
 function canUseAtlasPointCloud() {
   return atlasTextures.length > 0 && Number(DATA.atlasSize || 0) > 0;
+}
+
+function thumbnailPointLimit() {
+  return Math.max(1, Number(DATA.options.thumbnailPointLimit || 12000));
+}
+
+function endpointPointSize(count) {
+  if (count > thumbnailPointLimit()) return Math.max(4.5, DATA.options.pointSize * 0.42);
+  return Math.max(5.5, DATA.options.pointSize * 0.72);
+}
+
+function endpointOpacity(count) {
+  return count > thumbnailPointLimit() ? 0.72 : 0.88;
 }
 
 function buildAtlasPointClouds(indices) {

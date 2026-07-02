@@ -680,5 +680,6 @@ def _default_options() -> dict[str, Any]:
         "hoverSize": 58,
         "previewMode": "original",
         "drawThumbnailsDefault": True,
+        "thumbnailPointLimit": 12000,
         "scalePointSizeWithZoom": True,
     }
