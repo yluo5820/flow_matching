@@ -681,9 +681,9 @@ function showSelection(selection) {
   if ((DATA.projectionDimensions || {})[projection] === 3) appendMetric(metricsElement, "Map Z", coordinate[2] || 0);
   const diagnostics = (DATA.projectionDiagnostics || {})[projection] || {};
   for (const [key, values] of Object.entries(diagnostics)) appendMetric(metricsElement, metricLabel(key), values[selection.index]);
-  showGroupDiagnostics(point.label);
-  if (Object.keys(point.details || {}).length) appendMetricHeading("Sample");
+  if (Object.keys(point.details || {}).length) appendMetricHeading("Selected sample");
   for (const [key, value] of Object.entries(point.details || {})) appendMetric(metricsElement, metricLabel(key), value);
+  showGroupDiagnostics(point.label);
 }
 
 function metricLabel(key) {
@@ -788,7 +788,7 @@ function appendGeometryDiagnostics(section, row, metrics) {
   const used = new Set([...primaryMetrics, ...localMetrics].map(canonicalMetricBase));
   const secondaryMetrics = metrics.filter(metric => !used.has(canonicalMetricBase(metric)));
   appendEntryGrid(section, "Core estimates", metricEntries(row, primaryMetrics), true);
-  appendEntryGrid(section, "Local summaries", metricEntries(row, localMetrics), false);
+  appendEntryGrid(section, "Aggregate local estimators", metricEntries(row, localMetrics), false);
   appendDetailGrid(section, "More geometry diagnostics", metricEntries(row, secondaryMetrics));
 }
 

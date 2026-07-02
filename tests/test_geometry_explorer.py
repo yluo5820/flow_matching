@@ -641,6 +641,8 @@ id_estimation:
     assert "addHoverAtlasThumbnail" in html
     assert "appendGeometryDiagnostics" in html
     assert "Core estimates" in html
+    assert "Aggregate local estimators" in html
+    assert "Selected sample" in html
     assert "More geometry diagnostics" in html
     assert "Representative model estimates" in html
     assert "coloredPointCloud" in html
