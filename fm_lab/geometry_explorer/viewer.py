@@ -85,6 +85,18 @@ def _html_template(
   .metrics-heading {{ grid-column: 1 / -1; color: #f0f0f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
   .metric-key {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #bdbdbd; }}
   .metric-value {{ color: #eee; font-variant-numeric: tabular-nums; text-align: right; }}
+  .metric-section {{ grid-column: 1 / -1; display: grid; gap: 6px; margin-bottom: 8px; }}
+  .metric-section-title {{ color: #f1f1f1; font-size: 13px; font-weight: 650; }}
+  .metric-subtitle {{ color: #8f8f8f; font-size: 11px; margin-left: 7px; font-weight: 500; }}
+  .metric-subheading {{ color: #cfcfcf; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0; margin-top: 2px; }}
+  .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 5px 22px; }}
+  .metric-row {{ display: grid; grid-template-columns: minmax(130px, 1fr) max-content; align-items: baseline; gap: 10px; min-width: 0; }}
+  .metric-row.primary .metric-key {{ color: #e8e8e8; font-weight: 600; }}
+  .metric-row.primary .metric-value {{ color: #fff; font-weight: 650; }}
+  .metric-row.secondary .metric-key, .metric-row.secondary .metric-value {{ color: #aaa; }}
+  .metric-details {{ grid-column: 1 / -1; margin-top: 2px; }}
+  .metric-details summary {{ cursor: pointer; color: #bdbdbd; font-size: 12px; margin-bottom: 6px; }}
+  .metric-details summary:hover {{ color: #f0f0f0; }}
   #legend {{ flex: 1 1 auto; min-height: 0; display: flex; align-content: start; align-items: flex-start; flex-wrap: wrap; gap: 6px 10px; overflow-y: auto; padding-top: 10px; border-top: 1px solid #333; }}
   .legend-item {{ display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12px; color: #cfcfcf; }}
   .legend-item span:last-child {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
@@ -182,6 +194,25 @@ for (const details of Object.values(DATA.projectionDiagnostics || {})) {
     details[name] = new Float32Array(bytes.buffer);
   }
 }
+
+const GEOMETRY_PRIMARY_METRICS = [
+  "global_mle_lid_k20",
+  "global_mle_lid_k10",
+  "global_two_nn_lid",
+  "correlation_dimension",
+  "ball_scaling_dim",
+  "global_participation_ratio",
+  "global_pca_dim_95",
+];
+const GEOMETRY_LOCAL_METRICS = [
+  "local_mle_lid_k15",
+  "participation_ratio_k15",
+  "two_nn_lid_local",
+  "local_mle_lid_k10",
+  "participation_ratio_k10",
+  "local_mle_lid_k30",
+  "participation_ratio_k30",
+];
 
 const app = document.getElementById("app");
 const main = document.getElementById("main");
@@ -676,27 +707,44 @@ function showGroupDiagnostics(label) {
   const modelMetricList = metrics.filter(metric => modelMetrics.has(metric));
   const labelKey = label === null || label === undefined ? null : String(label);
   if (labelKey && groups[labelKey]) {
-    appendGroupedDiagnostics(`Class ID · ${labelKey}`, groups[labelKey], geometryMetrics, true);
-    appendGroupedDiagnostics(`Model ID · ${labelKey}`, groups[labelKey], modelMetricList, false);
+    appendGroupedDiagnostics(`Class ID · ${labelKey}`, groups[labelKey], geometryMetrics, {
+      kind: "geometry",
+      includeMetadata: true,
+    });
+    appendGroupedDiagnostics(`Model ID · ${labelKey}`, groups[labelKey], modelMetricList, {
+      kind: "model",
+      includeMetadata: false,
+    });
     return;
   }
   const filteredLabel = selectedGroupLabel(groups);
   if (filteredLabel) {
-    appendGroupedDiagnostics(`Class ID · ${filteredLabel}`, groups[filteredLabel], geometryMetrics, true);
-    appendGroupedDiagnostics(`Model ID · ${filteredLabel}`, groups[filteredLabel], modelMetricList, false);
+    appendGroupedDiagnostics(`Class ID · ${filteredLabel}`, groups[filteredLabel], geometryMetrics, {
+      kind: "geometry",
+      includeMetadata: true,
+    });
+    appendGroupedDiagnostics(`Model ID · ${filteredLabel}`, groups[filteredLabel], modelMetricList, {
+      kind: "model",
+      includeMetadata: false,
+    });
     return;
   }
   if (diagnostics.overall) {
-    appendGroupedDiagnostics("Global ID · All classes", diagnostics.overall, geometryMetrics, true);
-    appendGroupedDiagnostics("Global Model ID · All classes", diagnostics.overall, modelMetricList, false);
+    appendGroupedDiagnostics("Global ID · All classes", diagnostics.overall, geometryMetrics, {
+      kind: "geometry",
+      includeMetadata: true,
+    });
+    appendGroupedDiagnostics("Global Model ID · All classes", diagnostics.overall, modelMetricList, {
+      kind: "model",
+      includeMetadata: false,
+    });
   }
   const primary = diagnostics.primaryMetric || metrics[0];
   const labels = Object.keys(groups)
     .filter(value => selectedLabels.has(value))
     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   if (!labels.length) return;
-  appendMetricHeading(`Class ID · ${metricLabel(primary)}`);
-  for (const value of labels) appendMetric(metricsElement, value || "(empty)", groups[value][primary]);
+  appendClassComparison(labels, groups, primary);
 }
 
 function selectedGroupLabel(groups) {
@@ -705,20 +753,187 @@ function selectedGroupLabel(groups) {
   return groups[label] ? label : null;
 }
 
-function appendGroupedDiagnostics(heading, row, metrics, includeMetadata) {
+function appendGroupedDiagnostics(heading, row, metrics, options = {}) {
+  const includeMetadata = Boolean(options.includeMetadata);
   if (!metrics.length && !includeMetadata) return;
-  appendMetricHeading(heading);
-  appendGroupMetricRows(row, metrics, includeMetadata);
+  const section = document.createElement("section");
+  section.className = "metric-section";
+  const title = document.createElement("div");
+  title.className = "metric-section-title";
+  title.textContent = heading;
+  section.appendChild(title);
+
+  if (includeMetadata) {
+    const metadata = [];
+    if (row.n_samples !== null && row.n_samples !== undefined) {
+      metadata.push({ label: "Samples", value: row.n_samples, primary: true });
+    }
+    if (row.class_share !== null && row.class_share !== undefined && row.class_share < 0.9999) {
+      metadata.push({ label: "Dataset share", value: row.class_share, primary: true });
+    }
+    appendEntryGrid(section, "", metadata, true);
+  }
+
+  if (options.kind === "model") {
+    appendModelDiagnostics(section, row, metrics);
+  } else {
+    appendGeometryDiagnostics(section, row, metrics);
+  }
+  metricsElement.appendChild(section);
 }
 
-function appendGroupMetricRows(row, metrics, includeMetadata = true) {
-  if (includeMetadata) {
-    appendMetric(metricsElement, "Samples", row.n_samples);
-    if (row.class_share !== null && row.class_share !== undefined && row.class_share < 0.9999) {
-      appendMetric(metricsElement, "Dataset share", row.class_share);
+function appendGeometryDiagnostics(section, row, metrics) {
+  const primaryMetrics = preferredMetrics(metrics, GEOMETRY_PRIMARY_METRICS);
+  const localMetrics = preferredMetrics(metrics, GEOMETRY_LOCAL_METRICS);
+  const used = new Set([...primaryMetrics, ...localMetrics].map(canonicalMetricBase));
+  const secondaryMetrics = metrics.filter(metric => !used.has(canonicalMetricBase(metric)));
+  appendEntryGrid(section, "Core estimates", metricEntries(row, primaryMetrics), true);
+  appendEntryGrid(section, "Local summaries", metricEntries(row, localMetrics), false);
+  appendDetailGrid(section, "More geometry diagnostics", metricEntries(row, secondaryMetrics));
+}
+
+function appendModelDiagnostics(section, row, metrics) {
+  const primaryMetrics = metrics.filter(isPrimaryModelMetric);
+  const used = new Set(primaryMetrics.map(canonicalMetricBase));
+  const secondaryMetrics = metrics.filter(metric => !used.has(canonicalMetricBase(metric)));
+  appendEntryGrid(section, "Representative model estimates", metricEntries(row, primaryMetrics), true);
+  appendDetailGrid(section, "More model diagnostics", metricEntries(row, secondaryMetrics));
+}
+
+function appendClassComparison(labels, groups, metric) {
+  const section = document.createElement("section");
+  section.className = "metric-section";
+  const title = document.createElement("div");
+  title.className = "metric-section-title";
+  title.textContent = `Class comparison · ${entryLabel(metric)}`;
+  section.appendChild(title);
+  const entries = labels.map(value => ({
+    label: value || "(empty)",
+    value: groups[value][metric],
+    primary: false,
+  }));
+  appendEntryGrid(section, "", entries, false);
+  metricsElement.appendChild(section);
+}
+
+function appendEntryGrid(section, heading, entries, primary = false) {
+  const cleanEntries = entries.filter(entry => entry.value !== null && entry.value !== undefined);
+  if (!cleanEntries.length) return;
+  if (heading) {
+    const label = document.createElement("div");
+    label.className = "metric-subheading";
+    label.textContent = heading;
+    section.appendChild(label);
+  }
+  const grid = document.createElement("div");
+  grid.className = "metric-grid";
+  for (const entry of cleanEntries) appendMetricRow(grid, entry, primary || entry.primary);
+  section.appendChild(grid);
+}
+
+function appendDetailGrid(section, summary, entries) {
+  const cleanEntries = entries.filter(entry => entry.value !== null && entry.value !== undefined);
+  if (!cleanEntries.length) return;
+  const details = document.createElement("details");
+  details.className = "metric-details";
+  const label = document.createElement("summary");
+  label.textContent = `${summary} (${cleanEntries.length})`;
+  details.appendChild(label);
+  const grid = document.createElement("div");
+  grid.className = "metric-grid";
+  for (const entry of cleanEntries) appendMetricRow(grid, entry, false, "secondary");
+  details.appendChild(grid);
+  section.appendChild(details);
+}
+
+function appendMetricRow(container, entry, primary = false, extraClass = "") {
+  const row = document.createElement("div");
+  row.className = `metric-row ${primary ? "primary" : ""} ${extraClass}`.trim();
+  const key = document.createElement("span");
+  key.className = "metric-key";
+  key.title = entry.label;
+  key.textContent = entry.label;
+  const value = document.createElement("span");
+  value.className = "metric-value";
+  value.textContent = formatMetricDisplay(entry.label, entry.value, entry.std);
+  row.append(key, value);
+  container.appendChild(row);
+}
+
+function preferredMetrics(metrics, bases) {
+  const metricSet = new Set(metrics);
+  const result = [];
+  for (const base of bases) {
+    const candidates = [base, `mean_${base}`, `median_${base}`];
+    for (const candidate of candidates) {
+      if (metricSet.has(candidate)) {
+        result.push(candidate);
+        break;
+      }
     }
   }
-  for (const metric of metrics) appendMetric(metricsElement, metricLabel(metric), row[metric]);
+  return result;
+}
+
+function metricEntries(row, metrics) {
+  const metricSet = new Set(metrics);
+  const emitted = new Set();
+  const entries = [];
+  for (const metric of metrics) {
+    const base = canonicalMetricBase(metric);
+    if (emitted.has(base) || metric.startsWith("std_")) continue;
+    if (metric.startsWith("median_") && metricSet.has(`mean_${base}`)) continue;
+    const valueMetric = metric.startsWith("mean_") || metric.startsWith("median_") ? metric : (
+      metricSet.has(`mean_${base}`) ? `mean_${base}` : metric
+    );
+    const value = row[valueMetric];
+    if (value === null || value === undefined) continue;
+    entries.push({
+      label: entryLabel(valueMetric),
+      value,
+      std: row[`std_${base}`],
+      primary: false,
+    });
+    emitted.add(base);
+  }
+  return entries;
+}
+
+function canonicalMetricBase(metric) {
+  return metric.replace(/^(mean_|median_|std_)/, "");
+}
+
+function entryLabel(metric) {
+  const base = canonicalMetricBase(metric);
+  const baseLabel = metricLabel(base);
+  if (baseLabel !== base.replaceAll("_", " ")) return baseLabel;
+  return metricLabel(metric).replace(/^(Mean|Median|Std) /, "");
+}
+
+function isPrimaryModelMetric(metric) {
+  const base = canonicalMetricBase(metric);
+  return (
+    /^fm_jacobian_participation_rank_t\d{4}$/.test(base)
+    || /^fm_flipd_lid_t\d{4}$/.test(base)
+    || /^diffusion_normal_bundle_lid_t\d{4}$/.test(base)
+    || /^diffusion_flipd_lid_t\d{4}$/.test(base)
+  );
+}
+
+function formatMetricDisplay(label, value, std) {
+  const text = formatMetricNumber(label, value);
+  if (typeof std === "number" && Number.isFinite(std)) {
+    return `${text} ± ${formatMetricNumber(label, std)}`;
+  }
+  return text;
+}
+
+function formatMetricNumber(label, value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return String(value);
+  const lower = label.toLowerCase();
+  if (lower.includes("agreement") || lower.includes("share")) return `${(value * 100).toFixed(1)}%`;
+  if (Number.isInteger(value)) return value.toLocaleString();
+  return value.toFixed(3);
 }
 
 function drawPreview(point) {

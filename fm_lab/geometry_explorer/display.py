@@ -58,6 +58,7 @@ def metric_label(key: str) -> str:
         return model_diagnostic
     patterns = (
         (r"^mle_lid_k(\d+)$", "MLE intrinsic dimension (k={})"),
+        (r"^local_mle_lid_k(\d+)$", "Local MLE ID (k={})"),
         (r"^global_mle_lid_k(\d+)$", "Global MLE intrinsic dimension (k={})"),
         (r"^mean_local_mle_lid_k(\d+)$", "Mean local MLE ID (k={})"),
         (r"^median_local_mle_lid_k(\d+)$", "Median local MLE ID (k={})"),

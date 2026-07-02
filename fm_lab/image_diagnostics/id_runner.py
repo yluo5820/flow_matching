@@ -288,11 +288,13 @@ def _local_group_summaries(
             values = pd.to_numeric(local[column], errors="coerce")
             result[f"mean_{prefix}_k{k_value}"] = float(values.mean())
             result[f"median_{prefix}_k{k_value}"] = float(values.median())
+            result[f"std_{prefix}_k{k_value}"] = float(values.std())
     column = "two_nn_lid_local"
     if column in local:
         values = pd.to_numeric(local[column], errors="coerce")
         result["mean_two_nn_lid_local"] = float(values.mean())
         result["median_two_nn_lid_local"] = float(values.median())
+        result["std_two_nn_lid_local"] = float(values.std())
     return result
 
 

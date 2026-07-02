@@ -83,12 +83,16 @@ GROUP_ID_PRIMARY_CANDIDATES = (
 MODEL_GROUP_METRIC_PREFIXES = (
     "mean_fm_jacobian_",
     "median_fm_jacobian_",
+    "std_fm_jacobian_",
     "mean_fm_flipd_",
     "median_fm_flipd_",
+    "std_fm_flipd_",
     "mean_diffusion_normal_bundle_",
     "median_diffusion_normal_bundle_",
+    "std_diffusion_normal_bundle_",
     "mean_diffusion_flipd_",
     "median_diffusion_flipd_",
+    "std_diffusion_flipd_",
 )
 
 

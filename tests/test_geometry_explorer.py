@@ -358,7 +358,9 @@ def test_model_diagnostics_merge_fm_jacobian_into_projection_view(tmp_path: Path
     group_path = Path(result["merged_views"][0]["group_id_path"])
     group = pd.read_csv(group_path)
     assert "mean_fm_jacobian_participation_rank_t0800" in group
+    assert "std_fm_jacobian_participation_rank_t0800" in group
     assert "mean_fm_flipd_lid_t0800" in group
+    assert "std_fm_flipd_lid_t0800" in group
     assert set(group["groupby_column"]) == {"__all__", "label"}
     assert result["rows_computed"] == 3
 
@@ -553,7 +555,9 @@ def test_model_diagnostics_merge_diffusion_estimators_into_projection_view(
     assert metric_label(flipd_metric) == "Diffusion FLIPD raw ID estimate (t=0.800)"
     group = pd.read_csv(Path(result["merged_views"][0]["group_id_path"]))
     assert "mean_diffusion_normal_bundle_lid_t0800" in group
+    assert "std_diffusion_normal_bundle_lid_t0800" in group
     assert "mean_diffusion_flipd_lid_t0800" in group
+    assert "std_diffusion_flipd_lid_t0800" in group
 
 
 def test_build_projection_view_and_unified_dataset_payload(tmp_path: Path) -> None:
@@ -635,6 +639,10 @@ id_estimation:
     assert "startLayoutDrag" in html
     assert ".legend-item" in html
     assert "addHoverAtlasThumbnail" in html
+    assert "appendGeometryDiagnostics" in html
+    assert "Core estimates" in html
+    assert "More geometry diagnostics" in html
+    assert "Representative model estimates" in html
     assert "coloredPointCloud" in html
     assert 'id="show-thumbnails"' in html
     assert 'id="class-filter"' in html
@@ -795,6 +803,8 @@ id_estimation:
     assert "Class ID ·" in html
     assert "Model ID ·" in html
     assert "Global ID · All classes" in html
+    assert "Class comparison ·" in html
+    assert "formatMetricDisplay" in html
 
 
 def test_unified_trajectory_payload_and_html(tmp_path: Path) -> None:

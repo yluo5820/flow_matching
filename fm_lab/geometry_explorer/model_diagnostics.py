@@ -585,6 +585,7 @@ def _summary_row(
         values = pd.to_numeric(frame[column], errors="coerce")
         row[f"mean_{column}"] = float(values.mean())
         row[f"median_{column}"] = float(values.median())
+        row[f"std_{column}"] = float(values.std())
     return row
 
 
