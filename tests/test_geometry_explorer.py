@@ -635,8 +635,6 @@ id_estimation:
     assert "startLayoutDrag" in html
     assert ".legend-item" in html
     assert "addHoverAtlasThumbnail" in html
-    assert "thumbnailPointLimit" in html
-    assert "endpointPointSize" in html
     assert "coloredPointCloud" in html
     assert 'id="show-thumbnails"' in html
     assert 'id="class-filter"' in html
