@@ -428,9 +428,10 @@ def _compute_diffusion_normal_bundle(
         )
         batch_rows = [{} for _ in range(batch.shape[0])]
         for time_index, (t_value, sigma_value) in enumerate(zip(t_values, sigma_values)):
+            query = _diffusion_query_batch(score_model, batch, t_value)
             estimate = normal_bundle_dimension(
                 score_model,
-                batch,
+                query,
                 sigma=sigma_value,
                 t=t_value,
                 n_perturbations=num_perturbations,
@@ -474,9 +475,10 @@ def _compute_diffusion_flipd(
         )
         batch_rows = [{} for _ in range(batch.shape[0])]
         for t_value, sigma_value in zip(t_values, sigma_values):
+            query = _diffusion_query_batch(score_model, batch, t_value)
             estimate = flipd_dimension(
                 score_model,
-                batch,
+                query,
                 sigma=sigma_value,
                 t=t_value,
                 hutchinson_samples=num_trace_samples,
@@ -633,6 +635,14 @@ def _validate_checkpoint_estimator_match(config: dict[str, Any], estimators: tup
             "FM diagnostics require a flow-matching velocity checkpoint. "
             "Use diffusion_normal_bundle or diffusion_flipd for diffusion checkpoints."
         )
+    if "fm_flipd" in requested and not _has_independent_gaussian_coupling(config):
+        coupling = str(config.get("coupling", {}).get("name", "independent"))
+        raise ConfigError(
+            "fm_flipd requires an independent Gaussian source/data coupling so the "
+            "velocity-to-score identity is valid. This checkpoint uses "
+            f"coupling.name={coupling!r}. For OT-coupled flow matching runs, use "
+            "fm_jacobian and omit fm_flipd."
+        )
 
 
 def _is_diffusion_checkpoint(config: dict[str, Any]) -> bool:
@@ -641,6 +651,12 @@ def _is_diffusion_checkpoint(config: dict[str, Any]) -> bool:
     return path_name in {"gaussian_diffusion", "diffusion", "stochastic_interpolant"} or (
         objective_name.startswith("diffusion")
     )
+
+
+def _has_independent_gaussian_coupling(config: dict[str, Any]) -> bool:
+    coupling_name = str(config.get("coupling", {}).get("name", "independent")).lower()
+    source_name = str(config.get("source", {}).get("name", "gaussian")).lower()
+    return coupling_name in {"independent", "product"} and source_name == "gaussian"
 
 
 def _resolved_fm_schedule(config: dict[str, Any], schedule: str) -> str:
@@ -677,6 +693,24 @@ def _resolved_diffusion_sigmas(
     _, sigma, _, _ = path._schedule(t_tensor)  # noqa: SLF001 - no public schedule API yet.
     sigma_min = float(getattr(path, "sigma_min", 1e-4))
     return tuple(float(value) for value in sigma.clamp_min(sigma_min).detach().cpu())
+
+
+def _diffusion_query_batch(
+    score_model: torch.nn.Module,
+    clean_batch: torch.Tensor,
+    t_value: float,
+) -> torch.Tensor:
+    if not hasattr(score_model, "path"):
+        return clean_batch
+    time = torch.full(
+        (clean_batch.shape[0],),
+        float(t_value),
+        dtype=clean_batch.dtype,
+        device=clean_batch.device,
+    )
+    alpha, _, _, _ = score_model.path._schedule(time)  # noqa: SLF001 - no public schedule API yet.
+    shape = (clean_batch.shape[0],) + (1,) * (clean_batch.ndim - 1)
+    return alpha.reshape(shape) * clean_batch
 
 
 class _DiffusionScoreModel(torch.nn.Module):

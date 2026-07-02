@@ -457,14 +457,17 @@ arrays are not enough because these estimators call the trained model. Available
 | Estimator | Checkpoint type | Main columns |
 |---|---|---|
 | `fm_jacobian` | Flow-matching velocity model | `fm_jacobian_*_rank_t*` |
-| `fm_flipd` | Flow-matching velocity model | `fm_flipd_lid_t*`, divergence, recovered score norm |
-| `diffusion_normal_bundle` | Gaussian diffusion score/noise model | `diffusion_normal_bundle_lid_t*`, normal dimension |
+| `fm_flipd` | Flow-matching velocity model with independent Gaussian coupling | `fm_flipd_lid_t*`, divergence, recovered score norm |
+| `diffusion_normal_bundle` | Gaussian diffusion score/noise model | `diffusion_normal_bundle_lid_t*` upper bound, observed normal rank |
 | `diffusion_flipd` | Gaussian diffusion score/noise model | `diffusion_flipd_lid_t*`, score divergence |
 
 For FLIPD estimators, `--num-trace-samples` controls Hutchinson trace probes; pass `0`
 only for exact divergence in tiny ambient dimensions. For diffusion estimators,
 `--diffusion-sigmas` can override the sigma values inferred from the checkpoint's
-Gaussian diffusion schedule.
+Gaussian diffusion schedule. `fm_flipd` is not valid for minibatch-OT flow matching
+checkpoints; use `fm_jacobian` for those runs. In high-dimensional pixel space,
+`diffusion_normal_bundle_lid_t*` is an upper bound unless `--num-perturbations` is large
+enough to resolve the full normal rank.
 
 To compare the raw-geometry class/global ID estimates without opening CSV files:
 

@@ -110,7 +110,7 @@ def _model_diagnostic_metric_label(key: str) -> str | None:
     patterns = (
         (
             r"^(mean_|median_)?fm_flipd_lid_t(\d{4})$",
-            "FM-FLIPD intrinsic dimension",
+            "FM-FLIPD raw ID estimate",
         ),
         (
             r"^(mean_|median_)?fm_flipd_divergence_t(\d{4})$",
@@ -122,15 +122,15 @@ def _model_diagnostic_metric_label(key: str) -> str | None:
         ),
         (
             r"^(mean_|median_)?diffusion_normal_bundle_lid_t(\d{4})$",
-            "Diffusion normal-bundle intrinsic dimension",
+            "Diffusion normal-bundle ID upper bound",
         ),
         (
             r"^(mean_|median_)?diffusion_normal_bundle_normal_dim_t(\d{4})$",
-            "Diffusion normal-bundle normal dimension",
+            "Diffusion normal-bundle observed normal rank",
         ),
         (
             r"^(mean_|median_)?diffusion_flipd_lid_t(\d{4})$",
-            "Diffusion FLIPD intrinsic dimension",
+            "Diffusion FLIPD raw ID estimate",
         ),
         (
             r"^(mean_|median_)?diffusion_flipd_divergence_t(\d{4})$",

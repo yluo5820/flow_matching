@@ -25,6 +25,7 @@ from fm_lab.geometry_explorer.views import build_projection_view
 from fm_lab.image_diagnostics.explorer_payload import sample_metric_columns
 from fm_lab.image_diagnostics.save_utils import read_parquet, write_parquet
 from fm_lab.utils.checkpoints import save_checkpoint
+from fm_lab.utils.config import ConfigError
 
 
 def test_registry_registers_dataset_projection_and_trajectory(tmp_path: Path) -> None:
@@ -312,6 +313,7 @@ def test_model_diagnostics_merge_fm_jacobian_into_projection_view(tmp_path: Path
     config = {
         "source": {"name": "gaussian", "dim": 3},
         "data": {"name": "mnist", "normalize": "zero_one"},
+        "coupling": {"name": "independent"},
         "model": {"name": "mlp", "hidden_dim": 8, "depth": 1, "time_embedding_dim": 4},
     }
     model = build_model(config, dim=3)
@@ -352,13 +354,89 @@ def test_model_diagnostics_merge_fm_jacobian_into_projection_view(tmp_path: Path
     assert metric_label(metric) == "FM Jacobian participation rank (t=0.800)"
     assert "fm_flipd_lid_t0800" in merged
     assert "fm_flipd_lid_t0800" in sample_metric_columns(merged)
-    assert metric_label("fm_flipd_lid_t0800") == "FM-FLIPD intrinsic dimension (t=0.800)"
+    assert metric_label("fm_flipd_lid_t0800") == "FM-FLIPD raw ID estimate (t=0.800)"
     group_path = Path(result["merged_views"][0]["group_id_path"])
     group = pd.read_csv(group_path)
     assert "mean_fm_jacobian_participation_rank_t0800" in group
     assert "mean_fm_flipd_lid_t0800" in group
     assert set(group["groupby_column"]) == {"__all__", "label"}
     assert result["rows_computed"] == 3
+
+
+def test_model_diagnostics_rejects_fm_flipd_for_ot_coupling(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    registry = GeometryRegistry(workspace)
+    metadata = pd.DataFrame({"row_id": [0], "label": ["0"], "source_index": [10]})
+    dataset_path = tmp_path / "dataset.parquet"
+    data_path = tmp_path / "data.npy"
+    write_parquet(metadata, dataset_path)
+    np.save(data_path, np.asarray([[0.0, 0.2, 0.4]], dtype=np.float32))
+    registry.register_dataset_variant(
+        variant_id="mnist/tiny_ot_model_diag",
+        family="mnist",
+        variant="tiny_ot_model_diag",
+        base="original",
+        split="train",
+        dataset_path=dataset_path,
+        data_path=data_path,
+        labels_path=None,
+        config_path=None,
+        row_count=1,
+        label_counts={"0": 1},
+        image_shape=(1, 3),
+        value_range=(0.0, 1.0),
+    )
+    explorer_path = tmp_path / "view" / "explorer" / "explorer_data.parquet"
+    explorer_path.parent.mkdir(parents=True)
+    write_parquet(
+        metadata.assign(pca_3d_x=[0.0], pca_3d_y=[0.0], pca_3d_z=[0.0]),
+        explorer_path,
+    )
+    registry.register_projection_view(
+        view_id="tiny_ot_view",
+        variant_id="mnist/tiny_ot_model_diag",
+        feature_name="raw_pixels",
+        feature_mode="raw",
+        explorer_data_path=explorer_path,
+        output_dir=tmp_path / "view",
+        projection_names={"pca_3d": "PCA 3D"},
+        renderer="three3d",
+        row_count=1,
+    )
+
+    config = {
+        "source": {"name": "gaussian", "dim": 3},
+        "data": {"name": "mnist", "normalize": "zero_one"},
+        "coupling": {"name": "minibatch_ot"},
+        "model": {"name": "mlp", "hidden_dim": 8, "depth": 1, "time_embedding_dim": 4},
+    }
+    model = build_model(config, dim=3)
+    run_dir = tmp_path / "runs" / "tiny_ot_fm"
+    save_checkpoint(
+        run_dir / "checkpoint.pt",
+        model=model,
+        optimizer=None,
+        step=0,
+        config=config,
+        metrics={},
+    )
+
+    try:
+        build_model_diagnostics(
+            variant_id="mnist/tiny_ot_model_diag",
+            run_dir=run_dir,
+            workspace=workspace,
+            estimators=("fm_flipd",),
+            t_values=(0.8,),
+            max_samples=1,
+            device="cpu",
+            rebuild_payload=False,
+        )
+    except ConfigError as exc:
+        assert "independent Gaussian" in str(exc)
+        assert "fm_jacobian" in str(exc)
+    else:
+        raise AssertionError("Expected fm_flipd to reject minibatch_ot checkpoints.")
 
 
 def test_model_diagnostics_merge_diffusion_estimators_into_projection_view(
@@ -470,9 +548,9 @@ def test_model_diagnostics_merge_diffusion_estimators_into_projection_view(
     assert flipd_metric in sample_metric_columns(merged)
     assert (
         metric_label(normal_metric)
-        == "Diffusion normal-bundle intrinsic dimension (t=0.800)"
+        == "Diffusion normal-bundle ID upper bound (t=0.800)"
     )
-    assert metric_label(flipd_metric) == "Diffusion FLIPD intrinsic dimension (t=0.800)"
+    assert metric_label(flipd_metric) == "Diffusion FLIPD raw ID estimate (t=0.800)"
     group = pd.read_csv(Path(result["merged_views"][0]["group_id_path"]))
     assert "mean_diffusion_normal_bundle_lid_t0800" in group
     assert "mean_diffusion_flipd_lid_t0800" in group
@@ -711,7 +789,7 @@ id_estimation:
     )
     assert (
         payload["metricLabels"]["mean_fm_flipd_lid_t0800"]
-        == "Mean FM-FLIPD intrinsic dimension (t=0.800)"
+        == "Mean FM-FLIPD raw ID estimate (t=0.800)"
     )
     assert "showGroupDiagnostics" in html
     assert "Class ID ·" in html
