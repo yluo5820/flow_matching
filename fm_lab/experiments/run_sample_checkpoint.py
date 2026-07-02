@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fm_lab.experiments.factory import (
     build_model,
+    build_path,
     build_solvers,
     build_source,
     build_target,
@@ -116,6 +117,7 @@ def main() -> None:
 
     target = build_target(config)
     source = build_source(config)
+    path = build_path(config)
     model = build_model(config, dim=source.dim)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
@@ -126,6 +128,7 @@ def main() -> None:
         run_dir=output_dir,
         target=target,
         source=source,
+        path=path,
         model=model,
         solvers=solvers,
         device=device,

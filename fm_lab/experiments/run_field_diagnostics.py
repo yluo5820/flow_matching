@@ -19,6 +19,8 @@ from fm_lab.experiments.factory import (
     resolve_device,
 )
 from fm_lab.experiments.sampling import sample_path_batch
+from fm_lab.training.losses import build_objective
+from fm_lab.training.prediction import velocity_model_for_objective
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.config import ConfigError, deep_update, load_config
 from fm_lab.utils.logging import create_run_dir
@@ -84,6 +86,9 @@ def run_field_diagnostics(
             path.load_state_dict(payload["path_state_dict"])
         path.to(device)
         path.eval()
+    objective = build_objective(config.get("objective", {}))
+    model = velocity_model_for_objective(model, path, objective)
+    model.eval()
     ambiguity_config = config.get("diagnostics", {}).get("ambiguity", {})
     t_values = [float(value) for value in ambiguity_config.get("t_values", [0.25, 0.5, 0.75])]
 

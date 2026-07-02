@@ -83,9 +83,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--objective", default=None, help="Override objective.name.")
     parser.add_argument("--objective-loss", default=None, help="Override objective.loss.")
     parser.add_argument(
+        "--model-output",
+        default=None,
+        choices=("velocity", "x"),
+        help="Override objective.model_output for flow matching objectives.",
+    )
+    parser.add_argument(
+        "--x-prediction-loss-space",
+        default=None,
+        choices=("clean", "velocity"),
+        help="Override objective.x_prediction.loss_space for x-predicting FM models.",
+    )
+    parser.add_argument(
+        "--x-prediction-min-denom",
+        type=float,
+        default=None,
+        help="Minimum denominator used when converting x predictions to velocity.",
+    )
+    parser.add_argument(
         "--diffusion-prediction-type",
         default=None,
-        choices=("epsilon", "score", "velocity"),
+        choices=("epsilon", "score", "velocity", "x"),
         help="Override objective.prediction_type for diffusion objectives.",
     )
     parser.add_argument(
@@ -196,12 +214,22 @@ def _objective_overrides(args: argparse.Namespace) -> dict:
         objective["name"] = args.objective
     if args.objective_loss is not None:
         objective["loss"] = args.objective_loss
+    if args.model_output is not None:
+        objective["model_output"] = args.model_output
     if args.diffusion_prediction_type is not None:
         objective["prediction_type"] = args.diffusion_prediction_type
     if args.direction_weight is not None:
         objective["direction_weight"] = args.direction_weight
     if args.speed_weight is not None:
         objective["speed_weight"] = args.speed_weight
+
+    x_prediction = {}
+    if args.x_prediction_loss_space is not None:
+        x_prediction["loss_space"] = args.x_prediction_loss_space
+    if args.x_prediction_min_denom is not None:
+        x_prediction["min_denom"] = args.x_prediction_min_denom
+    if x_prediction:
+        objective["x_prediction"] = x_prediction
 
     straightness = {}
     if args.straightness_weight is not None:

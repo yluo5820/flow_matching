@@ -23,6 +23,8 @@ from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistr
 from fm_lab.geometry_explorer.variants import load_variant_bundle
 from fm_lab.image_diagnostics.save_utils import read_parquet, write_parquet
 from fm_lab.solvers import EulerSolver, HeunSolver, MidpointSolver, RK4Solver
+from fm_lab.training.losses import build_objective
+from fm_lab.training.prediction import velocity_model_for_objective
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.config import ConfigError, load_config
 from fm_lab.utils.logging import write_json
@@ -121,12 +123,17 @@ def build_model_diagnostics(
 
     torch_device = resolve_device(device)
     source = build_source(config)
+    path = build_path(config)
+    objective = build_objective(config.get("objective", {}))
     model = build_model(config, dim=source.dim)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(torch_device)
     model.eval()
     if bool(getattr(model, "requires_source_label", False)):
         raise ConfigError("Model diagnostics do not support source-label models yet.")
+    if set(estimators) & FM_ESTIMATORS:
+        model = velocity_model_for_objective(model, path, objective)
+        model.eval()
 
     torch.manual_seed(sample_seed)
     diagnostic_root = (
@@ -633,7 +640,7 @@ def _validate_checkpoint_estimator_match(config: dict[str, Any], estimators: tup
         )
     if requested & FM_ESTIMATORS and is_diffusion:
         raise ConfigError(
-            "FM diagnostics require a flow-matching velocity checkpoint. "
+            "FM diagnostics require a flow-matching checkpoint that can be converted to velocity. "
             "Use diffusion_normal_bundle or diffusion_flipd for diffusion checkpoints."
         )
     if "fm_flipd" in requested and not _has_independent_gaussian_coupling(config):
@@ -734,6 +741,8 @@ class _DiffusionScoreModel(torch.nn.Module):
             return prediction
         if self.prediction_type == "epsilon":
             return -prediction / sigma
+        if self.prediction_type == "x":
+            return (alpha * prediction - x) / sigma.square()
         if self.prediction_type == "velocity":
             sigma_ratio = sigma_dot / sigma
             coefficient = (alpha_dot - sigma_ratio * alpha).clamp_min(
@@ -775,6 +784,9 @@ def _diffusion_prediction_type(config: dict[str, Any]) -> str:
         "diffusion_score": "score",
         "score_matching": "score",
         "diffusion_velocity": "velocity",
+        "diffusion_x": "x",
+        "x_prediction": "x",
+        "clean_prediction": "x",
     }
     prediction = str(objective.get("prediction_type", aliases.get(name, "epsilon"))).lower()
     normalized = {
@@ -784,6 +796,11 @@ def _diffusion_prediction_type(config: dict[str, Any]) -> str:
         "score": "score",
         "velocity": "velocity",
         "v": "velocity",
+        "x": "x",
+        "x0": "x",
+        "x_start": "x",
+        "data": "x",
+        "clean": "x",
     }.get(prediction)
     if normalized is None:
         raise ConfigError(f"Unsupported diffusion prediction type: {prediction}")

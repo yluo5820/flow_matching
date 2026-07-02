@@ -1,0 +1,80 @@
+experiment:
+  name: cifar10_original_image_unet_xpred
+  seed: 0
+  output_dir: runs/cifar10_original_image_unet_xpred
+
+data:
+  name: cifar10
+  variant_id: cifar10/original
+  workspace: outputs/geometry_explorer
+  normalize: minus_one_one
+  dequantize: true
+
+source:
+  name: gaussian
+  dim: 3072
+  std: 1.0
+
+coupling:
+  name: minibatch_ot
+  max_exact_size: 64
+
+path:
+  name: linear
+
+model:
+  name: image_unet
+  image_shape: [32, 32, 3]
+  base_channels: 32
+  activation: silu
+  time_embedding_dim: 128
+  zero_init_head: true
+
+objective:
+  name: flow_matching
+  model_output: x
+  x_prediction:
+    loss_space: clean
+    min_denom: 0.05
+
+training:
+  batch_size: 64
+  steps: 100000
+  lr: 2.0e-4
+  log_every: 500
+  time_sampling: uniform
+  early_stopping:
+    enabled: true
+    warmup_steps: 20000
+    patience_steps: 10000
+    min_delta: 5.0e-4
+    ema_alpha: 0.3
+
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 256
+  n_trajectories: 16
+  nfe: 64
+  plot_max_points: 64
+  sample_batch_size: 128
+  trajectory_umap:
+    enabled: true
+    max_target_points: 3000
+    n_neighbors: 30
+    min_dist: 0.1
+    metric: euclidean
+    random_state: 42
+    save_coordinates: true
+
+diagnostics:
+  ambiguity:
+    methods: [knn]
+    t_values: [0.1, 0.3, 0.5, 0.7, 0.9]
+  curvature:
+    enabled: false
+  solver_sensitivity:
+    metrics: [mmd, sliced_wasserstein]

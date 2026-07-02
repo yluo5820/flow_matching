@@ -9,6 +9,12 @@ import torch
 from torch.nn import functional as F
 
 from fm_lab.paths.base import FlowPath
+from fm_lab.training.prediction import (
+    normalize_model_output,
+    normalize_x_prediction_loss_space,
+    velocity_model_for_objective,
+    x_prediction_to_velocity,
+)
 
 
 def sample_uniform_time(batch_size: int, device: torch.device, eps: float = 1e-5) -> torch.Tensor:
@@ -74,11 +80,23 @@ class FlowMatchingObjective:
     """Conditional flow matching objective with optional learned-flow regularizers."""
 
     loss: str = "mse"
+    model_output: str = "velocity"
+    x_prediction_loss_space: str = "clean"
+    x_prediction_min_denom: float = 1e-3
     straightness_weight: float = 0.0
     straightness_sample_size: int | None = None
     interpolant_acceleration_weight: float = 0.0
     learned_interpolant: KernelVStarConfig = field(default_factory=KernelVStarConfig)
     name: str = "flow_matching"
+
+    def __post_init__(self) -> None:
+        self.model_output = normalize_model_output(self.model_output)
+        self.x_prediction_loss_space = normalize_x_prediction_loss_space(
+            self.x_prediction_loss_space
+        )
+        self.loss = self.loss.lower()
+        if self.x_prediction_min_denom <= 0:
+            raise ValueError("objective.x_prediction.min_denom must be positive.")
 
     def __call__(
         self,
@@ -158,6 +176,11 @@ class FlowMatchingObjective:
         return {
             "name": self.name,
             "loss": self.loss,
+            "model_output": self.model_output,
+            "x_prediction": {
+                "loss_space": self.x_prediction_loss_space,
+                "min_denom": self.x_prediction_min_denom,
+            },
             "straightness": {
                 "weight": self.straightness_weight,
                 "sample_size": self.straightness_sample_size,
@@ -198,16 +221,39 @@ class FlowMatchingObjective:
 
         total_loss = x0.new_tensor(0.0)
         metrics: dict[str, float] = {}
+        velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
-            predicted_velocity = model(xt, t)
-            matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
+            prediction = model(xt, t)
+            if self.model_output == "x":
+                predicted_velocity = x_prediction_to_velocity(
+                    prediction,
+                    xt,
+                    t,
+                    path,
+                    min_denom=self.x_prediction_min_denom,
+                )
+                if self.x_prediction_loss_space == "clean":
+                    matching_loss = _velocity_loss(prediction, x1.detach(), self.loss)
+                    metrics["x_prediction_loss"] = float(matching_loss.detach().cpu())
+                    velocity_loss = _velocity_loss(
+                        predicted_velocity.detach(),
+                        target_velocity.detach(),
+                        self.loss,
+                    )
+                    metrics["flow_matching_loss"] = float(velocity_loss.detach().cpu())
+                else:
+                    matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
+                    metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
+            else:
+                predicted_velocity = prediction
+                matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
+                metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
             total_loss = total_loss + matching_loss
-            metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
 
         if include_straightness and self.straightness_weight > 0:
             if self.learned_interpolant.mode == "kernel_vstar":
                 straightness, kernel_metrics = kernel_vstar_straightness_loss(
-                    model=model,
+                    model=velocity_model,
                     path=path,
                     x0=x0,
                     x1=x1,
@@ -218,7 +264,7 @@ class FlowMatchingObjective:
                 metrics.update(kernel_metrics)
             else:
                 straightness = learned_flow_straightness_loss(
-                    model=model,
+                    model=velocity_model,
                     x=xt,
                     t=t,
                     sample_size=self.straightness_sample_size,
@@ -249,7 +295,7 @@ class FlowMatchingObjective:
 
 @dataclass
 class DiffusionObjective:
-    """Gaussian diffusion objective for epsilon, score, or velocity prediction."""
+    """Gaussian diffusion objective for epsilon, score, velocity, or clean-x prediction."""
 
     prediction_type: str = "epsilon"
     loss: str = "mse"
@@ -304,6 +350,8 @@ class DiffusionObjective:
             return sample.score_target
         if self.prediction_type == "velocity":
             return sample.velocity_target
+        if self.prediction_type == "x":
+            return sample.x1
         raise ValueError(f"Unsupported diffusion prediction type: {self.prediction_type}")
 
 
@@ -571,6 +619,9 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
         "diffusion_score": "score",
         "score_matching": "score",
         "diffusion_velocity": "velocity",
+        "diffusion_x": "x",
+        "x_prediction": "x",
+        "clean_prediction": "x",
     }
     if name in {
         "diffusion",
@@ -618,6 +669,13 @@ def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
 
     return FlowMatchingObjective(
         loss=str(config.get("loss", "mse")).lower(),
+        model_output=str(config.get("model_output", "velocity")),
+        x_prediction_loss_space=str(
+            config.get("x_prediction", {}).get("loss_space", "clean")
+        ),
+        x_prediction_min_denom=float(
+            config.get("x_prediction", {}).get("min_denom", 1e-3)
+        ),
         straightness_weight=straightness_weight,
         straightness_sample_size=straightness_sample_size,
         interpolant_acceleration_weight=interpolant_acceleration_weight,
@@ -685,10 +743,15 @@ def _normalize_diffusion_prediction_type(prediction_type: str) -> str:
         "score": "score",
         "velocity": "velocity",
         "v": "velocity",
+        "x": "x",
+        "x0": "x",
+        "x_start": "x",
+        "data": "x",
+        "clean": "x",
     }
     if normalized not in aliases:
         raise ValueError(
-            "DiffusionObjective prediction_type must be epsilon, score, or velocity."
+            "DiffusionObjective prediction_type must be epsilon, score, velocity, or x."
         )
     return aliases[normalized]
 

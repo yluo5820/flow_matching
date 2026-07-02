@@ -17,6 +17,9 @@ def test_objective_overrides_from_cli_args() -> None:
     args = Namespace(
         objective="flow_matching",
         objective_loss="mse",
+        model_output=None,
+        x_prediction_loss_space=None,
+        x_prediction_min_denom=None,
         diffusion_prediction_type=None,
         straightness_weight=0.01,
         straightness_sample_size=128,
@@ -35,6 +38,9 @@ def test_objective_overrides_allows_disabling_straightness() -> None:
     args = Namespace(
         objective=None,
         objective_loss=None,
+        model_output=None,
+        x_prediction_loss_space=None,
+        x_prediction_min_denom=None,
         diffusion_prediction_type=None,
         straightness_weight=0.0,
         straightness_sample_size=None,
@@ -49,6 +55,9 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
     args = Namespace(
         objective="direction_only_straight",
         objective_loss=None,
+        model_output=None,
+        x_prediction_loss_space=None,
+        x_prediction_min_denom=None,
         diffusion_prediction_type=None,
         straightness_weight=None,
         straightness_sample_size=None,
@@ -67,6 +76,9 @@ def test_diffusion_prediction_type_override_from_cli_args() -> None:
     args = Namespace(
         objective="diffusion",
         objective_loss=None,
+        model_output=None,
+        x_prediction_loss_space=None,
+        x_prediction_min_denom=None,
         diffusion_prediction_type="score",
         straightness_weight=None,
         straightness_sample_size=None,
@@ -77,6 +89,27 @@ def test_diffusion_prediction_type_override_from_cli_args() -> None:
     assert _objective_overrides(args) == {
         "name": "diffusion",
         "prediction_type": "score",
+    }
+
+
+def test_x_prediction_overrides_from_cli_args() -> None:
+    args = Namespace(
+        objective="flow_matching",
+        objective_loss=None,
+        model_output="x",
+        x_prediction_loss_space="clean",
+        x_prediction_min_denom=0.05,
+        diffusion_prediction_type=None,
+        straightness_weight=None,
+        straightness_sample_size=None,
+        direction_weight=None,
+        speed_weight=None,
+    )
+
+    assert _objective_overrides(args) == {
+        "name": "flow_matching",
+        "model_output": "x",
+        "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
     }
 
 
@@ -205,10 +238,12 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
         "build_model",
         lambda config, dim: model,
     )
+    monkeypatch.setattr(sample_checkpoint_cli, "build_path", lambda config: object())
     monkeypatch.setattr(sample_checkpoint_cli, "build_solvers", lambda config: ["solver"])
 
     def fake_sample_and_plot(**kwargs):
         assert kwargs["model"] is model
+        assert kwargs["path"] is not None
         assert kwargs["model"].loaded_state == {"weight": 1.0}
         assert kwargs["model"].device == "mps"
         assert kwargs["device"] == "mps"

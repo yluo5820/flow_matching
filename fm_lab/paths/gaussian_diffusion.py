@@ -15,6 +15,7 @@ class GaussianDiffusionSample:
     """Joint sample and training targets for a Gaussian diffusion path."""
 
     xt: torch.Tensor
+    x1: torch.Tensor
     epsilon: torch.Tensor
     score_target: torch.Tensor
     velocity_target: torch.Tensor
@@ -68,6 +69,7 @@ class GaussianDiffusionPath:
         velocity_target = alpha_dot * x1 + sigma_dot * epsilon
         return GaussianDiffusionSample(
             xt=xt,
+            x1=x1,
             epsilon=epsilon,
             score_target=score_target,
             velocity_target=velocity_target,

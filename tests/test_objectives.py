@@ -61,6 +61,50 @@ def test_default_objective_matches_flow_matching_loss() -> None:
     assert objective_metrics["flow_matching_loss"] == 0.0
 
 
+def test_flow_matching_x_prediction_can_train_against_clean_target() -> None:
+    model = ConstantVelocity(dim=2, value=2.0)
+    path = LinearPath()
+    x0 = torch.zeros(4, 2)
+    x1 = torch.full((4, 2), 2.0)
+    t = torch.full((4,), 0.5)
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "x",
+            "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
+        }
+    )
+
+    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+
+    assert torch.allclose(loss, torch.tensor(0.0))
+    assert metrics["x_prediction_loss"] == 0.0
+    assert metrics["flow_matching_loss"] == 0.0
+    assert objective.metadata()["model_output"] == "x"
+    assert objective.metadata()["x_prediction"]["loss_space"] == "clean"
+
+
+def test_flow_matching_x_prediction_can_train_in_velocity_space() -> None:
+    model = ConstantVelocity(dim=2, value=2.0)
+    path = LinearPath()
+    x0 = torch.zeros(4, 2)
+    x1 = torch.full((4, 2), 2.0)
+    t = torch.full((4,), 0.5)
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "x",
+            "x_prediction": {"loss_space": "velocity", "min_denom": 0.05},
+        }
+    )
+
+    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+
+    assert torch.allclose(loss, torch.tensor(0.0))
+    assert metrics["flow_matching_loss"] == 0.0
+    assert "x_prediction_loss" not in metrics
+
+
 def test_learned_flow_straightness_is_zero_for_constant_field() -> None:
     model = ConstantVelocity(dim=3, value=0.5)
     x = torch.randn(8, 3)
@@ -206,6 +250,22 @@ def test_diffusion_epsilon_objective_matches_noise_target() -> None:
     assert metrics["diffusion_loss"] == metrics["loss"]
     assert metrics["diffusion_sigma_mean"] == 0.5
     assert objective.metadata()["prediction_type"] == "epsilon"
+
+
+def test_diffusion_x_objective_matches_clean_target() -> None:
+    objective = build_objective({"name": "diffusion", "prediction_type": "x"})
+    model = ConstantVelocity(dim=2, value=2.0)
+    path = GaussianDiffusionPath(schedule="linear")
+    epsilon = torch.tensor([[1.0, -2.0], [0.5, 1.5]])
+    data = torch.full((2, 2), 2.0)
+    t = torch.full((2,), 0.5)
+
+    loss, metrics = objective(model=model, path=path, x0=epsilon, x1=data, t=t)
+
+    assert isinstance(objective, DiffusionObjective)
+    assert torch.allclose(loss, torch.tensor(0.0))
+    assert metrics["diffusion_loss"] == 0.0
+    assert objective.metadata()["prediction_type"] == "x"
 
 
 def test_diffusion_score_objective_matches_conditional_score_target() -> None:

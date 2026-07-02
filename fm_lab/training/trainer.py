@@ -28,6 +28,7 @@ from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
 from fm_lab.training.losses import build_objective, sample_uniform_time
+from fm_lab.training.prediction import model_prediction, velocity_model_for_objective
 from fm_lab.utils.checkpoints import save_checkpoint
 from fm_lab.utils.logging import write_json
 
@@ -245,6 +246,7 @@ def train_flow_matching(
         run_dir=run_dir,
         target=target,
         source=source,
+        path=path,
         model=model,
         solvers=solvers,
         device=device,
@@ -416,6 +418,7 @@ def sample_and_plot(
     model: nn.Module,
     solvers: list[Solver],
     device: torch.device,
+    path: FlowPath | None = None,
 ) -> dict[str, Any]:
     """Generate final samples and trajectory plots for each configured solver."""
 
@@ -455,6 +458,15 @@ def sample_and_plot(
     image_value_range = target_metadata.get("image_value_range", (0.0, 1.0))
 
     model.eval()
+    objective = build_objective(config.get("objective", {}))
+    if path is None:
+        if getattr(objective, "model_output", None) == "x" or getattr(
+            objective, "prediction_type", None
+        ) == "x":
+            raise ValueError("sample_and_plot requires path for x-prediction checkpoints.")
+    else:
+        model = velocity_model_for_objective(model, path, objective)
+        model.eval()
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
     with _temporary_torch_seed(sampling_seed, device):
@@ -638,7 +650,7 @@ def _validate_training_compatibility(
 
 def _velocity_sampling_skip_reason(objective: Any) -> str | None:
     prediction_type = getattr(objective, "prediction_type", None)
-    if prediction_type is None or prediction_type == "velocity":
+    if prediction_type is None or prediction_type in {"velocity", "x"}:
         return None
     return (
         "FM-style ODE sampling expects model(x, t) to return a velocity field. "
@@ -682,8 +694,8 @@ def _model_velocity(
     if _requires_source_label(model):
         if source_label is None:
             raise ValueError("Source-label-conditioned model requires source labels.")
-        return model(x, t, context={"source_label": source_label})
-    return model(x, t)
+        return model_prediction(model, x, t, source_label=source_label)
+    return model_prediction(model, x, t)
 
 
 def _line_containment_stats(

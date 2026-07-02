@@ -186,6 +186,29 @@ def test_sample_and_plot_supports_source_label_conditioned_models(tmp_path) -> N
     assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
 
 
+def test_sample_and_plot_converts_x_predictions_to_velocity(tmp_path) -> None:
+    config = _sampling_config(seed=111)
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": "x",
+        "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
+    }
+
+    sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        path=LinearPath(),
+        model=TrainableConstantVelocity(dim=2, value=1.0),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
+    assert np.allclose(generated, 1.0)
+
+
 def test_sample_and_plot_writes_umap_trajectory_when_enabled(tmp_path, monkeypatch) -> None:
     config = _sampling_config(seed=888)
     config["sampling"]["trajectory_umap"] = {
