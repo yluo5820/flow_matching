@@ -29,6 +29,12 @@ from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
 from fm_lab.training.losses import build_objective, sample_uniform_time
 from fm_lab.training.prediction import model_prediction, velocity_model_for_objective
+from fm_lab.training.sampling_guidance import (
+    apply_density_guidance,
+    apply_density_prior_rescaling,
+    apply_prior_guidance,
+    build_sampling_guidance_config,
+)
 from fm_lab.utils.checkpoints import save_checkpoint
 from fm_lab.utils.logging import write_json
 
@@ -453,19 +459,30 @@ def sample_and_plot(
     trajectory_umap_save_coordinates = bool(
         trajectory_umap_config.get("save_coordinates", True)
     )
+    guidance = build_sampling_guidance_config(sampling_config)
     target_metadata = target.metadata()
     image_shape = target_metadata.get("image_shape")
     image_value_range = target_metadata.get("image_value_range", (0.0, 1.0))
 
     model.eval()
+    base_model = model
     objective = build_objective(config.get("objective", {}))
     if path is None:
+        if guidance.density is not None and guidance.density.enabled:
+            raise ValueError("Density guidance requires a sampling path.")
         if getattr(objective, "model_output", None) == "x" or getattr(
             objective, "prediction_type", None
         ) == "x":
             raise ValueError("sample_and_plot requires path for x-prediction checkpoints.")
     else:
-        model = velocity_model_for_objective(model, path, objective)
+        model = velocity_model_for_objective(base_model, path, objective)
+        model = apply_density_guidance(
+            base_model=base_model,
+            velocity_model=model,
+            path=path,
+            objective=objective,
+            config=guidance.density,
+        )
         model.eval()
     t_grid = make_time_grid(nfe, schedule=schedule, device=device)
 
@@ -477,6 +494,22 @@ def sample_and_plot(
         )
         x0_samples = source.sample(n_samples, device=device)
         trajectory_x0 = source.sample(n_trajectories, device=device)
+        x0_samples = apply_prior_guidance(x0_samples, source=source, config=guidance.prior)
+        trajectory_x0 = apply_prior_guidance(
+            trajectory_x0,
+            source=source,
+            config=guidance.prior,
+        )
+        x0_samples = apply_density_prior_rescaling(
+            x0_samples,
+            source=source,
+            config=guidance.density,
+        )
+        trajectory_x0 = apply_density_prior_rescaling(
+            trajectory_x0,
+            source=source,
+            config=guidance.density,
+        )
     target_samples_cpu = target_samples.detach().cpu()
     target_labels_cpu = target_labels.detach().cpu() if target_labels is not None else None
     del target_samples
@@ -494,6 +527,9 @@ def sample_and_plot(
         "trajectory_target_max_points": trajectory_target_max_points,
         "seed": sampling_seed,
     }
+    guidance_summary = guidance.summary()
+    if guidance_summary:
+        artifact_summary["guidance"] = guidance_summary
     if image_shape is not None:
         artifact_summary["image_shape"] = image_shape
         artifact_summary["image_value_range"] = image_value_range

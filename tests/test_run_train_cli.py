@@ -1,3 +1,4 @@
+import json
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -187,6 +188,63 @@ def test_checkpoint_sampling_overrides_include_trajectory_umap() -> None:
     }
 
 
+def test_checkpoint_sampling_overrides_include_density_guidance() -> None:
+    args = Namespace(
+        n_samples=None,
+        n_trajectories=None,
+        nfe=None,
+        plot_max_points=None,
+        sample_batch_size=None,
+        trajectory_target_max_points=None,
+        trajectory_umap=False,
+        no_trajectory_umap=False,
+        trajectory_umap_target_points=None,
+        trajectory_umap_neighbors=None,
+        trajectory_umap_min_dist=None,
+        prior_guidance_scale=0.8,
+        density_guidance_quantile=0.3,
+        density_guidance_strength=0.5,
+        density_guidance_t_min=1.0e-4,
+        density_guidance_t_max=0.95,
+        density_guidance_prior_quantile=0.5,
+        no_density_guidance_prior_rescale=False,
+    )
+
+    assert _checkpoint_sampling_overrides(args) == {
+        "guidance": {
+            "prior": {"scale": 0.8},
+            "density": {
+                "quantile": 0.3,
+                "strength": 0.5,
+                "t_min": 1.0e-4,
+                "t_max": 0.95,
+                "prior_rescale_quantile": 0.5,
+            },
+        },
+    }
+
+
+def test_checkpoint_sampling_overrides_can_disable_density_prior_rescale() -> None:
+    args = Namespace(
+        n_samples=None,
+        n_trajectories=None,
+        nfe=None,
+        plot_max_points=None,
+        sample_batch_size=None,
+        trajectory_target_max_points=None,
+        trajectory_umap=False,
+        no_trajectory_umap=False,
+        trajectory_umap_target_points=None,
+        trajectory_umap_neighbors=None,
+        trajectory_umap_min_dist=None,
+        no_density_guidance_prior_rescale=True,
+    )
+
+    assert _checkpoint_sampling_overrides(args) == {
+        "guidance": {"density": {"prior_rescale_quantile": None}},
+    }
+
+
 def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
     tmp_path,
     monkeypatch,
@@ -254,6 +312,98 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
     sample_checkpoint_cli.main()
 
     assert model.device == "mps"
+
+
+def test_sample_checkpoint_register_only_uses_existing_sampling_payload(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    output_dir = tmp_path / "sampled"
+    checkpoint_path = run_dir / "checkpoint.pt"
+    summary_path = output_dir / "diagnostics" / "checkpoint_sampling.json"
+    run_dir.mkdir()
+    checkpoint_path.write_bytes(b"checkpoint")
+    (run_dir / "config.yaml").write_text(
+        "data:\n  workspace: unused\n",
+        encoding="utf-8",
+    )
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "output_dir": str(output_dir),
+                "sampling": {
+                    "nfe": 64,
+                    "image_shape": [32, 32, 3],
+                    "image_value_range": [-1.0, 1.0],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "parse_args",
+        lambda: Namespace(
+            run_dir=str(run_dir),
+            checkpoint=None,
+            output_dir=str(output_dir),
+            device="mps",
+            register_only=True,
+            register_dataset="cifar10/generated_density_pilot",
+            dataset_workspace=str(tmp_path / "workspace"),
+            dataset_label="density_q005_pilot",
+            dataset_solver="euler",
+            dataset_base="generated",
+            dataset_split="generated",
+            dataset_atlas_tile_size=32,
+            dataset_atlas_size=2048,
+        ),
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "load_checkpoint",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("register-only should not load checkpoint")
+        ),
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_target",
+        lambda config: SimpleNamespace(metadata=lambda: {"name": "cifar10"}),
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_solvers",
+        lambda config: [SimpleNamespace(name="euler")],
+    )
+
+    def fake_register_generated_dataset(**kwargs):
+        calls.append(kwargs)
+        return {
+            "variant_id": kwargs["variant_id"],
+            "dataset_path": str(tmp_path / "dataset.parquet"),
+            "rows": 4096,
+        }
+
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "_register_generated_dataset",
+        fake_register_generated_dataset,
+    )
+
+    sample_checkpoint_cli.main()
+
+    assert len(calls) == 1
+    assert calls[0]["variant_id"] == "cifar10/generated_density_pilot"
+    assert calls[0]["output_dir"] == output_dir
+    assert calls[0]["summary"]["nfe"] == 64
+    updated = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert updated["registered_dataset"]["variant_id"] == "cifar10/generated_density_pilot"
 
 
 class _FakeCheckpointModel:

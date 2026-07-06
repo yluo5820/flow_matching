@@ -8,6 +8,11 @@ from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearP
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
 from fm_lab.training.losses import build_objective
+from fm_lab.training.sampling_guidance import (
+    DensityGuidanceConfig,
+    DensityGuidedDiffusionVelocity,
+    apply_density_prior_rescaling,
+)
 from fm_lab.training.trainer import (
     _validate_training_compatibility,
     sample_and_plot,
@@ -207,6 +212,103 @@ def test_sample_and_plot_converts_x_predictions_to_velocity(tmp_path) -> None:
 
     generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
     assert np.allclose(generated, 1.0)
+
+
+def test_sample_and_plot_applies_prior_guidance_to_sources(tmp_path) -> None:
+    config = _sampling_config(seed=222)
+    config["sampling"]["guidance"] = {"prior": {"scale": 0.25}}
+    source = GaussianSource(dim=2)
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=source,
+        model=ZeroVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    with torch.random.fork_rng():
+        torch.manual_seed(222)
+        expected_samples = 0.25 * source.sample(8)
+        expected_trajectories = 0.25 * source.sample(5)
+
+    source_reference = np.load(tmp_path / "samples" / "source_reference.npy")
+    trajectory_reference = np.load(tmp_path / "trajectories" / "source_reference_nfe3.npy")
+
+    assert np.allclose(source_reference, expected_samples.numpy())
+    assert np.allclose(trajectory_reference, expected_trajectories.numpy())
+    assert summary["guidance"]["prior"]["scale"] == 0.25
+
+
+def test_density_guided_diffusion_velocity_applies_score_bias() -> None:
+    path = GaussianDiffusionPath(schedule="linear")
+    model = DensityGuidedDiffusionVelocity(
+        ZeroVelocity(),
+        path,
+        DensityGuidanceConfig(quantile=0.8413447460685429),
+    )
+    x = torch.tensor([[1.0, 2.0]])
+    t = torch.full((1,), 0.5)
+
+    guided_velocity = model(x, t)
+
+    assert torch.allclose(guided_velocity, -2.4 * x, atol=1.0e-6)
+
+
+def test_density_guidance_skips_singular_initial_endpoint() -> None:
+    path = GaussianDiffusionPath(schedule="linear")
+    model = DensityGuidedDiffusionVelocity(
+        ZeroVelocity(),
+        path,
+        DensityGuidanceConfig(quantile=0.8413447460685429),
+    )
+    x = torch.tensor([[1.0, 2.0]])
+    t = torch.zeros(1)
+
+    guided_velocity = model(x, t)
+
+    assert torch.allclose(guided_velocity, -x, atol=1.0e-6)
+
+
+def test_density_guidance_rescales_gaussian_sources_to_median_shell() -> None:
+    source = GaussianSource(dim=2)
+    samples = torch.tensor([[3.0, 4.0], [1.0, 0.0]])
+
+    rescaled = apply_density_prior_rescaling(
+        samples,
+        source=source,
+        config=DensityGuidanceConfig(quantile=0.25),
+    )
+
+    expected_norm = float(np.sqrt(2.0 * np.log(2.0)))
+    assert torch.allclose(
+        rescaled.norm(dim=1),
+        torch.full((2,), expected_norm),
+        atol=1.0e-6,
+    )
+
+
+def test_sample_and_plot_rejects_density_guidance_without_diffusion_path(tmp_path) -> None:
+    config = _sampling_config(seed=333)
+    config["sampling"]["guidance"] = {"density": {"quantile": 0.25}}
+
+    try:
+        sample_and_plot(
+            config=config,
+            run_dir=tmp_path,
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            path=LinearPath(),
+            model=ZeroVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+    except ValueError as exc:
+        assert "Gaussian diffusion path" in str(exc)
+    else:
+        raise AssertionError("Expected unsupported density guidance to fail.")
 
 
 def test_sample_and_plot_writes_umap_trajectory_when_enabled(tmp_path, monkeypatch) -> None:
