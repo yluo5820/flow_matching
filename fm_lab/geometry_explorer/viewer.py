@@ -133,6 +133,13 @@ def _html_template(
       <select id="projection"></select>
     </div>
     <div class="control">
+      <label for="point-display-mode">Display</label>
+      <select id="point-display-mode">
+        <option value="thumbnails">Thumbnails</option>
+        <option value="class_color">Class color</option>
+      </select>
+    </div>
+    <div class="control">
       <span class="muted">Class</span>
       <details id="class-filter" class="class-menu">
         <summary id="class-filter-summary">All classes</summary>
@@ -223,6 +230,7 @@ previewTile.width = DATA.tileSize;
 previewTile.height = DATA.tileSize;
 const previewTileContext = previewTile.getContext("2d");
 const projectionSelect = document.getElementById("projection");
+const pointDisplayMode = document.getElementById("point-display-mode");
 const classFilterSummary = document.getElementById("class-filter-summary");
 const classOptions = document.getElementById("class-options");
 const labelElement = document.getElementById("sample-label");
@@ -290,6 +298,7 @@ projectionSelect.value = projection;
 slider.max = Math.max(0, (DATA.trajectory || []).length - 1);
 timeControl.style.display = DATA.mode === "trajectory" ? "grid" : "none";
 thumbnailToggle.checked = Boolean(DATA.options.drawThumbnailsDefault);
+pointDisplayMode.value = thumbnailToggle.checked ? "thumbnails" : "class_color";
 populateLegend(DATA.palette || {});
 
 function defaultProjectionName(projections) {
@@ -337,6 +346,11 @@ function parseColor(label) {
   const value = DATA.palette[label] || fallback;
   const match = value.match(/\d+/g) || [220, 220, 220];
   return [Number(match[0]) / 255, Number(match[1]) / 255, Number(match[2]) / 255];
+}
+
+function usesLabelTintedThumbnail(point) {
+  const dataset = String(point.dataset || "").toLowerCase();
+  return dataset === "mnist" || dataset === "fashion_mnist";
 }
 
 function pointCoordinate(point) {
@@ -427,16 +441,22 @@ function buildAtlasPointClouds(indices) {
     if (!texture || !atlasIndices.length) continue;
     const positions = new Float32Array(atlasIndices.length * 3);
     const offsets = new Float32Array(atlasIndices.length * 2);
+    const colors = new Float32Array(atlasIndices.length * 3);
+    const tints = new Float32Array(atlasIndices.length);
     atlasIndices.forEach((pointIndex, local) => {
       const point = DATA.points[pointIndex];
       const coordinate = pointCoordinate(point);
       positions.set([coordinate[0] || 0, coordinate[1] || 0, coordinate[2] || 0], local * 3);
       offsets[local * 2] = point.column * DATA.tileSize / DATA.atlasSize;
       offsets[local * 2 + 1] = point.row * DATA.tileSize / DATA.atlasSize;
+      colors.set(parseColor(point.label), local * 3);
+      tints[local] = usesLabelTintedThumbnail(point) ? 1.0 : 0.0;
     });
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute("offset", new THREE.BufferAttribute(offsets, 2));
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute("tint", new THREE.BufferAttribute(tints, 1));
     const material = new THREE.ShaderMaterial({
       uniforms: {
         textureAtlas: { value: texture },
@@ -445,10 +465,16 @@ function buildAtlasPointClouds(indices) {
       },
       vertexShader: `
         attribute vec2 offset;
+        attribute vec3 color;
+        attribute float tint;
         varying vec2 vOffset;
+        varying vec3 vColor;
+        varying float vTint;
         uniform float pointSize;
         void main() {
           vOffset = offset;
+          vColor = color;
+          vTint = tint;
           gl_PointSize = pointSize;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
@@ -457,11 +483,15 @@ function buildAtlasPointClouds(indices) {
         uniform sampler2D textureAtlas;
         uniform vec2 repeat;
         varying vec2 vOffset;
+        varying vec3 vColor;
+        varying float vTint;
         void main() {
           vec2 uv = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
           vec4 texel = texture2D(textureAtlas, vOffset + uv * repeat);
           if (texel.a < 0.04) discard;
-          gl_FragColor = texel;
+          float luminance = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
+          float mask = texel.a < 0.99 ? texel.a : luminance;
+          gl_FragColor = mix(texel, vec4(vColor, mask), vTint);
         }
       `,
       transparent: true,
@@ -492,6 +522,7 @@ function endpointSprite(point, pointIndex) {
     DATA.tileSize,
     DATA.tileSize
   );
+  if (usesLabelTintedThumbnail(point)) colorizeGrayscaleThumbnail(tileContext, point.label);
   const texture = new THREE.CanvasTexture(tile);
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, alphaTest: 0.05 });
@@ -500,6 +531,25 @@ function endpointSprite(point, pointIndex) {
   sprite.scale.set(1.15, 1.15, 1.15);
   sprite.userData = { kind: "endpoint", index: pointIndex };
   return sprite;
+}
+
+function colorizeGrayscaleThumbnail(context, label) {
+  const color = parseColor(label).map(value => Math.round(value * 255));
+  const image = context.getImageData(0, 0, DATA.tileSize, DATA.tileSize);
+  for (let index = 0; index < image.data.length; index += 4) {
+    const luminance = (
+      image.data[index] * 0.299 +
+      image.data[index + 1] * 0.587 +
+      image.data[index + 2] * 0.114
+    ) / 255;
+    const alpha = image.data[index + 3] / 255;
+    const mask = alpha < 0.99 ? alpha : luminance;
+    image.data[index] = color[0];
+    image.data[index + 1] = color[1];
+    image.data[index + 2] = color[2];
+    image.data[index + 3] = Math.round(mask * 255);
+  }
+  context.putImageData(image, 0, 0);
 }
 
 function initializeAtlasTextures() {
@@ -1062,8 +1112,16 @@ function onClassFilterChange() {
   rebuildScene();
 }
 
+function syncPointDisplayModeFromThumbnailToggle() {
+  pointDisplayMode.value = thumbnailToggle.checked ? "thumbnails" : "class_color";
+}
+
 projectionSelect.addEventListener("change", () => {
   projection = projectionSelect.value;
+  rebuildScene();
+});
+pointDisplayMode.addEventListener("change", () => {
+  thumbnailToggle.checked = pointDisplayMode.value === "thumbnails";
   rebuildScene();
 });
 slider.addEventListener("input", () => {
@@ -1072,9 +1130,13 @@ slider.addEventListener("input", () => {
   showSelection(pinnedSelection);
   rebuildScene();
 });
-for (const control of [showTarget, showGenerated, showTrajectory, thumbnailToggle]) {
+for (const control of [showTarget, showGenerated, showTrajectory]) {
   control.addEventListener("change", rebuildScene);
 }
+thumbnailToggle.addEventListener("change", () => {
+  syncPointDisplayModeFromThumbnailToggle();
+  rebuildScene();
+});
 sidebarSplitter.addEventListener("pointerdown", event => startLayoutDrag("sidebar", event));
 dockSplitter.addEventListener("pointerdown", event => startLayoutDrag("dock", event));
 renderer.domElement.addEventListener("pointerdown", event => {

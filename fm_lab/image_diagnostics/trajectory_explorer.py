@@ -20,7 +20,7 @@ from fm_lab.image_diagnostics.explorer_payload import (
     normalize_coordinate_arrays,
     palette_payload,
 )
-from fm_lab.image_diagnostics.palette import LABEL_PALETTE
+from fm_lab.image_diagnostics.palette import categorical_color
 
 
 def write_trajectory_explorer_html(
@@ -345,5 +345,5 @@ def _palette_with_trajectory_labels(
     updated = dict(palette)
     for label in trajectory_labels:
         if label not in updated:
-            updated[label] = LABEL_PALETTE[len(updated) % len(LABEL_PALETTE)]
+            updated[label] = categorical_color(len(updated))
     return updated

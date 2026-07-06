@@ -30,7 +30,7 @@ from fm_lab.image_diagnostics.explorer_viewer import (
     class_filter_html,
     shared_explorer_script,
 )
-from fm_lab.image_diagnostics.palette import LABEL_PALETTE
+from fm_lab.image_diagnostics.palette import categorical_palette
 
 ATLAS_COMPACTION_THRESHOLD = 32 * 1024 * 1024
 ATLAS_WEBP_QUALITY = 90
@@ -99,10 +99,7 @@ def prepare_sprite_atlases(
         {str(value) for value in prepared.get("label", pd.Series(dtype=str))},
         key=_natural_sort_key,
     )
-    palette = {
-        label: LABEL_PALETTE[index % len(LABEL_PALETTE)]
-        for index, label in enumerate(labels)
-    }
+    palette = categorical_palette(labels)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     digest = _atlas_digest(
@@ -169,10 +166,7 @@ def prepare_array_sprite_atlases(
         {str(value) for value in prepared.get("label", pd.Series(dtype=str))},
         key=_natural_sort_key,
     )
-    palette = {
-        label: LABEL_PALETTE[index % len(LABEL_PALETTE)]
-        for index, label in enumerate(labels)
-    }
+    palette = categorical_palette(labels)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     digest = _array_atlas_digest(
@@ -473,10 +467,7 @@ def _prepacked_atlas_bundle(frame: pd.DataFrame) -> AtlasBundle | None:
         {str(value) for value in prepared.get("label", pd.Series(dtype=str))},
         key=_natural_sort_key,
     )
-    palette = {
-        label: LABEL_PALETTE[index % len(LABEL_PALETTE)]
-        for index, label in enumerate(labels)
-    }
+    palette = categorical_palette(labels)
     return AtlasBundle(
         frame=prepared,
         atlas_paths=atlas_paths,

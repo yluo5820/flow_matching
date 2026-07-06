@@ -49,6 +49,7 @@ from fm_lab.image_diagnostics.metadata_loader import load_image_metadata
 from fm_lab.image_diagnostics.mnist_reference_projections import (
     compute_mnist_reference_projections,
 )
+from fm_lab.image_diagnostics.palette import LABEL_PALETTE, categorical_palette
 from fm_lab.image_diagnostics.projection_diagnostics import (
     compute_projection_diagnostics,
 )
@@ -59,6 +60,7 @@ from fm_lab.image_diagnostics.projections import (
 )
 from fm_lab.image_diagnostics.runner import run_diagnostics_build
 from fm_lab.image_diagnostics.three_explorer import build_three_html
+from fm_lab.utils.config import load_config
 
 
 def test_config_defaults_to_raw_features_without_model_download() -> None:
@@ -86,6 +88,14 @@ def test_config_defaults_to_raw_features_without_model_download() -> None:
 
 def test_input_config_does_not_sample_by_default() -> None:
     assert InputConfig().max_samples is None
+
+
+def test_categorical_palette_extends_without_changing_original_colors() -> None:
+    labels = [f"class_{index}" for index in range(25)]
+    palette = categorical_palette(labels)
+
+    assert [palette[label] for label in labels[: len(LABEL_PALETTE)]] == LABEL_PALETTE
+    assert len(set(palette.values())) == len(labels)
 
 
 def test_numpy_config_accepts_rgb_image_shape() -> None:
@@ -867,6 +877,32 @@ def test_three_renderer_accepts_mixed_projection_dimensions() -> None:
     )
 
     assert [variant.n_components for variant in config.projection.variants] == [2, 3]
+
+
+def test_geometry_raw_pixels_view_keeps_tsne_manual() -> None:
+    raw = load_config("configs/geometry_explorer/views/raw_pixels.yaml")
+    raw["id_estimation"]["config_path"] = "__auto__"
+    raw_with_tsne = load_config("configs/geometry_explorer/views/raw_pixels_with_tsne.yaml")
+    raw_with_tsne["id_estimation"]["config_path"] = "__auto__"
+
+    config = diagnostics_config_from_dict(raw)
+    config_with_tsne = diagnostics_config_from_dict(raw_with_tsne)
+
+    assert [
+        (variant.key, variant.method, variant.n_components)
+        for variant in config.projection.variants
+    ] == [
+        ("umap_3d", "umap", 3),
+        ("pca_3d", "pca", 3),
+    ]
+    assert [
+        (variant.key, variant.method, variant.n_components)
+        for variant in config_with_tsne.projection.variants
+    ] == [
+        ("umap_3d", "umap", 3),
+        ("tsne_3d", "tsne", 3),
+    ]
+    assert config_with_tsne.projection.variants[1].pca_components == 50
 
 
 def test_projection_diagnostics_follow_each_projection() -> None:

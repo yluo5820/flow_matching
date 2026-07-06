@@ -117,15 +117,32 @@ def _atlas_size(bundle: AtlasBundle) -> int:
 def _load_three_source(directory: Path) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"three-{THREE_VERSION}.min.js"
-    if not path.exists():
-        with NamedTemporaryFile(dir=directory, delete=False) as temporary:
-            temporary_path = Path(temporary.name)
-        try:
-            urllib.request.urlretrieve(THREE_URL, temporary_path)  # noqa: S310
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+
+    for cached_path in _three_cache_candidates(directory):
+        if cached_path.exists():
+            source = cached_path.read_text(encoding="utf-8")
+            path.write_text(source, encoding="utf-8")
+            return source
+
+    with NamedTemporaryFile(dir=directory, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        urllib.request.urlretrieve(THREE_URL, temporary_path)  # noqa: S310
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return path.read_text(encoding="utf-8")
+
+
+def _three_cache_candidates(directory: Path) -> tuple[Path, ...]:
+    filename = f"three-{THREE_VERSION}.min.js"
+    return (
+        directory / filename,
+        Path("outputs/geometry_explorer/assets/vendor") / filename,
+        Path("outputs/geometry_explorer/vendor") / filename,
+    )
 
 
 def _html_template(
