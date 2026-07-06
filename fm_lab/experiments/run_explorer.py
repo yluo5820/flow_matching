@@ -8,8 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from fm_lab.experiments.factory import resolve_device
 from fm_lab.geometry_explorer.bundles import load_projection_group_diagnostics
 from fm_lab.geometry_explorer.display import metric_label
+from fm_lab.geometry_explorer.mnist_labeling import (
+    label_fashion_mnist_dataset_variant,
+    label_mnist_dataset_variant,
+)
 from fm_lab.geometry_explorer.model_diagnostics import build_model_diagnostics
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
@@ -84,6 +89,103 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Reserved feature selector for future configs.",
     )
+
+    registered_views = subparsers.add_parser(
+        "build-registered-views",
+        help="Build projection views for currently registered dataset variants.",
+    )
+    registered_views.add_argument(
+        "--view-config",
+        default=str(DEFAULT_VIEW_CONFIG),
+        help="Projection view YAML config to apply to each registered dataset.",
+    )
+    registered_views.add_argument(
+        "--dataset",
+        action="append",
+        default=None,
+        help="Only build this registered dataset variant id. Repeatable.",
+    )
+    registered_views.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the registered dataset view build plan without running it.",
+    )
+
+    label_mnist = subparsers.add_parser(
+        "label-mnist",
+        help="Annotate an MNIST variant with classifier-predicted digit labels.",
+    )
+    label_mnist.add_argument("--dataset", required=True, help="Dataset variant id.")
+    label_mnist.add_argument(
+        "--data-root",
+        default="data/mnist",
+        help="MNIST IDX root used to train/cache the classifier.",
+    )
+    label_mnist.add_argument(
+        "--normalize",
+        default="auto",
+        choices=("auto", "zero_one", "minus_one_one"),
+        help="Classifier data normalization. Default infers from the dataset value range.",
+    )
+    label_mnist.add_argument(
+        "--classifier-checkpoint",
+        default="artifacts/mnist_classifier.pt",
+        help="Classifier checkpoint cache path. Normalization suffix is added automatically.",
+    )
+    label_mnist.add_argument("--classifier-steps", type=int, default=1000)
+    label_mnist.add_argument("--classifier-batch-size", type=int, default=256)
+    label_mnist.add_argument("--classifier-eval-samples", type=int, default=2048)
+    label_mnist.add_argument("--classifier-lr", type=float, default=1.0e-3)
+    label_mnist.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=0.6,
+        help="Confidence cutoff for classifier_outlier_label metadata.",
+    )
+    label_mnist.add_argument(
+        "--keep-existing-label",
+        action="store_true",
+        help="Write classifier metadata without replacing the visible label column.",
+    )
+    label_mnist.add_argument("--device", default="auto", help="auto, cpu, cuda, or mps.")
+
+    label_fashion = subparsers.add_parser(
+        "label-fashion-mnist",
+        help="Annotate a Fashion-MNIST variant with classifier-predicted class labels.",
+    )
+    label_fashion.add_argument("--dataset", required=True, help="Dataset variant id.")
+    label_fashion.add_argument(
+        "--data-root",
+        default="data/fashion_mnist",
+        help="Fashion-MNIST IDX root used to train/cache the classifier.",
+    )
+    label_fashion.add_argument(
+        "--normalize",
+        default="auto",
+        choices=("auto", "zero_one", "minus_one_one"),
+        help="Classifier data normalization. Default infers from the dataset value range.",
+    )
+    label_fashion.add_argument(
+        "--classifier-checkpoint",
+        default="artifacts/fashion_mnist_classifier.pt",
+        help="Classifier checkpoint cache path. Normalization suffix is added automatically.",
+    )
+    label_fashion.add_argument("--classifier-steps", type=int, default=1000)
+    label_fashion.add_argument("--classifier-batch-size", type=int, default=256)
+    label_fashion.add_argument("--classifier-eval-samples", type=int, default=2048)
+    label_fashion.add_argument("--classifier-lr", type=float, default=1.0e-3)
+    label_fashion.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=0.6,
+        help="Confidence cutoff for classifier_outlier_label metadata.",
+    )
+    label_fashion.add_argument(
+        "--keep-existing-label",
+        action="store_true",
+        help="Write classifier metadata without replacing the visible label column.",
+    )
+    label_fashion.add_argument("--device", default="auto", help="auto, cpu, cuda, or mps.")
 
     trajectory = subparsers.add_parser(
         "build-trajectory",
@@ -231,6 +333,65 @@ def main() -> None:
         print(f"Built projection view: {result['view_id']}")
         print(f"Explorer data: {result['explorer_data']}")
         return
+    if args.command == "build-registered-views":
+        _build_registered_views(args, workspace)
+        return
+    if args.command == "label-mnist":
+        data_root = Path(args.data_root).expanduser()
+        if not data_root.is_absolute():
+            data_root = PROJECT_ROOT / data_root
+        result = label_mnist_dataset_variant(
+            variant_id=args.dataset,
+            workspace=workspace,
+            data_root=data_root,
+            normalize=args.normalize,
+            classifier_checkpoint=Path(args.classifier_checkpoint),
+            classifier_steps=args.classifier_steps,
+            classifier_batch_size=args.classifier_batch_size,
+            classifier_eval_samples=args.classifier_eval_samples,
+            classifier_lr=args.classifier_lr,
+            low_confidence_threshold=args.low_confidence_threshold,
+            replace_label=not args.keep_existing_label,
+            device=resolve_device(args.device),
+        )
+        print(f"Labeled dataset variant: {result['variant_id']}")
+        print(f"Dataset index: {result['dataset_path']}")
+        print(f"Classifier checkpoint: {result['classifier']['checkpoint_path']}")
+        print(f"Classifier test accuracy: {result['classifier']['test_accuracy']:.4f}")
+        print(
+            "Low-confidence samples: "
+            f"{result['low_confidence_count']} "
+            f"({result['low_confidence_fraction']:.2%})"
+        )
+        return
+    if args.command == "label-fashion-mnist":
+        data_root = Path(args.data_root).expanduser()
+        if not data_root.is_absolute():
+            data_root = PROJECT_ROOT / data_root
+        result = label_fashion_mnist_dataset_variant(
+            variant_id=args.dataset,
+            workspace=workspace,
+            data_root=data_root,
+            normalize=args.normalize,
+            classifier_checkpoint=Path(args.classifier_checkpoint),
+            classifier_steps=args.classifier_steps,
+            classifier_batch_size=args.classifier_batch_size,
+            classifier_eval_samples=args.classifier_eval_samples,
+            classifier_lr=args.classifier_lr,
+            low_confidence_threshold=args.low_confidence_threshold,
+            replace_label=not args.keep_existing_label,
+            device=resolve_device(args.device),
+        )
+        print(f"Labeled dataset variant: {result['variant_id']}")
+        print(f"Dataset index: {result['dataset_path']}")
+        print(f"Classifier checkpoint: {result['classifier']['checkpoint_path']}")
+        print(f"Classifier test accuracy: {result['classifier']['test_accuracy']:.4f}")
+        print(
+            "Low-confidence samples: "
+            f"{result['low_confidence_count']} "
+            f"({result['low_confidence_fraction']:.2%})"
+        )
+        return
     if args.command == "build-trajectory":
         result = build_and_register_trajectory_view(
             run_dir=args.run_dir,
@@ -351,6 +512,36 @@ def _build_all(args: argparse.Namespace, workspace: Path) -> None:
             )
             print(f"Built projection view: {result['view_id']}")
             print(f"Explorer data: {result['explorer_data']}")
+
+
+def _build_registered_views(args: argparse.Namespace, workspace: Path) -> None:
+    view_config = Path(args.view_config).expanduser()
+    registry = GeometryRegistry(workspace)
+    selected = set(args.dataset or [])
+    variants = registry.dataset_variants()
+    if selected:
+        variants = [variant for variant in variants if variant.variant_id in selected]
+    if not variants:
+        raise SystemExit("No registered dataset variants matched the request.")
+
+    if args.dry_run:
+        print("Registered dataset view build plan")
+        print(f"Workspace: {workspace}")
+        print(f"View config: {view_config}")
+        print("Datasets:")
+        for variant in variants:
+            print(f"  - {variant.variant_id} ({variant.row_count:,} rows)")
+        return
+
+    for variant in variants:
+        result = build_projection_view(
+            variant_id=variant.variant_id,
+            config_path=view_config,
+            workspace=workspace,
+            project_root=PROJECT_ROOT,
+        )
+        print(f"Built projection view: {result['view_id']}")
+        print(f"Explorer data: {result['explorer_data']}")
 
 
 def _summarize(args: argparse.Namespace, workspace: Path) -> None:

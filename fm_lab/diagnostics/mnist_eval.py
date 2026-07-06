@@ -15,6 +15,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from fm_lab.data import MNISTImages
+from fm_lab.image_diagnostics.config import InputConfig
+from fm_lab.image_diagnostics.dataset_loader import load_dataset
 from fm_lab.utils.config import ConfigError, load_config
 from fm_lab.utils.logging import write_json
 
@@ -35,6 +37,20 @@ class MNISTEvalConfig:
     classifier_lr: float = 1.0e-3
     skip_classifier: bool = False
     device: torch.device = torch.device("cpu")
+
+
+@dataclass
+class LabeledImageTensors:
+    images: torch.Tensor
+    labels: torch.Tensor
+
+    def sample(self, n: int, device: torch.device | str | None = None) -> torch.Tensor:
+        count = min(n, self.images.shape[0])
+        indices = torch.randperm(self.images.shape[0])[:count]
+        samples = self.images[indices]
+        if device is not None:
+            samples = samples.to(torch.device(device))
+        return samples
 
 
 def evaluate_mnist_run(eval_config: MNISTEvalConfig) -> dict[str, Any]:
@@ -127,6 +143,8 @@ class MNISTClassifier(nn.Module):
     def __init__(self, image_shape: tuple[int, int] = (28, 28)) -> None:
         super().__init__()
         self.image_shape = image_shape
+        feature_height = (image_shape[0] + 3) // 4
+        feature_width = (image_shape[1] + 3) // 4
         self.net = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.SiLU(),
@@ -134,13 +152,206 @@ class MNISTClassifier(nn.Module):
             nn.SiLU(),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.SiLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
+            nn.Linear(128 * feature_height * feature_width, 128),
+            nn.SiLU(),
             nn.Linear(128, 10),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x.reshape(x.shape[0], 1, *self.image_shape))
+
+
+def load_or_train_mnist_classifier(
+    *,
+    data_root: str | Path = "data/mnist",
+    normalize: str = "minus_one_one",
+    download: bool = False,
+    checkpoint_path: Path = Path("artifacts/mnist_classifier.pt"),
+    steps: int = 1000,
+    batch_size: int = 256,
+    eval_samples: int = 2048,
+    lr: float = 1.0e-3,
+    device: torch.device | None = None,
+) -> tuple[MNISTClassifier, dict[str, Any]]:
+    """Load a cached MNIST classifier or train one on the requested normalization."""
+
+    device = torch.device("cpu") if device is None else device
+    config = {
+        "data": {
+            "name": "mnist",
+            "root": str(data_root),
+            "download": download,
+            "normalize": normalize,
+        }
+    }
+    train_data = _build_mnist_from_config(config, train=True, dequantize=False)
+    test_data = _build_mnist_from_config(config, train=False, dequantize=False)
+    resolved_checkpoint = _classifier_checkpoint_path(checkpoint_path, config)
+    classifier = MNISTClassifier().to(device)
+
+    return _load_or_train_classifier(
+        classifier=classifier,
+        train_data=train_data,
+        test_data=test_data,
+        checkpoint_path=resolved_checkpoint,
+        normalize=normalize,
+        steps=steps,
+        batch_size=batch_size,
+        eval_samples=eval_samples,
+        lr=lr,
+        device=device,
+    )
+
+
+def load_or_train_fashion_mnist_classifier(
+    *,
+    data_root: str | Path = "data/fashion_mnist",
+    normalize: str = "minus_one_one",
+    download: bool = False,
+    checkpoint_path: Path = Path("artifacts/fashion_mnist_classifier.pt"),
+    steps: int = 1000,
+    batch_size: int = 256,
+    eval_samples: int = 2048,
+    lr: float = 1.0e-3,
+    device: torch.device | None = None,
+) -> tuple[MNISTClassifier, dict[str, Any]]:
+    """Load or train a small CNN classifier for Fashion-MNIST labels."""
+
+    device = torch.device("cpu") if device is None else device
+    train_data = _build_fashion_mnist_tensors(
+        data_root=data_root,
+        split="train",
+        normalize=normalize,
+        download=download,
+    )
+    test_data = _build_fashion_mnist_tensors(
+        data_root=data_root,
+        split="test",
+        normalize=normalize,
+        download=download,
+    )
+    config = {"data": {"normalize": normalize}}
+    resolved_checkpoint = _classifier_checkpoint_path(checkpoint_path, config)
+    classifier = MNISTClassifier().to(device)
+
+    return _load_or_train_classifier(
+        classifier=classifier,
+        train_data=train_data,
+        test_data=test_data,
+        checkpoint_path=resolved_checkpoint,
+        normalize=normalize,
+        steps=steps,
+        batch_size=batch_size,
+        eval_samples=eval_samples,
+        lr=lr,
+        device=device,
+    )
+
+
+def _load_or_train_classifier(
+    *,
+    classifier: MNISTClassifier,
+    train_data: MNISTImages | LabeledImageTensors,
+    test_data: MNISTImages | LabeledImageTensors,
+    checkpoint_path: Path,
+    normalize: str,
+    steps: int,
+    batch_size: int,
+    eval_samples: int,
+    lr: float,
+    device: torch.device,
+) -> tuple[MNISTClassifier, dict[str, Any]]:
+    trained_now = False
+    if checkpoint_path.exists():
+        payload = _load_classifier_payload(
+            classifier=classifier,
+            checkpoint_path=checkpoint_path,
+            device=device,
+        )
+        if payload is not None:
+            classifier_steps = int(payload.get("steps", 0))
+        else:
+            classifier_steps = steps
+            _train_classifier(
+                classifier=classifier,
+                data=train_data,
+                steps=steps,
+                batch_size=batch_size,
+                lr=lr,
+                device=device,
+            )
+            torch.save(
+                {
+                    "model_state_dict": classifier.state_dict(),
+                    "steps": steps,
+                    "normalize": normalize,
+                },
+                checkpoint_path,
+            )
+            trained_now = True
+    else:
+        classifier_steps = steps
+        _train_classifier(
+            classifier=classifier,
+            data=train_data,
+            steps=steps,
+            batch_size=batch_size,
+            lr=lr,
+            device=device,
+        )
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": classifier.state_dict(),
+                "steps": steps,
+                "normalize": normalize,
+            },
+            checkpoint_path,
+        )
+        trained_now = True
+
+    classifier.eval()
+    accuracy = _classifier_accuracy(
+        classifier=classifier,
+        data=test_data,
+        n_samples=eval_samples,
+        batch_size=batch_size,
+        device=device,
+    )
+    metadata = {
+        "checkpoint_path": str(checkpoint_path),
+        "trained_now": trained_now,
+        "classifier_steps": classifier_steps,
+        "test_accuracy": accuracy,
+        "normalize": normalize,
+    }
+    return classifier, metadata
+
+
+@torch.no_grad()
+def predict_mnist_classifier(
+    *,
+    classifier: MNISTClassifier,
+    samples: torch.Tensor,
+    batch_size: int,
+    device: torch.device,
+) -> dict[str, np.ndarray]:
+    """Predict MNIST digit labels and uncertainty summaries for flattened samples."""
+
+    probabilities = []
+    for start in range(0, samples.shape[0], batch_size):
+        x = samples[start : start + batch_size].to(device)
+        probabilities.append(torch.softmax(classifier(x), dim=1).cpu())
+    probs = torch.cat(probabilities, dim=0)
+    top2 = probs.topk(k=2, dim=1).values
+    entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=1) / math.log(10)
+    return {
+        "predicted": probs.argmax(dim=1).numpy().astype(np.int64),
+        "confidence": top2[:, 0].numpy().astype(np.float32),
+        "margin": (top2[:, 0] - top2[:, 1]).numpy().astype(np.float32),
+        "entropy": entropy.numpy().astype(np.float32),
+    }
 
 
 def _evaluate_with_classifier(
@@ -161,9 +372,32 @@ def _evaluate_with_classifier(
 
     trained_now = False
     if checkpoint_path.exists():
-        payload = torch.load(checkpoint_path, map_location=device)
-        classifier.load_state_dict(payload["model_state_dict"])
-        classifier_steps = int(payload.get("steps", 0))
+        payload = _load_classifier_payload(
+            classifier=classifier,
+            checkpoint_path=checkpoint_path,
+            device=device,
+        )
+        if payload is not None:
+            classifier_steps = int(payload.get("steps", 0))
+        else:
+            classifier_steps = steps
+            _train_classifier(
+                classifier=classifier,
+                data=train_data,
+                steps=steps,
+                batch_size=batch_size,
+                lr=lr,
+                device=device,
+            )
+            torch.save(
+                {
+                    "model_state_dict": classifier.state_dict(),
+                    "steps": steps,
+                    "normalize": config.get("data", {}).get("normalize", "zero_one"),
+                },
+                checkpoint_path,
+            )
+            trained_now = True
     else:
         classifier_steps = steps
         _train_classifier(
@@ -216,10 +450,24 @@ def _evaluate_with_classifier(
     }
 
 
+def _load_classifier_payload(
+    *,
+    classifier: MNISTClassifier,
+    checkpoint_path: Path,
+    device: torch.device,
+) -> dict[str, Any] | None:
+    payload = torch.load(checkpoint_path, map_location=device)
+    try:
+        classifier.load_state_dict(payload["model_state_dict"])
+    except RuntimeError:
+        return None
+    return payload
+
+
 def _train_classifier(
     *,
     classifier: MNISTClassifier,
-    data: MNISTImages,
+    data: MNISTImages | LabeledImageTensors,
     steps: int,
     batch_size: int,
     lr: float,
@@ -243,7 +491,7 @@ def _train_classifier(
 def _classifier_accuracy(
     *,
     classifier: MNISTClassifier,
-    data: MNISTImages,
+    data: MNISTImages | LabeledImageTensors,
     n_samples: int,
     batch_size: int,
     device: torch.device,
@@ -306,6 +554,38 @@ def _build_mnist_from_config(
         normalize=str(data_config.get("normalize", "zero_one")),
         dequantize=dequantize,
     )
+
+
+def _build_fashion_mnist_tensors(
+    *,
+    data_root: str | Path,
+    split: str,
+    normalize: str,
+    download: bool,
+) -> LabeledImageTensors:
+    bundle = load_dataset(
+        InputConfig(
+            type="fashion_mnist",
+            dataset_root=str(data_root),
+            split=split,
+            order="source",
+            thumbnail_mode="files",
+            download=download,
+        )
+    )
+    if bundle.vectors is None:
+        raise ConfigError("Fashion-MNIST classifier expected raw image vectors.")
+    images = torch.as_tensor(np.asarray(bundle.vectors, dtype=np.float32))
+    normalized = normalize.lower()
+    if normalized in {"minus_one_one", "-1_1", "centered"}:
+        images = 2.0 * images - 1.0
+    elif normalized not in {"zero_one", "01", "unit"}:
+        raise ValueError(f"Unsupported Fashion-MNIST normalization: {normalize}")
+    labels = torch.as_tensor(
+        bundle.metadata["label_id"].to_numpy(copy=True),
+        dtype=torch.int64,
+    )
+    return LabeledImageTensors(images=images, labels=labels)
 
 
 def _pixel_stats(samples: torch.Tensor, image_range: tuple[float, float]) -> dict[str, float]:
