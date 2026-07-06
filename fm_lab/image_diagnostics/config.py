@@ -20,6 +20,7 @@ class InputConfig:
     thumbnail_mode: str = "files"
     max_samples: int | None = None
     sample_seed: int = 42
+    sample_strategy: str = "random"
     download: bool = False
     data_path: str = ""
     labels_path: str | None = None
@@ -203,7 +204,13 @@ def apply_diagnostics_overrides(
     input_type = str(input_values.get("type", "image_metadata"))
     selected_path = input_path or experiment_dir
     if selected_path is not None:
-        if input_type in {"mnist", "fashion_mnist", "cifar10"}:
+        if input_type in {
+            "mnist",
+            "fashion_mnist",
+            "cifar10",
+            "cifar100",
+            "cinic10",
+        }:
             input_values["dataset_root"] = selected_path
         elif input_type == "numpy":
             input_values["data_path"] = selected_path
@@ -233,17 +240,24 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
         "mnist",
         "fashion_mnist",
         "cifar10",
+        "cifar100",
+        "cinic10",
         "numpy",
         "image_metadata",
     }:
         raise ConfigError(f"Unsupported input.type: {input_config.type}")
     if input_config.max_samples is not None and input_config.max_samples < 1:
         raise ConfigError("input.max_samples must be positive or null.")
-    if input_config.type in {"mnist", "fashion_mnist", "cifar10"}:
+    if input_config.sample_strategy not in {"random", "stratified"}:
+        raise ConfigError("input.sample_strategy must be random or stratified.")
+    if input_config.type in {"mnist", "fashion_mnist", "cifar10", "cifar100"}:
         if input_config.split not in {"train", "test", "all"}:
             raise ConfigError(
                 f"{input_config.type} input.split must be train, test, or all."
             )
+    if input_config.type == "cinic10":
+        if input_config.split not in {"train", "valid", "test", "all"}:
+            raise ConfigError("cinic10 input.split must be train, valid, test, or all.")
     if input_config.type in {"mnist", "fashion_mnist"}:
         dataset_name = (
             "MNIST" if input_config.type == "mnist" else "Fashion-MNIST"
@@ -269,6 +283,20 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
             )
         if input_config.thumbnail_mode not in {"files", "atlas"}:
             raise ConfigError("CIFAR-10 input.thumbnail_mode must be files or atlas.")
+    elif input_config.type == "cifar100":
+        if input_config.order != "source":
+            raise ConfigError("CIFAR-100 input.order must be source.")
+        if input_config.color_mode != "rgb":
+            raise ConfigError("CIFAR-100 input.color_mode must be rgb.")
+        if input_config.thumbnail_mode not in {"files", "atlas"}:
+            raise ConfigError("CIFAR-100 input.thumbnail_mode must be files or atlas.")
+    elif input_config.type == "cinic10":
+        if input_config.order != "source":
+            raise ConfigError("CINIC-10 input.order must be source.")
+        if input_config.color_mode != "rgb":
+            raise ConfigError("CINIC-10 input.color_mode must be rgb.")
+        if input_config.thumbnail_mode not in {"files", "atlas"}:
+            raise ConfigError("CINIC-10 input.thumbnail_mode must be files or atlas.")
     elif input_config.type == "numpy":
         if not input_config.data_path:
             raise ConfigError("NumPy input requires input.data_path.")

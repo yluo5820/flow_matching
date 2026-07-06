@@ -1,0 +1,14 @@
+family: cifar100
+variant: original
+base: original
+split: all
+seed: 42
+
+input:
+  dataset_root: data/cifar100
+  split: all
+  color_mode: rgb
+  thumbnail_mode: atlas
+  download: false
+
+selection: {}

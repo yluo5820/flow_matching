@@ -164,7 +164,14 @@ def load_variant_bundle(
     )
 
 
-_SUPPORTED_FAMILIES = {"mnist", "fashion_mnist", "cifar10", "cifar10_grayscale"}
+_SUPPORTED_FAMILIES = {
+    "mnist",
+    "fashion_mnist",
+    "cifar10",
+    "cifar10_grayscale",
+    "cifar100",
+    "cinic10",
+}
 
 
 def _input_config(config: DatasetVariantConfig) -> InputConfig:
@@ -179,6 +186,14 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
             "color_mode",
             "grayscale" if config.family == "cifar10_grayscale" else "rgb",
         )
+    elif config.family == "cifar100":
+        values.setdefault("type", "cifar100")
+        values.setdefault("dataset_root", "data/cifar100")
+        values.setdefault("color_mode", "rgb")
+    elif config.family == "cinic10":
+        values.setdefault("type", "cinic10")
+        values.setdefault("dataset_root", "data/cinic10")
+        values.setdefault("color_mode", "rgb")
     else:
         values.setdefault("type", "mnist")
         values.setdefault("dataset_root", "data/mnist")
@@ -186,12 +201,12 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
     values.setdefault("order", "mldata" if config.split == "all" else "source")
     values.setdefault("thumbnail_mode", "atlas")
     values.setdefault("download", False)
-    values["max_samples"] = None
+    values.setdefault("max_samples", None)
     return InputConfig(**values)
 
 
 def _default_image_shape(family: str) -> tuple[int, ...]:
-    if family == "cifar10":
+    if family in {"cifar10", "cifar100", "cinic10"}:
         return (32, 32, 3)
     if family == "cifar10_grayscale":
         return (32, 32)

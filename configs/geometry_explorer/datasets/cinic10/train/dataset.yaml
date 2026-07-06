@@ -1,0 +1,14 @@
+family: cinic10
+variant: train
+base: original
+split: train
+seed: 42
+
+input:
+  dataset_root: data/cinic10
+  split: train
+  color_mode: rgb
+  thumbnail_mode: atlas
+  download: false
+
+selection: {}

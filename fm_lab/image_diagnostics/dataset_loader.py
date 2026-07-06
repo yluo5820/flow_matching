@@ -8,8 +8,10 @@ import logging
 import struct
 import tarfile
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -37,6 +39,14 @@ CIFAR10_LABELS = (
     "ship",
     "truck",
 )
+CIFAR100_URL = "https://www.cs.toronto.edu/~kriz/cifar-100-binary.tar.gz"
+CIFAR100_MD5 = "03b5dce01913d631647c71ecec9e9cb8"
+CIFAR100_DIRECTORY = "cifar-100-binary"
+CINIC10_ZIP_URL = "https://datashare.ed.ac.uk/download/DS_10283_3192.zip"
+CINIC10_ZIP = "DS_10283_3192.zip"
+CINIC10_ARCHIVE = "CINIC-10.tar.gz"
+CINIC10_LABELS = CIFAR10_LABELS
+CINIC10_SPLITS = ("train", "valid", "test")
 FASHION_MNIST_URL_ROOT = (
     "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
     "master/data/fashion"
@@ -88,6 +98,10 @@ def load_dataset(
         return _load_fashion_mnist(config, root, thumbnail_dir)
     if config.type == "cifar10":
         return _load_cifar10(config, root, thumbnail_dir)
+    if config.type == "cifar100":
+        return _load_cifar100(config, root, thumbnail_dir)
+    if config.type == "cinic10":
+        return _load_cinic10(config, root, thumbnail_dir)
     if config.type == "numpy":
         return _load_numpy(config, root, thumbnail_dir)
     return _load_image_metadata(config, root)
@@ -332,6 +346,168 @@ def _load_cifar10(
         ),
         total_rows=len(images),
         image_shape=image_shape,
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_cifar100(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    data_dir = _ensure_cifar100(
+        dataset_root,
+        split=config.split,
+        download=config.download,
+    )
+    label_names_source = _load_cifar100_label_names(data_dir)
+    images, labels, split_values, original_indices, source_files = (
+        _load_cifar100_arrays(config, data_dir)
+    )
+    indices = _sample_indices(len(images), config.max_samples, config.sample_seed)
+    selected_images = np.asarray(images[indices], dtype=np.uint8)
+    selected_labels = labels[indices].astype(int)
+    label_names = np.asarray(
+        [label_names_source[value] for value in selected_labels],
+        dtype=object,
+    )
+    dataset_name = "cifar100"
+    display_name = "CIFAR-100"
+    feature_images = selected_images
+    atlas_images = selected_images
+    vectors = selected_images.reshape(len(selected_images), -1)
+    image_shape = (32, 32, 3)
+    image_paths = [""] * len(indices)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            atlas_images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix=dataset_name,
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            feature_images,
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix=dataset_name,
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(indices)),
+            "image_path": image_paths,
+            "dataset": dataset_name,
+            "split": split_values[indices],
+            "label": label_names,
+            "label_id": selected_labels,
+            "color_mode": config.color_mode,
+            "family": label_names,
+            "prompt_id": [f"{dataset_name}_{value}" for value in label_names],
+            "prompt": [f"{display_name} {value}" for value in label_names],
+            "tags": [
+                [dataset_name, str(value), config.color_mode]
+                for value in label_names
+            ],
+            "source_index": indices,
+            "original_index": original_indices[indices],
+            "sample_type": "dataset",
+            "status": "success",
+            **atlas_metadata,
+        }
+    )
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{config.color_mode}:{indices.tolist()}",
+        ),
+        source_description=f"{display_name} {config.split} split at {dataset_root}",
+        total_rows=len(images),
+        image_shape=image_shape,
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_cinic10(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    source = _ensure_cinic10(
+        dataset_root,
+        split=config.split,
+        download=config.download,
+    )
+    entries = _cinic10_entries(source, config.split)
+    indices = _cinic10_sample_indices(
+        entries,
+        maximum=config.max_samples,
+        seed=config.sample_seed,
+        strategy=config.sample_strategy,
+    )
+    selected_entries = [entries[int(index)] for index in indices]
+    selected_images, selected_labels, split_values, original_indices = (
+        _load_cinic10_images(source, selected_entries)
+    )
+    label_names = np.asarray(
+        [CINIC10_LABELS[value] for value in selected_labels],
+        dtype=object,
+    )
+    dataset_name = "cinic10"
+    display_name = "CINIC-10"
+    vectors = selected_images.reshape(len(selected_images), -1)
+    image_paths = [""] * len(indices)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            selected_images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix=dataset_name,
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            selected_images,
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix=dataset_name,
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(indices)),
+            "image_path": image_paths,
+            "dataset": dataset_name,
+            "split": split_values,
+            "label": label_names,
+            "label_id": selected_labels,
+            "color_mode": config.color_mode,
+            "family": label_names,
+            "prompt_id": [f"{dataset_name}_{value}" for value in label_names],
+            "prompt": [f"{display_name} {value}" for value in label_names],
+            "tags": [
+                [dataset_name, str(value), config.color_mode]
+                for value in label_names
+            ],
+            "source_index": indices,
+            "original_index": original_indices,
+            "sample_type": "dataset",
+            "status": "success",
+            **atlas_metadata,
+        }
+    )
+    source_files = [source] if source.is_file() else _cinic10_split_paths(source, config.split)
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{config.color_mode}:{indices.tolist()}",
+        ),
+        source_description=f"{display_name} {config.split} split at {dataset_root}",
+        total_rows=len(entries),
+        image_shape=(32, 32, 3),
         value_range=(0.0, 255.0),
     )
 
@@ -588,6 +764,315 @@ def _load_cifar10_arrays(
         np.arange(len(images), dtype=int),
         source_files,
     )
+
+
+def _ensure_cifar100(
+    dataset_root: Path,
+    *,
+    split: str,
+    download: bool,
+) -> Path:
+    data_dir = dataset_root / CIFAR100_DIRECTORY
+    expected = _cifar100_paths(data_dir, split)
+    if all(path.is_file() for path in expected):
+        return data_dir
+    if not download:
+        raise ConfigError(
+            f"CIFAR-100 does not exist under {dataset_root}. "
+            "Set input.download: true to fetch it."
+        )
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    archive_path = dataset_root / "cifar-100-binary.tar.gz"
+    if not archive_path.exists() or _file_md5(archive_path) != CIFAR100_MD5:
+        partial_path = archive_path.with_suffix(f"{archive_path.suffix}.part")
+        if partial_path.exists() and _file_md5(partial_path) == CIFAR100_MD5:
+            partial_path.replace(archive_path)
+        else:
+            LOGGER.info("Downloading CIFAR-100 from %s", CIFAR100_URL)
+            _download_resumable(CIFAR100_URL, partial_path)
+            if _file_md5(partial_path) != CIFAR100_MD5:
+                partial_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "Downloaded CIFAR-100 archive failed its MD5 checksum."
+                )
+            partial_path.replace(archive_path)
+    _extract_cifar100_archive(archive_path, dataset_root)
+    if not all(path.is_file() for path in expected):
+        raise RuntimeError("CIFAR-100 archive did not contain the expected binary files.")
+    return data_dir
+
+
+def _cifar100_paths(data_dir: Path, split: str) -> list[Path]:
+    paths = [data_dir / "fine_label_names.txt"]
+    if split in {"train", "all"}:
+        paths.append(data_dir / "train.bin")
+    if split in {"test", "all"}:
+        paths.append(data_dir / "test.bin")
+    return paths
+
+
+def _extract_cifar100_archive(archive_path: Path, dataset_root: Path) -> None:
+    allowed = {
+        f"{CIFAR100_DIRECTORY}/train.bin",
+        f"{CIFAR100_DIRECTORY}/test.bin",
+        f"{CIFAR100_DIRECTORY}/fine_label_names.txt",
+        f"{CIFAR100_DIRECTORY}/coarse_label_names.txt",
+    }
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers()}
+        for name in allowed:
+            member = members.get(name)
+            if member is None or not member.isfile():
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                continue
+            destination = dataset_root / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source, destination.open("wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    output.write(chunk)
+
+
+def _load_cifar100_arrays(
+    config: InputConfig,
+    data_dir: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[Path]]:
+    if config.split == "all":
+        batches = [("train.bin", "train"), ("test.bin", "test")]
+    else:
+        batches = [(f"{config.split}.bin", config.split)]
+    image_parts = []
+    label_parts = []
+    split_parts = []
+    source_files = []
+    for filename, split in batches:
+        path = data_dir / filename
+        if not path.exists():
+            raise ConfigError(f"Missing CIFAR-100 batch: {path}")
+        records = np.fromfile(path, dtype=np.uint8)
+        if records.size % 3074:
+            raise ConfigError(f"Malformed CIFAR-100 batch: {path}")
+        records = records.reshape(-1, 3074)
+        labels = records[:, 1]
+        images = records[:, 2:].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+        image_parts.append(images)
+        label_parts.append(labels)
+        split_parts.append(np.asarray([split] * len(records), dtype=object))
+        source_files.append(path)
+    images = np.concatenate(image_parts)
+    return (
+        images,
+        np.concatenate(label_parts),
+        np.concatenate(split_parts),
+        np.arange(len(images), dtype=int),
+        source_files,
+    )
+
+
+def _load_cifar100_label_names(data_dir: Path) -> list[str]:
+    path = data_dir / "fine_label_names.txt"
+    if not path.exists():
+        raise ConfigError(f"Missing CIFAR-100 label names: {path}")
+    labels = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if len(labels) != 100:
+        raise ConfigError(f"CIFAR-100 label file must contain 100 labels: {path}")
+    return labels
+
+
+def _ensure_cinic10(
+    dataset_root: Path,
+    *,
+    split: str,
+    download: bool,
+) -> Path:
+    split_paths = _cinic10_split_paths(dataset_root, split)
+    if all(_cinic10_split_complete(path) for path in split_paths):
+        return dataset_root
+
+    archive_path = dataset_root / CINIC10_ARCHIVE
+    if archive_path.exists():
+        return archive_path
+
+    zip_path = dataset_root / CINIC10_ZIP
+    if not zip_path.exists() and download:
+        dataset_root.mkdir(parents=True, exist_ok=True)
+        LOGGER.info("Downloading CINIC-10 from %s", CINIC10_ZIP_URL)
+        _download_resumable(CINIC10_ZIP_URL, zip_path)
+    if zip_path.exists():
+        _extract_cinic10_archive_from_zip(zip_path, archive_path)
+        if archive_path.exists():
+            return archive_path
+
+    raise ConfigError(
+        f"CINIC-10 does not exist under {dataset_root}. Expected extracted "
+        f"split folders or {CINIC10_ARCHIVE}."
+    )
+
+
+def _cinic10_split_paths(dataset_root: Path, split: str) -> list[Path]:
+    return [dataset_root / value for value in _cinic10_splits(split)]
+
+
+def _cinic10_splits(split: str) -> tuple[str, ...]:
+    return CINIC10_SPLITS if split == "all" else (split,)
+
+
+def _cinic10_split_complete(path: Path) -> bool:
+    return path.is_dir() and all((path / label).is_dir() for label in CINIC10_LABELS)
+
+
+def _extract_cinic10_archive_from_zip(zip_path: Path, archive_path: Path) -> None:
+    with zipfile.ZipFile(zip_path) as archive:
+        try:
+            with archive.open(CINIC10_ARCHIVE) as source, archive_path.open("wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    output.write(chunk)
+        except KeyError as exc:
+            raise ConfigError(f"{zip_path} does not contain {CINIC10_ARCHIVE}.") from exc
+
+
+def _cinic10_entries(source: Path, split: str) -> list[tuple[str, str, int, int]]:
+    splits = set(_cinic10_splits(split))
+    label_ids = {label: index for index, label in enumerate(CINIC10_LABELS)}
+    entries: list[tuple[str, str, int, int]] = []
+    if source.is_file():
+        with tarfile.open(source, mode="r:gz") as archive:
+            names = sorted(member.name for member in archive.getmembers() if member.isfile())
+        for name in names:
+            parsed = _parse_cinic10_path(name, splits, label_ids)
+            if parsed is not None:
+                entries.append((*parsed, len(entries)))
+    else:
+        for split_name in _cinic10_splits(split):
+            for label, label_id in label_ids.items():
+                for path in sorted((source / split_name / label).glob("*.png")):
+                    entries.append((str(path), split_name, label_id, len(entries)))
+    if not entries:
+        raise ConfigError(f"CINIC-10 split {split!r} has no images under {source}.")
+    return entries
+
+
+def _cinic10_sample_indices(
+    entries: list[tuple[str, str, int, int]],
+    *,
+    maximum: int | None,
+    seed: int,
+    strategy: str,
+) -> np.ndarray:
+    if maximum is None or maximum >= len(entries):
+        return np.arange(len(entries), dtype=int)
+    if strategy != "stratified":
+        return _sample_indices(len(entries), maximum, seed)
+    labels = np.asarray([entry[2] for entry in entries])
+    return _stratified_indices(labels, maximum=maximum, seed=seed)
+
+
+def _stratified_indices(
+    labels: np.ndarray,
+    *,
+    maximum: int,
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    groups = {
+        label: np.flatnonzero(labels == label)
+        for label in sorted(set(labels.tolist()))
+    }
+    quotas = _balanced_quotas(
+        {label: len(positions) for label, positions in groups.items()},
+        maximum=maximum,
+    )
+    selected: list[int] = []
+    for label, positions in groups.items():
+        quota = quotas[label]
+        if quota <= 0:
+            continue
+        shuffled = np.array(positions, copy=True)
+        rng.shuffle(shuffled)
+        selected.extend(int(value) for value in shuffled[:quota])
+    return np.asarray(sorted(selected), dtype=int)
+
+
+def _balanced_quotas(counts: dict[Any, int], *, maximum: int) -> dict[Any, int]:
+    quotas = {label: 0 for label in counts}
+    if not counts:
+        return quotas
+    base = maximum // len(counts)
+    remainder = maximum % len(counts)
+    for offset, label in enumerate(counts):
+        quotas[label] = min(counts[label], base + int(offset < remainder))
+    shortfall = maximum - sum(quotas.values())
+    while shortfall > 0:
+        progressed = False
+        for label, count in counts.items():
+            if shortfall <= 0:
+                break
+            available = count - quotas[label]
+            if available <= 0:
+                continue
+            quotas[label] += 1
+            shortfall -= 1
+            progressed = True
+        if not progressed:
+            break
+    return quotas
+
+
+def _parse_cinic10_path(
+    name: str,
+    splits: set[str],
+    label_ids: dict[str, int],
+) -> tuple[str, str, int] | None:
+    parts = Path(name).parts
+    if len(parts) != 3 or parts[0] not in splits or parts[1] not in label_ids:
+        return None
+    if Path(parts[2]).suffix.lower() != ".png":
+        return None
+    return name, parts[0], label_ids[parts[1]]
+
+
+def _load_cinic10_images(
+    source: Path,
+    entries: list[tuple[str, str, int, int]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    images = np.empty((len(entries), 32, 32, 3), dtype=np.uint8)
+    labels = np.empty(len(entries), dtype=np.uint8)
+    split_values = np.empty(len(entries), dtype=object)
+    original_indices = np.empty(len(entries), dtype=int)
+    if source.is_file():
+        with tarfile.open(source, mode="r:gz") as archive:
+            for position, (name, split, label, original_index) in enumerate(entries):
+                member = archive.extractfile(name)
+                if member is None:
+                    raise ConfigError(f"Missing CINIC-10 image in archive: {name}")
+                with member:
+                    images[position] = _read_cinic10_png(member)
+                labels[position] = label
+                split_values[position] = split
+                original_indices[position] = original_index
+    else:
+        for position, (path, split, label, original_index) in enumerate(entries):
+            with Path(path).open("rb") as handle:
+                images[position] = _read_cinic10_png(handle)
+            labels[position] = label
+            split_values[position] = split
+            original_indices[position] = original_index
+    return images, labels, split_values, original_indices
+
+
+def _read_cinic10_png(handle: Any) -> np.ndarray:
+    from PIL import Image
+
+    with Image.open(handle) as image:
+        array = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    if array.shape != (32, 32, 3):
+        raise ConfigError(f"CINIC-10 images must be 32x32 RGB, got {array.shape}.")
+    return array
 
 
 def _load_mnist_arrays(

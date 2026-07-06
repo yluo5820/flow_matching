@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from fm_lab.geometry_explorer.bundles import build_and_register_projection_payload_index
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.geometry_explorer.variants import load_variant_bundle
@@ -15,6 +17,7 @@ from fm_lab.image_diagnostics.config import (
     DiagnosticsRunConfig,
     diagnostics_config_from_dict,
 )
+from fm_lab.image_diagnostics.dataset_loader import DatasetBundle
 from fm_lab.image_diagnostics.explorer_data import build_explorer_data
 from fm_lab.image_diagnostics.feature_runner import compute_or_load_features
 from fm_lab.image_diagnostics.id_config import (
@@ -68,6 +71,12 @@ def build_projection_view(
     dataset = load_variant_bundle(variant_id, workspace=workspace)
     if dataset.vectors is None:
         raise RuntimeError(f"Dataset variant {variant_id} has no feature vectors.")
+    dataset = _sample_view_dataset(
+        dataset,
+        max_samples=config.input.max_samples,
+        seed=config.input.sample_seed,
+        strategy=config.input.sample_strategy,
+    )
     started = time.perf_counter()
 
     write_parquet(dataset.metadata, output_dir / "dataset_index.parquet")
@@ -170,6 +179,98 @@ def build_projection_view(
         "id_estimation": id_estimation,
         "runtime_seconds": elapsed,
     }
+
+
+def _sample_view_dataset(
+    dataset: DatasetBundle,
+    *,
+    max_samples: int | None,
+    seed: int,
+    strategy: str,
+) -> DatasetBundle:
+    if max_samples is None or max_samples >= len(dataset.metadata):
+        return dataset
+    metadata = dataset.metadata.reset_index(drop=True)
+    if strategy == "stratified" and "label" in metadata:
+        positions = _stratified_sample_positions(
+            metadata["label"].astype(str).to_numpy(),
+            max_samples=max_samples,
+            seed=seed,
+        )
+    else:
+        rng = np.random.default_rng(seed)
+        positions = np.sort(
+            rng.choice(len(metadata), size=max_samples, replace=False)
+        )
+    sampled_metadata = metadata.iloc[positions].reset_index(drop=True).copy()
+    sampled_vectors = (
+        np.asarray(dataset.vectors[positions], dtype=np.float32)
+        if dataset.vectors is not None
+        else None
+    )
+    return DatasetBundle(
+        metadata=sampled_metadata,
+        vectors=sampled_vectors,
+        source_id=f"{dataset.source_id}:view-sample:{strategy}:{max_samples}:{seed}",
+        source_description=(
+            f"{dataset.source_description} "
+            f"(view sample: {len(sampled_metadata):,}/{len(metadata):,}, {strategy})"
+        ),
+        total_rows=len(sampled_metadata),
+        skipped_rows=dataset.skipped_rows,
+        image_shape=dataset.image_shape,
+        value_range=dataset.value_range,
+    )
+
+
+def _stratified_sample_positions(
+    labels: np.ndarray,
+    *,
+    max_samples: int,
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    groups = {
+        label: np.flatnonzero(labels == label)
+        for label in sorted(set(labels), key=_natural_sort_key)
+    }
+    quotas = {label: 0 for label in groups}
+    base = max_samples // max(1, len(groups))
+    remainder = max_samples % max(1, len(groups))
+    for offset, label in enumerate(groups):
+        quotas[label] = min(len(groups[label]), base + int(offset < remainder))
+
+    shortfall = max_samples - sum(quotas.values())
+    while shortfall > 0:
+        progressed = False
+        for label, positions in groups.items():
+            if shortfall <= 0:
+                break
+            available = len(positions) - quotas[label]
+            if available <= 0:
+                continue
+            quotas[label] += 1
+            shortfall -= 1
+            progressed = True
+        if not progressed:
+            break
+
+    selected: list[int] = []
+    for label, positions in groups.items():
+        quota = quotas[label]
+        if quota <= 0:
+            continue
+        shuffled = np.array(positions, copy=True)
+        rng.shuffle(shuffled)
+        selected.extend(int(value) for value in shuffled[:quota])
+    return np.asarray(sorted(selected), dtype=int)
+
+
+def _natural_sort_key(value: str) -> tuple[int, float | str]:
+    try:
+        return (0, float(value))
+    except ValueError:
+        return (1, value)
 
 
 def _split_variant_id(value: str) -> tuple[str, str]:

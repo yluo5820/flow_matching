@@ -9,6 +9,8 @@ FAMILY_LABELS = {
     "fashion_mnist": "Fashion-MNIST",
     "cifar10": "CIFAR-10",
     "cifar10_grayscale": "CIFAR-10 grayscale",
+    "cifar100": "CIFAR-100",
+    "cinic10": "CINIC-10",
 }
 
 FEATURE_LABELS = {
