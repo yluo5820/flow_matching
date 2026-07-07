@@ -55,6 +55,8 @@ TINY_IMAGENET_SPLITS = ("train", "val")
 CELEBA_IMAGE_DIRECTORY = "img_align_celeba"
 CELEBA_ATTRIBUTE_FILE = "list_attr_celeba.csv"
 CELEBA_PARTITION_FILE = "list_eval_partition.csv"
+CELEBA_BBOX_FILE = "list_bbox_celeba.csv"
+CELEBA_LANDMARK_FILE = "list_landmarks_align_celeba.csv"
 CELEBA_SPLITS = {"train": 0, "valid": 1, "test": 2}
 IMAGENET32_TRAIN_ZIP = "Imagenet32_train.zip"
 IMAGENET32_VAL_ZIP = "Imagenet32_val.zip"
@@ -645,6 +647,9 @@ def _load_celeba(
     label_attribute = config.label_attribute or "Male"
     if label_attribute not in attributes.columns:
         raise ConfigError(f"CelebA label attribute {label_attribute!r} not found.")
+    crop_mode = config.crop_mode or "center"
+    if crop_mode not in {"center", "landmark_bbox"}:
+        raise ConfigError("CelebA crop_mode must be center or landmark_bbox.")
     labels = (attributes[label_attribute].to_numpy(dtype=int) > 0).astype(int)
     indices = _classification_sample_indices(
         labels[split_positions],
@@ -655,14 +660,24 @@ def _load_celeba(
     selected_positions = split_positions[indices]
     image_size = int(config.image_size or 64)
     image_ids = attributes["image_id"].to_numpy(dtype=object)[selected_positions]
+    crop_metadata = _celeba_crop_metadata(
+        dataset_root,
+        image_ids=image_ids,
+        crop_mode=crop_mode,
+    )
     images = np.stack(
         [
             _read_resized_rgb(
                 image_dir / str(image_id),
                 image_size=image_size,
                 dataset_name="CelebA",
+                crop_box=(
+                    None
+                    if crop_mode == "center"
+                    else crop_metadata[index]["crop_box"]
+                ),
             )
-            for image_id in image_ids
+            for index, image_id in enumerate(image_ids)
         ],
         axis=0,
     )
@@ -709,6 +724,7 @@ def _load_celeba(
             "label": label_names,
             "label_id": selected_labels,
             "label_attribute": label_attribute,
+            "crop_mode": crop_mode,
             "image_id": image_ids,
             "family": label_names,
             "prompt_id": [f"celeba_{value}" for value in image_ids],
@@ -722,19 +738,25 @@ def _load_celeba(
             "sample_type": "dataset",
             "status": "success",
             **extra_columns,
+            **_celeba_crop_metadata_columns(crop_metadata),
             **atlas_metadata,
         }
     )
     source_files = [
         dataset_root / CELEBA_ATTRIBUTE_FILE,
         dataset_root / CELEBA_PARTITION_FILE,
+        dataset_root / CELEBA_LANDMARK_FILE,
+        dataset_root / CELEBA_BBOX_FILE,
     ]
     return DatasetBundle(
         metadata=metadata,
         vectors=vectors,
         source_id=_files_source_id(
             source_files,
-            extra=f"{config.split}:{label_attribute}:{image_size}:{selected_positions.tolist()}",
+            extra=(
+                f"{config.split}:{label_attribute}:{crop_mode}:{image_size}:"
+                f"{selected_positions.tolist()}"
+            ),
         ),
         source_description=f"CelebA {config.split} split at {dataset_root}",
         total_rows=len(split_positions),
@@ -1664,16 +1686,166 @@ def _celeba_label_name(attribute: str, value: int) -> str:
     return f"not_{normalized}"
 
 
-def _read_resized_rgb(path: Path, *, image_size: int, dataset_name: str) -> np.ndarray:
+def _celeba_crop_metadata(
+    dataset_root: Path,
+    *,
+    image_ids: np.ndarray,
+    crop_mode: str,
+) -> list[dict[str, Any]]:
+    if crop_mode == "center":
+        return [
+            {
+                "crop_box": None,
+                "crop_source": "center",
+                "crop_x0": -1,
+                "crop_y0": -1,
+                "crop_x1": -1,
+                "crop_y1": -1,
+                "annotation_bbox_x": -1,
+                "annotation_bbox_y": -1,
+                "annotation_bbox_width": -1,
+                "annotation_bbox_height": -1,
+                "annotation_bbox_valid_for_aligned": False,
+            }
+            for _image_id in image_ids
+        ]
+    landmarks = _celeba_landmarks(dataset_root)
+    annotation_boxes = _celeba_annotation_bboxes(dataset_root)
+    rows = []
+    for image_id in image_ids:
+        key = str(image_id)
+        if key not in landmarks.index:
+            raise ConfigError(f"CelebA landmark row missing for {key}.")
+        crop_box = _celeba_landmark_crop_box(landmarks.loc[key])
+        annotation_box = (
+            annotation_boxes.loc[key]
+            if annotation_boxes is not None and key in annotation_boxes.index
+            else None
+        )
+        if annotation_box is None:
+            bbox_x = bbox_y = bbox_w = bbox_h = -1
+            bbox_valid = False
+        else:
+            bbox_x = int(annotation_box["x_1"])
+            bbox_y = int(annotation_box["y_1"])
+            bbox_w = int(annotation_box["width"])
+            bbox_h = int(annotation_box["height"])
+            bbox_valid = (
+                bbox_x >= 0
+                and bbox_y >= 0
+                and bbox_x + bbox_w <= 178
+                and bbox_y + bbox_h <= 218
+            )
+        x0, y0, x1, y1 = crop_box
+        rows.append(
+            {
+                "crop_box": crop_box,
+                "crop_source": "landmarks",
+                "crop_x0": x0,
+                "crop_y0": y0,
+                "crop_x1": x1,
+                "crop_y1": y1,
+                "annotation_bbox_x": bbox_x,
+                "annotation_bbox_y": bbox_y,
+                "annotation_bbox_width": bbox_w,
+                "annotation_bbox_height": bbox_h,
+                "annotation_bbox_valid_for_aligned": bbox_valid,
+            }
+        )
+    return rows
+
+
+def _celeba_crop_metadata_columns(rows: list[dict[str, Any]]) -> dict[str, list[Any]]:
+    return {
+        key: [row[key] for row in rows]
+        for key in (
+            "crop_source",
+            "crop_x0",
+            "crop_y0",
+            "crop_x1",
+            "crop_y1",
+            "annotation_bbox_x",
+            "annotation_bbox_y",
+            "annotation_bbox_width",
+            "annotation_bbox_height",
+            "annotation_bbox_valid_for_aligned",
+        )
+    }
+
+
+def _celeba_landmarks(dataset_root: Path) -> pd.DataFrame:
+    path = dataset_root / CELEBA_LANDMARK_FILE
+    if not path.is_file():
+        raise ConfigError(f"CelebA landmark CSV not found: {path}")
+    frame = pd.read_csv(path)
+    if "image_id" not in frame:
+        raise ConfigError(f"CelebA landmark CSV is missing image_id: {path}")
+    return frame.set_index("image_id", drop=False)
+
+
+def _celeba_annotation_bboxes(dataset_root: Path) -> pd.DataFrame | None:
+    path = dataset_root / CELEBA_BBOX_FILE
+    if not path.is_file():
+        return None
+    frame = pd.read_csv(path)
+    if "image_id" not in frame:
+        raise ConfigError(f"CelebA bbox CSV is missing image_id: {path}")
+    return frame.set_index("image_id", drop=False)
+
+
+def _celeba_landmark_crop_box(row: pd.Series) -> tuple[int, int, int, int]:
+    x_values = np.asarray(
+        [
+            row["lefteye_x"],
+            row["righteye_x"],
+            row["nose_x"],
+            row["leftmouth_x"],
+            row["rightmouth_x"],
+        ],
+        dtype=float,
+    )
+    y_values = np.asarray(
+        [
+            row["lefteye_y"],
+            row["righteye_y"],
+            row["nose_y"],
+            row["leftmouth_y"],
+            row["rightmouth_y"],
+        ],
+        dtype=float,
+    )
+    width = float(np.max(x_values) - np.min(x_values))
+    height = float(np.max(y_values) - np.min(y_values))
+    side = max(96.0, width * 2.4, height * 2.2)
+    center_x = float((np.min(x_values) + np.max(x_values)) / 2.0)
+    center_y = float((np.min(y_values) + np.max(y_values)) / 2.0 - side * 0.08)
+    x0 = int(round(center_x - side / 2.0))
+    y0 = int(round(center_y - side / 2.0))
+    x1 = int(round(center_x + side / 2.0))
+    y1 = int(round(center_y + side / 2.0))
+    return _clip_crop_box((x0, y0, x1, y1), image_width=178, image_height=218)
+
+
+def _read_resized_rgb(
+    path: Path,
+    *,
+    image_size: int,
+    dataset_name: str,
+    crop_box: tuple[int, int, int, int] | None = None,
+) -> np.ndarray:
     from PIL import Image
 
     with Image.open(path) as image:
         rgb = image.convert("RGB")
         width, height = rgb.size
-        side = min(width, height)
-        left = (width - side) // 2
-        top = (height - side) // 2
-        rgb = rgb.crop((left, top, left + side, top + side))
+        if crop_box is None:
+            side = min(width, height)
+            left = (width - side) // 2
+            top = (height - side) // 2
+            box = (left, top, left + side, top + side)
+        else:
+            box = _clip_crop_box(crop_box, image_width=width, image_height=height)
+        rgb = rgb.crop(box)
         rgb = rgb.resize((image_size, image_size), resample=_pil_resampling("bicubic"))
         array = np.asarray(rgb, dtype=np.uint8)
     if array.shape != (image_size, image_size, 3):
@@ -1681,6 +1853,20 @@ def _read_resized_rgb(path: Path, *, image_size: int, dataset_name: str) -> np.n
             f"{dataset_name} resize produced unexpected shape {array.shape} at {path}."
         )
     return array
+
+
+def _clip_crop_box(
+    box: tuple[int, int, int, int],
+    *,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = box
+    x0 = max(0, min(int(x0), image_width - 1))
+    y0 = max(0, min(int(y0), image_height - 1))
+    x1 = max(x0 + 1, min(int(x1), image_width))
+    y1 = max(y0 + 1, min(int(y1), image_height))
+    return x0, y0, x1, y1
 
 
 def _extract_zip_safely(zip_path: Path, output_dir: Path) -> None:

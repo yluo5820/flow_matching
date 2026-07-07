@@ -24,6 +24,7 @@ class InputConfig:
     download: bool = False
     image_size: int | None = None
     label_attribute: str = ""
+    crop_mode: str = ""
     data_path: str = ""
     labels_path: str | None = None
     image_shape: tuple[int, ...] | None = None

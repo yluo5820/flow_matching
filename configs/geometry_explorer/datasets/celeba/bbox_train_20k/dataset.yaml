@@ -1,0 +1,19 @@
+family: celeba
+variant: bbox_train_20k
+base: celeba/train_20k
+split: train
+seed: 42
+
+input:
+  dataset_root: data/celeba
+  split: train
+  image_size: 64
+  label_attribute: Male
+  crop_mode: landmark_bbox
+  thumbnail_mode: atlas
+  max_samples: 20000
+  sample_seed: 42
+  sample_strategy: stratified
+  download: false
+
+selection: {}
