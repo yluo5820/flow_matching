@@ -1,0 +1,14 @@
+family: tiny_imagenet
+variant: original
+base: original
+split: all
+seed: 42
+
+input:
+  dataset_root: data/tiny_imagenet
+  split: all
+  color_mode: rgb
+  thumbnail_mode: atlas
+  download: false
+
+selection: {}

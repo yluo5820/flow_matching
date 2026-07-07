@@ -47,6 +47,9 @@ CINIC10_ZIP = "DS_10283_3192.zip"
 CINIC10_ARCHIVE = "CINIC-10.tar.gz"
 CINIC10_LABELS = CIFAR10_LABELS
 CINIC10_SPLITS = ("train", "valid", "test")
+TINY_IMAGENET_DIRECTORY = "tiny-imagenet-200"
+TINY_IMAGENET_ZIP = "tiny-imagenet-200.zip"
+TINY_IMAGENET_SPLITS = ("train", "val")
 FASHION_MNIST_URL_ROOT = (
     "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
     "master/data/fashion"
@@ -102,6 +105,8 @@ def load_dataset(
         return _load_cifar100(config, root, thumbnail_dir)
     if config.type == "cinic10":
         return _load_cinic10(config, root, thumbnail_dir)
+    if config.type == "tiny_imagenet":
+        return _load_tiny_imagenet(config, root, thumbnail_dir)
     if config.type == "numpy":
         return _load_numpy(config, root, thumbnail_dir)
     return _load_image_metadata(config, root)
@@ -508,6 +513,84 @@ def _load_cinic10(
         source_description=f"{display_name} {config.split} split at {dataset_root}",
         total_rows=len(entries),
         image_shape=(32, 32, 3),
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_tiny_imagenet(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    data_dir = _ensure_tiny_imagenet(dataset_root, split=config.split)
+    label_names = _tiny_imagenet_label_names(data_dir)
+    entries = _tiny_imagenet_entries(data_dir, config.split, label_names)
+    indices = _classification_sample_indices(
+        np.asarray([entry[2] for entry in entries], dtype=int),
+        maximum=config.max_samples,
+        seed=config.sample_seed,
+        strategy=config.sample_strategy,
+    )
+    selected_entries = [entries[int(index)] for index in indices]
+    selected_images, selected_labels, split_values, original_indices, wnids = (
+        _load_tiny_imagenet_images(selected_entries)
+    )
+    selected_names = np.asarray([label_names[wnid] for wnid in wnids], dtype=object)
+    vectors = selected_images.reshape(len(selected_images), -1)
+    image_paths = [""] * len(indices)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            selected_images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="tiny_imagenet",
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            selected_images,
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix="tiny_imagenet",
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(indices)),
+            "image_path": image_paths,
+            "dataset": "tiny_imagenet",
+            "split": split_values,
+            "label": selected_names,
+            "label_id": selected_labels,
+            "wnid": wnids,
+            "family": selected_names,
+            "prompt_id": [f"tiny_imagenet_{value}" for value in wnids],
+            "prompt": [f"Tiny ImageNet {value}" for value in selected_names],
+            "tags": [
+                ["tiny_imagenet", str(wnid), str(name)]
+                for wnid, name in zip(wnids, selected_names, strict=False)
+            ],
+            "source_index": indices,
+            "original_index": original_indices,
+            "sample_type": "dataset",
+            "status": "success",
+            **atlas_metadata,
+        }
+    )
+    source_files = [
+        data_dir / "wnids.txt",
+        data_dir / "words.txt",
+        data_dir / "val" / "val_annotations.txt",
+    ]
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{indices.tolist()}",
+        ),
+        source_description=f"Tiny ImageNet {config.split} split at {dataset_root}",
+        total_rows=len(entries),
+        image_shape=(64, 64, 3),
         value_range=(0.0, 255.0),
     )
 
@@ -1075,6 +1158,136 @@ def _read_cinic10_png(handle: Any) -> np.ndarray:
     return array
 
 
+def _ensure_tiny_imagenet(dataset_root: Path, *, split: str) -> Path:
+    if split not in {*TINY_IMAGENET_SPLITS, "all"}:
+        raise ConfigError("Tiny ImageNet supports split train, val, or all.")
+    if (dataset_root / "wnids.txt").is_file() and (dataset_root / "train").is_dir():
+        return dataset_root
+    data_dir = dataset_root / TINY_IMAGENET_DIRECTORY
+    if (data_dir / "wnids.txt").is_file() and (data_dir / "train").is_dir():
+        return data_dir
+    zip_path = dataset_root / TINY_IMAGENET_ZIP
+    if zip_path.is_file():
+        _extract_zip_safely(zip_path, dataset_root)
+        if (data_dir / "wnids.txt").is_file() and (data_dir / "train").is_dir():
+            return data_dir
+    raise ConfigError(
+        f"Tiny ImageNet does not exist under {dataset_root}. Expected "
+        f"{TINY_IMAGENET_DIRECTORY}/ or {TINY_IMAGENET_ZIP}."
+    )
+
+
+def _tiny_imagenet_label_names(data_dir: Path) -> dict[str, str]:
+    wnids = [
+        line.strip()
+        for line in (data_dir / "wnids.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    names = {wnid: wnid for wnid in wnids}
+    words_path = data_dir / "words.txt"
+    if words_path.is_file():
+        for line in words_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            wnid, _, words = stripped.partition("\t")
+            if wnid in names and words:
+                names[wnid] = words.split(",", 1)[0].strip()
+    return names
+
+
+def _tiny_imagenet_entries(
+    data_dir: Path,
+    split: str,
+    label_names: dict[str, str],
+) -> list[tuple[Path, str, int, int, str]]:
+    splits = TINY_IMAGENET_SPLITS if split == "all" else (split,)
+    wnids = list(label_names)
+    label_ids = {wnid: index for index, wnid in enumerate(wnids)}
+    entries: list[tuple[Path, str, int, int, str]] = []
+    for split_name in splits:
+        if split_name == "train":
+            for wnid in wnids:
+                image_dir = data_dir / "train" / wnid / "images"
+                for path in sorted(image_dir.glob("*")):
+                    if path.suffix.lower() not in {".jpeg", ".jpg", ".png"}:
+                        continue
+                    entries.append((path, "train", label_ids[wnid], len(entries), wnid))
+        elif split_name == "val":
+            annotation_path = data_dir / "val" / "val_annotations.txt"
+            if not annotation_path.is_file():
+                raise ConfigError(
+                    f"Missing Tiny ImageNet validation annotations: {annotation_path}"
+                )
+            for line in annotation_path.read_text(encoding="utf-8").splitlines():
+                fields = line.split("\t")
+                if len(fields) < 2:
+                    continue
+                filename, wnid = fields[:2]
+                if wnid not in label_ids:
+                    continue
+                path = data_dir / "val" / "images" / filename
+                if path.is_file():
+                    entries.append((path, "val", label_ids[wnid], len(entries), wnid))
+    if not entries:
+        raise ConfigError(f"Tiny ImageNet split {split!r} has no labeled images under {data_dir}.")
+    return entries
+
+
+def _load_tiny_imagenet_images(
+    entries: list[tuple[Path, str, int, int, str]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    images = np.empty((len(entries), 64, 64, 3), dtype=np.uint8)
+    labels = np.empty(len(entries), dtype=np.int64)
+    split_values = np.empty(len(entries), dtype=object)
+    original_indices = np.empty(len(entries), dtype=int)
+    wnids = np.empty(len(entries), dtype=object)
+    for position, (path, split, label, original_index, wnid) in enumerate(entries):
+        images[position] = _read_square_rgb(path, image_size=64, dataset_name="Tiny ImageNet")
+        labels[position] = label
+        split_values[position] = split
+        original_indices[position] = original_index
+        wnids[position] = wnid
+    return images, labels, split_values, original_indices, wnids
+
+
+def _classification_sample_indices(
+    labels: np.ndarray,
+    *,
+    maximum: int | None,
+    seed: int,
+    strategy: str,
+) -> np.ndarray:
+    if maximum is None or maximum >= len(labels):
+        return np.arange(len(labels), dtype=int)
+    if strategy == "stratified":
+        return _stratified_indices(labels, maximum=maximum, seed=seed)
+    return _sample_indices(len(labels), maximum, seed)
+
+
+def _read_square_rgb(path: Path, *, image_size: int, dataset_name: str) -> np.ndarray:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        array = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    if array.shape[:2] != (image_size, image_size):
+        raise ConfigError(
+            f"{dataset_name} images must be {image_size}x{image_size}, "
+            f"got {array.shape} at {path}."
+        )
+    return array
+
+
+def _extract_zip_safely(zip_path: Path, output_dir: Path) -> None:
+    output_root = output_dir.resolve()
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            target = (output_root / member.filename).resolve()
+            if output_root not in target.parents and target != output_root:
+                raise ConfigError(f"Unsafe zip member path in {zip_path}: {member.filename}")
+        archive.extractall(output_root)
+
+
 def _load_mnist_arrays(
     config: InputConfig,
     dataset_root: Path,
@@ -1178,14 +1391,20 @@ def _export_rgb_sprite_atlases(
     *,
     output_dir: str | Path,
     prefix: str,
-    tile_size: int = 32,
+    tile_size: int | None = None,
     atlas_size: int = 2048,
 ) -> dict[str, object]:
     from PIL import Image
 
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
+    if tile_size is None:
+        if images.ndim != 4 or images.shape[1] != images.shape[2] or images.shape[-1] != 3:
+            raise ConfigError(f"RGB atlas images must be square RGB arrays: {images.shape}")
+        tile_size = int(images.shape[1])
     columns = atlas_size // tile_size
+    if columns <= 0:
+        raise ConfigError(f"Atlas tile size {tile_size} exceeds atlas size {atlas_size}.")
     capacity = columns * columns
     positions = np.arange(len(images), dtype=int)
     atlas_indices = positions // capacity
