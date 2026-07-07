@@ -157,6 +157,32 @@ def test_full_dataset_configs_are_3d_and_compare_umap_variants() -> None:
             assert pca_variants == []
 
 
+def test_geometry_dinov2_stratified_10k_config_targets_compact_3d_view() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_diagnostics_config(
+        root
+        / "configs"
+        / "geometry_explorer"
+        / "views"
+        / "dinov2_stratified_10k.yaml"
+    )
+
+    assert config.input.max_samples == 10000
+    assert config.input.sample_strategy == "stratified"
+    assert config.features.mode == "dinov2"
+    assert config.features.name == "dinov2_base_cls"
+    assert config.features.normalize is True
+    assert config.id_estimation.enabled is False
+    projection_shapes = [
+        (variant.key, variant.method, variant.n_components)
+        for variant in config.projection.variants
+    ]
+    assert projection_shapes == [
+        ("dinov2_umap_3d", "umap", 3),
+        ("dinov2_pca_3d", "pca", 3),
+    ]
+
+
 def test_mnist_loader_selects_vectors_labels_and_thumbnails(tmp_path: Path) -> None:
     mnist_root = tmp_path / "mnist"
     images = np.zeros((6, 28, 28), dtype=np.uint8)
