@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import logging
+import pickle
 import struct
 import tarfile
 import urllib.request
@@ -54,6 +55,8 @@ CELEBA_IMAGE_DIRECTORY = "img_align_celeba"
 CELEBA_ATTRIBUTE_FILE = "list_attr_celeba.csv"
 CELEBA_PARTITION_FILE = "list_eval_partition.csv"
 CELEBA_SPLITS = {"train": 0, "valid": 1, "test": 2}
+IMAGENET32_TRAIN_ZIP = "Imagenet32_train.zip"
+IMAGENET32_VAL_ZIP = "Imagenet32_val.zip"
 FASHION_MNIST_URL_ROOT = (
     "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
     "master/data/fashion"
@@ -113,6 +116,8 @@ def load_dataset(
         return _load_tiny_imagenet(config, root, thumbnail_dir)
     if config.type == "celeba":
         return _load_celeba(config, root, thumbnail_dir)
+    if config.type == "imagenet32":
+        return _load_imagenet32(config, root, thumbnail_dir)
     if config.type == "numpy":
         return _load_numpy(config, root, thumbnail_dir)
     return _load_image_metadata(config, root)
@@ -708,6 +713,81 @@ def _load_celeba(
         source_description=f"CelebA {config.split} split at {dataset_root}",
         total_rows=len(split_positions),
         image_shape=(image_size, image_size, 3),
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_imagenet32(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    _ensure_imagenet32(dataset_root, split=config.split)
+    batches = _imagenet32_batches(dataset_root, config.split)
+    batch_labels, offsets = _imagenet32_batch_labels(batches)
+    all_labels = np.concatenate(batch_labels)
+    labels_zero_based = all_labels.astype(int) - 1
+    indices = _classification_sample_indices(
+        labels_zero_based,
+        maximum=config.max_samples,
+        seed=config.sample_seed,
+        strategy=config.sample_strategy,
+    )
+    images, selected_labels, split_values, original_indices = _load_imagenet32_images(
+        batches,
+        offsets=offsets,
+        selected_indices=indices,
+    )
+    vectors = images.reshape(len(images), -1)
+    label_names = np.asarray(
+        [f"imagenet_{int(value) + 1:04d}" for value in selected_labels],
+        dtype=object,
+    )
+    image_paths = [""] * len(images)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="imagenet32",
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            images,
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix="imagenet32",
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(images)),
+            "image_path": image_paths,
+            "dataset": "imagenet32",
+            "split": split_values,
+            "label": label_names,
+            "label_id": selected_labels,
+            "family": label_names,
+            "prompt_id": label_names,
+            "prompt": [f"ImageNet32 class {int(value) + 1}" for value in selected_labels],
+            "tags": [["imagenet32", str(value)] for value in label_names],
+            "source_index": indices,
+            "original_index": original_indices,
+            "sample_type": "dataset",
+            "status": "success",
+            **atlas_metadata,
+        }
+    )
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            batches,
+            extra=f"{config.split}:{indices.tolist()}",
+        ),
+        source_description=f"ImageNet32 {config.split} split at {dataset_root}",
+        total_rows=len(all_labels),
+        image_shape=(32, 32, 3),
         value_range=(0.0, 255.0),
     )
 
@@ -1492,6 +1572,91 @@ def _pil_resampling(name: str) -> Any:
         "bicubic": resampling.BICUBIC,
         "box": resampling.BOX,
     }[name]
+
+
+def _ensure_imagenet32(dataset_root: Path, *, split: str) -> None:
+    if split not in {"train", "val", "all"}:
+        raise ConfigError("ImageNet32 supports split train, val, or all.")
+    required = _imagenet32_expected_files(dataset_root, split)
+    if all(path.is_file() for path in required):
+        return
+    if split in {"train", "all"} and (dataset_root / IMAGENET32_TRAIN_ZIP).is_file():
+        _extract_zip_safely(dataset_root / IMAGENET32_TRAIN_ZIP, dataset_root)
+    if split in {"val", "all"} and (dataset_root / IMAGENET32_VAL_ZIP).is_file():
+        _extract_zip_safely(dataset_root / IMAGENET32_VAL_ZIP, dataset_root)
+    if not all(path.is_file() for path in required):
+        missing = [str(path) for path in required if not path.is_file()]
+        raise ConfigError(f"ImageNet32 files missing under {dataset_root}: {missing[:3]}")
+
+
+def _imagenet32_expected_files(dataset_root: Path, split: str) -> list[Path]:
+    paths = []
+    if split in {"train", "all"}:
+        paths.extend(dataset_root / f"train_data_batch_{index}" for index in range(1, 11))
+    if split in {"val", "all"}:
+        paths.append(dataset_root / "val_data")
+    return paths
+
+
+def _imagenet32_batches(dataset_root: Path, split: str) -> list[Path]:
+    return _imagenet32_expected_files(dataset_root, split)
+
+
+def _imagenet32_batch_labels(batch_paths: list[Path]) -> tuple[list[np.ndarray], np.ndarray]:
+    labels = []
+    offsets = []
+    offset = 0
+    for path in batch_paths:
+        payload = _read_imagenet32_batch(path)
+        batch_labels = np.asarray(payload["labels"], dtype=np.int64)
+        labels.append(batch_labels)
+        offsets.append(offset)
+        offset += len(batch_labels)
+    return labels, np.asarray(offsets, dtype=int)
+
+
+def _load_imagenet32_images(
+    batch_paths: list[Path],
+    *,
+    offsets: np.ndarray,
+    selected_indices: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    images = np.empty((len(selected_indices), 32, 32, 3), dtype=np.uint8)
+    labels = np.empty(len(selected_indices), dtype=np.int64)
+    split_values = np.empty(len(selected_indices), dtype=object)
+    original_indices = np.asarray(selected_indices, dtype=int)
+    output_position = 0
+    for batch_index, path in enumerate(batch_paths):
+        payload = _read_imagenet32_batch(path)
+        data = np.asarray(payload["data"], dtype=np.uint8)
+        batch_labels = np.asarray(payload["labels"], dtype=np.int64) - 1
+        start = int(offsets[batch_index])
+        end = start + len(batch_labels)
+        mask = (selected_indices >= start) & (selected_indices < end)
+        local_indices = selected_indices[mask] - start
+        if len(local_indices) == 0:
+            continue
+        count = len(local_indices)
+        images[output_position : output_position + count] = _imagenet32_pixels(
+            data[local_indices]
+        )
+        labels[output_position : output_position + count] = batch_labels[local_indices]
+        split = "val" if path.name == "val_data" else "train"
+        split_values[output_position : output_position + count] = split
+        output_position += count
+    return images, labels, split_values, original_indices
+
+
+def _read_imagenet32_batch(path: Path) -> dict[str, Any]:
+    with path.open("rb") as handle:
+        payload = pickle.load(handle, encoding="latin1")
+    if not isinstance(payload, dict) or "data" not in payload or "labels" not in payload:
+        raise ConfigError(f"Malformed ImageNet32 batch: {path}")
+    return payload
+
+
+def _imagenet32_pixels(data: np.ndarray) -> np.ndarray:
+    return data.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
 
 
 def _load_mnist_arrays(

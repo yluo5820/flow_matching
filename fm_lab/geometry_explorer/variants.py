@@ -173,6 +173,7 @@ _SUPPORTED_FAMILIES = {
     "celeba",
     "cinic10",
     "cub200_segmentations",
+    "imagenet32",
     "oxford_iiit_pet",
     "tiny_imagenet",
 }
@@ -209,6 +210,10 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
         values.setdefault("type", "tiny_imagenet")
         values.setdefault("dataset_root", "data/tiny_imagenet")
         values.setdefault("color_mode", "rgb")
+    elif config.family == "imagenet32":
+        values.setdefault("type", "imagenet32")
+        values.setdefault("dataset_root", "data/imagenet32")
+        values.setdefault("color_mode", "rgb")
     else:
         values.setdefault("type", "mnist")
         values.setdefault("dataset_root", "data/mnist")
@@ -226,6 +231,7 @@ def _default_image_shape(family: str) -> tuple[int, ...]:
         "cifar100",
         "cinic10",
         "cub200_segmentations",
+        "imagenet32",
         "oxford_iiit_pet",
     }:
         return (32, 32, 3)

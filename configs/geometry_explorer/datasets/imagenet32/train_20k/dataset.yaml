@@ -1,0 +1,17 @@
+family: imagenet32
+variant: train_20k
+base: original
+split: train
+seed: 42
+
+input:
+  dataset_root: data/imagenet32
+  split: train
+  color_mode: rgb
+  thumbnail_mode: atlas
+  max_samples: 20000
+  sample_seed: 42
+  sample_strategy: stratified
+  download: false
+
+selection: {}

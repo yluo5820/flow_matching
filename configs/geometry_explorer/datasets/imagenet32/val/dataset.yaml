@@ -1,0 +1,14 @@
+family: imagenet32
+variant: val
+base: original
+split: val
+seed: 42
+
+input:
+  dataset_root: data/imagenet32
+  split: val
+  color_mode: rgb
+  thumbnail_mode: atlas
+  download: false
+
+selection: {}
