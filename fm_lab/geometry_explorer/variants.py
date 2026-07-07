@@ -176,6 +176,7 @@ _SUPPORTED_FAMILIES = {
     "imagenet32",
     "oxford_iiit_pet",
     "tiny_imagenet",
+    "voc2012",
 }
 
 
@@ -214,6 +215,11 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
         values.setdefault("type", "imagenet32")
         values.setdefault("dataset_root", "data/imagenet32")
         values.setdefault("color_mode", "rgb")
+    elif config.family == "voc2012":
+        values.setdefault("type", "voc2012")
+        values.setdefault("dataset_root", "data/VOCdevkit")
+        values.setdefault("image_size", 64)
+        values.setdefault("color_mode", "rgb")
     else:
         values.setdefault("type", "mnist")
         values.setdefault("dataset_root", "data/mnist")
@@ -235,7 +241,7 @@ def _default_image_shape(family: str) -> tuple[int, ...]:
         "oxford_iiit_pet",
     }:
         return (32, 32, 3)
-    if family in {"celeba", "tiny_imagenet"}:
+    if family in {"celeba", "tiny_imagenet", "voc2012"}:
         return (64, 64, 3)
     if family == "cifar10_grayscale":
         return (32, 32)

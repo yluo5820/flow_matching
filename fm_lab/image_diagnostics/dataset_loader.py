@@ -13,6 +13,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 import numpy as np
 import pandas as pd
@@ -57,6 +58,29 @@ CELEBA_PARTITION_FILE = "list_eval_partition.csv"
 CELEBA_SPLITS = {"train": 0, "valid": 1, "test": 2}
 IMAGENET32_TRAIN_ZIP = "Imagenet32_train.zip"
 IMAGENET32_VAL_ZIP = "Imagenet32_val.zip"
+VOC2012_DIRECTORY = "VOC2012"
+VOC2012_LABELS = (
+    "aeroplane",
+    "bicycle",
+    "bird",
+    "boat",
+    "bottle",
+    "bus",
+    "car",
+    "cat",
+    "chair",
+    "cow",
+    "diningtable",
+    "dog",
+    "horse",
+    "motorbike",
+    "person",
+    "pottedplant",
+    "sheep",
+    "sofa",
+    "train",
+    "tvmonitor",
+)
 FASHION_MNIST_URL_ROOT = (
     "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
     "master/data/fashion"
@@ -118,6 +142,8 @@ def load_dataset(
         return _load_celeba(config, root, thumbnail_dir)
     if config.type == "imagenet32":
         return _load_imagenet32(config, root, thumbnail_dir)
+    if config.type == "voc2012":
+        return _load_voc2012(config, root, thumbnail_dir)
     if config.type == "numpy":
         return _load_numpy(config, root, thumbnail_dir)
     return _load_image_metadata(config, root)
@@ -788,6 +814,109 @@ def _load_imagenet32(
         source_description=f"ImageNet32 {config.split} split at {dataset_root}",
         total_rows=len(all_labels),
         image_shape=(32, 32, 3),
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_voc2012(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    voc_root = _voc2012_root(dataset_root)
+    entries = _voc2012_entries(voc_root, config.split)
+    labels = np.asarray([entry["label_id"] for entry in entries], dtype=int)
+    indices = _classification_sample_indices(
+        labels,
+        maximum=config.max_samples,
+        seed=config.sample_seed,
+        strategy=config.sample_strategy,
+    )
+    selected_entries = [entries[int(index)] for index in indices]
+    image_size = int(config.image_size or 64)
+    images = np.stack(
+        [
+            _read_resized_rgb(
+                entry["image_path"],
+                image_size=image_size,
+                dataset_name="VOC2012",
+            )
+            for entry in selected_entries
+        ],
+        axis=0,
+    )
+    selected_labels = np.asarray([entry["label_id"] for entry in selected_entries], dtype=int)
+    label_names = np.asarray([entry["label"] for entry in selected_entries], dtype=object)
+    vectors = images.reshape(len(images), -1)
+    image_paths = [""] * len(images)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="voc2012",
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            images,
+            source_indices=indices,
+            output_dir=thumbnail_dir,
+            prefix="voc2012",
+        )
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(images)),
+            "image_path": image_paths,
+            "dataset": "voc2012",
+            "split": [entry["split"] for entry in selected_entries],
+            "label": label_names,
+            "label_id": selected_labels,
+            "sample_id": [entry["sample_id"] for entry in selected_entries],
+            "family": label_names,
+            "prompt_id": [f"voc2012_{entry['sample_id']}" for entry in selected_entries],
+            "prompt": [f"VOC2012 {entry['label']}" for entry in selected_entries],
+            "tags": [
+                ["voc2012", *entry["object_classes"]]
+                for entry in selected_entries
+            ],
+            "source_index": indices,
+            "original_index": [entry["original_index"] for entry in selected_entries],
+            "sample_type": "dataset",
+            "status": "success",
+            "object_classes": [
+                ",".join(entry["object_classes"])
+                for entry in selected_entries
+            ],
+            "object_count": [entry["object_count"] for entry in selected_entries],
+            "has_segmentation_mask": [
+                entry["segmentation_mask_path"] != ""
+                for entry in selected_entries
+            ],
+            "segmentation_mask_path": [
+                entry["segmentation_mask_path"]
+                for entry in selected_entries
+            ],
+            "source_width": [entry["width"] for entry in selected_entries],
+            "source_height": [entry["height"] for entry in selected_entries],
+            **atlas_metadata,
+        }
+    )
+    source_split = "trainval" if config.split == "all" else config.split
+    source_files = [
+        voc_root / "ImageSets" / "Main" / f"{source_split}.txt",
+        *(voc_root / "Annotations" / f"{entry['sample_id']}.xml" for entry in selected_entries),
+    ]
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{image_size}:{indices.tolist()}",
+        ),
+        source_description=f"VOC2012 {config.split} split at {voc_root}",
+        total_rows=len(entries),
+        image_shape=(image_size, image_size, 3),
         value_range=(0.0, 255.0),
     )
 
@@ -1657,6 +1786,83 @@ def _read_imagenet32_batch(path: Path) -> dict[str, Any]:
 
 def _imagenet32_pixels(data: np.ndarray) -> np.ndarray:
     return data.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+
+
+def _voc2012_root(dataset_root: Path) -> Path:
+    if (dataset_root / "JPEGImages").is_dir() and (dataset_root / "Annotations").is_dir():
+        return dataset_root
+    candidate = dataset_root / VOC2012_DIRECTORY
+    if (candidate / "JPEGImages").is_dir() and (candidate / "Annotations").is_dir():
+        return candidate
+    raise ConfigError(f"VOC2012 directory not found under {dataset_root}.")
+
+
+def _voc2012_entries(voc_root: Path, split: str) -> list[dict[str, Any]]:
+    if split == "all":
+        split = "trainval"
+    if split not in {"train", "val", "trainval"}:
+        raise ConfigError("VOC2012 supports split train, val, trainval, or all.")
+    split_path = voc_root / "ImageSets" / "Main" / f"{split}.txt"
+    if not split_path.is_file():
+        raise ConfigError(f"VOC2012 split file does not exist: {split_path}")
+    sample_ids = [
+        line.strip().split()[0]
+        for line in split_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    entries = []
+    for original_index, sample_id in enumerate(sample_ids):
+        annotation = _parse_voc_annotation(voc_root / "Annotations" / f"{sample_id}.xml")
+        object_classes = annotation["object_classes"]
+        label = object_classes[0] if object_classes else "unlabeled"
+        label_id = VOC2012_LABELS.index(label) if label in VOC2012_LABELS else -1
+        mask_path = voc_root / "SegmentationClass" / f"{sample_id}.png"
+        entries.append(
+            {
+                "sample_id": sample_id,
+                "split": split,
+                "image_path": voc_root / "JPEGImages" / f"{sample_id}.jpg",
+                "label": label,
+                "label_id": label_id,
+                "object_classes": object_classes,
+                "object_count": len(object_classes),
+                "segmentation_mask_path": str(mask_path) if mask_path.is_file() else "",
+                "width": annotation["width"],
+                "height": annotation["height"],
+                "original_index": original_index,
+            }
+        )
+    if not entries:
+        raise ConfigError(f"VOC2012 split {split!r} has no images.")
+    return entries
+
+
+def _parse_voc_annotation(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ConfigError(f"VOC2012 annotation does not exist: {path}")
+    root = ElementTree.parse(path).getroot()
+    size = root.find("size")
+    width = _xml_int(size.findtext("width") if size is not None else None)
+    height = _xml_int(size.findtext("height") if size is not None else None)
+    object_classes = []
+    for obj in root.findall("object"):
+        name = (obj.findtext("name") or "").strip()
+        if name:
+            object_classes.append(name)
+    if not object_classes:
+        object_classes = ["unlabeled"]
+    return {
+        "width": width,
+        "height": height,
+        "object_classes": object_classes,
+    }
+
+
+def _xml_int(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
 
 
 def _load_mnist_arrays(

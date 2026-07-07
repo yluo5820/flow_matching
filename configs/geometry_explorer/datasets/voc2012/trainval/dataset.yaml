@@ -1,0 +1,15 @@
+family: voc2012
+variant: trainval
+base: original
+split: trainval
+seed: 42
+
+input:
+  dataset_root: data/VOCdevkit
+  split: trainval
+  image_size: 64
+  color_mode: rgb
+  thumbnail_mode: atlas
+  download: false
+
+selection: {}
