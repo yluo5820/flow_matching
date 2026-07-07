@@ -22,6 +22,8 @@ class InputConfig:
     sample_seed: int = 42
     sample_strategy: str = "random"
     download: bool = False
+    image_size: int | None = None
+    label_attribute: str = ""
     data_path: str = ""
     labels_path: str | None = None
     image_shape: tuple[int, ...] | None = None

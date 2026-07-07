@@ -170,6 +170,7 @@ _SUPPORTED_FAMILIES = {
     "cifar10",
     "cifar10_grayscale",
     "cifar100",
+    "celeba",
     "cinic10",
     "cub200_segmentations",
     "oxford_iiit_pet",
@@ -197,6 +198,11 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
         values.setdefault("type", "cinic10")
         values.setdefault("dataset_root", "data/cinic10")
         values.setdefault("color_mode", "rgb")
+    elif config.family == "celeba":
+        values.setdefault("type", "celeba")
+        values.setdefault("dataset_root", "data/celeba")
+        values.setdefault("image_size", 64)
+        values.setdefault("label_attribute", "Male")
     elif config.family in {"cub200_segmentations", "oxford_iiit_pet"}:
         values.setdefault("type", "numpy")
     elif config.family == "tiny_imagenet":
@@ -223,7 +229,7 @@ def _default_image_shape(family: str) -> tuple[int, ...]:
         "oxford_iiit_pet",
     }:
         return (32, 32, 3)
-    if family == "tiny_imagenet":
+    if family in {"celeba", "tiny_imagenet"}:
         return (64, 64, 3)
     if family == "cifar10_grayscale":
         return (32, 32)

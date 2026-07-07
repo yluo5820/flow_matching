@@ -50,6 +50,10 @@ CINIC10_SPLITS = ("train", "valid", "test")
 TINY_IMAGENET_DIRECTORY = "tiny-imagenet-200"
 TINY_IMAGENET_ZIP = "tiny-imagenet-200.zip"
 TINY_IMAGENET_SPLITS = ("train", "val")
+CELEBA_IMAGE_DIRECTORY = "img_align_celeba"
+CELEBA_ATTRIBUTE_FILE = "list_attr_celeba.csv"
+CELEBA_PARTITION_FILE = "list_eval_partition.csv"
+CELEBA_SPLITS = {"train": 0, "valid": 1, "test": 2}
 FASHION_MNIST_URL_ROOT = (
     "https://raw.githubusercontent.com/zalandoresearch/fashion-mnist/"
     "master/data/fashion"
@@ -107,6 +111,8 @@ def load_dataset(
         return _load_cinic10(config, root, thumbnail_dir)
     if config.type == "tiny_imagenet":
         return _load_tiny_imagenet(config, root, thumbnail_dir)
+    if config.type == "celeba":
+        return _load_celeba(config, root, thumbnail_dir)
     if config.type == "numpy":
         return _load_numpy(config, root, thumbnail_dir)
     return _load_image_metadata(config, root)
@@ -591,6 +597,117 @@ def _load_tiny_imagenet(
         source_description=f"Tiny ImageNet {config.split} split at {dataset_root}",
         total_rows=len(entries),
         image_shape=(64, 64, 3),
+        value_range=(0.0, 255.0),
+    )
+
+
+def _load_celeba(
+    config: InputConfig,
+    project_root: Path,
+    thumbnail_dir: str | Path | None,
+) -> DatasetBundle:
+    dataset_root = _resolve(config.dataset_root, project_root)
+    image_dir = _celeba_image_dir(dataset_root)
+    attributes = _celeba_attributes(dataset_root)
+    partitions = _celeba_partitions(dataset_root, len(attributes))
+    split_positions = _celeba_split_positions(partitions, config.split)
+    label_attribute = config.label_attribute or "Male"
+    if label_attribute not in attributes.columns:
+        raise ConfigError(f"CelebA label attribute {label_attribute!r} not found.")
+    labels = (attributes[label_attribute].to_numpy(dtype=int) > 0).astype(int)
+    indices = _classification_sample_indices(
+        labels[split_positions],
+        maximum=config.max_samples,
+        seed=config.sample_seed,
+        strategy=config.sample_strategy,
+    )
+    selected_positions = split_positions[indices]
+    image_size = int(config.image_size or 64)
+    image_ids = attributes["image_id"].to_numpy(dtype=object)[selected_positions]
+    images = np.stack(
+        [
+            _read_resized_rgb(
+                image_dir / str(image_id),
+                image_size=image_size,
+                dataset_name="CelebA",
+            )
+            for image_id in image_ids
+        ],
+        axis=0,
+    )
+    selected_labels = labels[selected_positions]
+    label_names = np.asarray(
+        [
+            _celeba_label_name(label_attribute, int(value))
+            for value in selected_labels
+        ],
+        dtype=object,
+    )
+    split_values = np.asarray(
+        [_celeba_split_name(int(value)) for value in partitions[selected_positions]],
+        dtype=object,
+    )
+    vectors = images.reshape(len(images), -1)
+    image_paths = [""] * len(images)
+    atlas_metadata: dict[str, object] = {}
+    if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+        atlas_metadata = _export_rgb_sprite_atlases(
+            images,
+            output_dir=Path(thumbnail_dir).parent / "atlases",
+            prefix="celeba",
+        )
+    elif config.thumbnail_mode == "files":
+        image_paths = _export_rgb_thumbnails(
+            images,
+            source_indices=selected_positions,
+            output_dir=thumbnail_dir,
+            prefix="celeba",
+        )
+    selected_attributes = attributes.iloc[selected_positions].reset_index(drop=True)
+    extra_columns = {
+        f"attr_{column}": selected_attributes[column].to_numpy(dtype=int)
+        for column in attributes.columns
+        if column != "image_id"
+    }
+    metadata = pd.DataFrame(
+        {
+            "row_id": np.arange(len(images)),
+            "image_path": image_paths,
+            "dataset": "celeba",
+            "split": split_values,
+            "label": label_names,
+            "label_id": selected_labels,
+            "label_attribute": label_attribute,
+            "image_id": image_ids,
+            "family": label_names,
+            "prompt_id": [f"celeba_{value}" for value in image_ids],
+            "prompt": [f"CelebA {value}" for value in label_names],
+            "tags": [
+                ["celeba", label_attribute, str(label)]
+                for label in label_names
+            ],
+            "source_index": selected_positions,
+            "original_index": selected_positions,
+            "sample_type": "dataset",
+            "status": "success",
+            **extra_columns,
+            **atlas_metadata,
+        }
+    )
+    source_files = [
+        dataset_root / CELEBA_ATTRIBUTE_FILE,
+        dataset_root / CELEBA_PARTITION_FILE,
+    ]
+    return DatasetBundle(
+        metadata=metadata,
+        vectors=vectors,
+        source_id=_files_source_id(
+            source_files,
+            extra=f"{config.split}:{label_attribute}:{image_size}:{selected_positions.tolist()}",
+        ),
+        source_description=f"CelebA {config.split} split at {dataset_root}",
+        total_rows=len(split_positions),
+        image_shape=(image_size, image_size, 3),
         value_range=(0.0, 255.0),
     )
 
@@ -1278,6 +1395,85 @@ def _read_square_rgb(path: Path, *, image_size: int, dataset_name: str) -> np.nd
     return array
 
 
+def _celeba_image_dir(dataset_root: Path) -> Path:
+    candidates = [
+        dataset_root / CELEBA_IMAGE_DIRECTORY / CELEBA_IMAGE_DIRECTORY,
+        dataset_root / CELEBA_IMAGE_DIRECTORY,
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    raise ConfigError(f"CelebA aligned image directory not found under {dataset_root}.")
+
+
+def _celeba_attributes(dataset_root: Path) -> pd.DataFrame:
+    path = dataset_root / CELEBA_ATTRIBUTE_FILE
+    if not path.is_file():
+        raise ConfigError(f"CelebA attribute CSV not found: {path}")
+    frame = pd.read_csv(path)
+    if "image_id" not in frame:
+        raise ConfigError(f"CelebA attribute CSV is missing image_id: {path}")
+    return frame
+
+
+def _celeba_partitions(dataset_root: Path, expected_rows: int) -> np.ndarray:
+    path = dataset_root / CELEBA_PARTITION_FILE
+    if not path.is_file():
+        return np.zeros(expected_rows, dtype=int)
+    frame = pd.read_csv(path)
+    if frame.shape[1] < 2:
+        raise ConfigError(f"CelebA partition CSV must have image_id and partition: {path}")
+    values = frame.iloc[:, 1].to_numpy(dtype=int)
+    if len(values) != expected_rows:
+        raise ConfigError(
+            f"CelebA partition row count {len(values)} does not match "
+            f"attributes {expected_rows}."
+        )
+    return values
+
+
+def _celeba_split_positions(partitions: np.ndarray, split: str) -> np.ndarray:
+    if split == "all":
+        return np.arange(len(partitions), dtype=int)
+    if split not in CELEBA_SPLITS:
+        supported = ", ".join(("all", *CELEBA_SPLITS))
+        raise ConfigError(f"CelebA split must be one of {supported}.")
+    return np.flatnonzero(partitions == CELEBA_SPLITS[split])
+
+
+def _celeba_split_name(value: int) -> str:
+    for name, partition_id in CELEBA_SPLITS.items():
+        if value == partition_id:
+            return name
+    return "unknown"
+
+
+def _celeba_label_name(attribute: str, value: int) -> str:
+    normalized = attribute.lower()
+    if value > 0:
+        return normalized
+    return f"not_{normalized}"
+
+
+def _read_resized_rgb(path: Path, *, image_size: int, dataset_name: str) -> np.ndarray:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        width, height = rgb.size
+        side = min(width, height)
+        left = (width - side) // 2
+        top = (height - side) // 2
+        rgb = rgb.crop((left, top, left + side, top + side))
+        rgb = rgb.resize((image_size, image_size), resample=_pil_resampling("bicubic"))
+        array = np.asarray(rgb, dtype=np.uint8)
+    if array.shape != (image_size, image_size, 3):
+        raise ConfigError(
+            f"{dataset_name} resize produced unexpected shape {array.shape} at {path}."
+        )
+    return array
+
+
 def _extract_zip_safely(zip_path: Path, output_dir: Path) -> None:
     output_root = output_dir.resolve()
     with zipfile.ZipFile(zip_path) as archive:
@@ -1286,6 +1482,16 @@ def _extract_zip_safely(zip_path: Path, output_dir: Path) -> None:
             if output_root not in target.parents and target != output_root:
                 raise ConfigError(f"Unsafe zip member path in {zip_path}: {member.filename}")
         archive.extractall(output_root)
+
+
+def _pil_resampling(name: str) -> Any:
+    from PIL import Image
+
+    resampling = getattr(Image, "Resampling", Image)
+    return {
+        "bicubic": resampling.BICUBIC,
+        "box": resampling.BOX,
+    }[name]
 
 
 def _load_mnist_arrays(

@@ -1,0 +1,18 @@
+family: celeba
+variant: train_20k
+base: original
+split: train
+seed: 42
+
+input:
+  dataset_root: data/celeba
+  split: train
+  image_size: 64
+  label_attribute: Male
+  thumbnail_mode: atlas
+  max_samples: 20000
+  sample_seed: 42
+  sample_strategy: stratified
+  download: false
+
+selection: {}

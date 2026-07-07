@@ -197,6 +197,7 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "diffusion_normal_bundle_normal_dim_",
         "diffusion_flipd_lid_",
         "diffusion_flipd_divergence_",
+        "attr_",
     )
     exact = {
         "background_strength",
@@ -230,8 +231,10 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "gamma",
         "has_source_image",
         "high_frequency_energy",
+        "image_id",
         "illumination_angle",
         "illumination_strength",
+        "label_attribute",
         "mean_luminance",
         "mean_background_luminance",
         "mask_area",
