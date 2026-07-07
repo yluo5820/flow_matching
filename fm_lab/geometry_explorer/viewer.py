@@ -350,7 +350,14 @@ function parseColor(label) {
 
 function usesLabelTintedThumbnail(point) {
   const dataset = String(point.dataset || "").toLowerCase();
-  return dataset === "mnist" || dataset === "fashion_mnist";
+  return [
+    "mnist",
+    "fashion_mnist",
+    "photometric_mnist",
+    "photometric_fashion_mnist",
+    "background_dominance_mnist",
+    "background_dominance_fashion_mnist",
+  ].includes(dataset);
 }
 
 function pointCoordinate(point) {

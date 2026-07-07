@@ -5,7 +5,7 @@ split: train
 seed: 42
 
 input:
-  dataset_root: data/cinic10
+  dataset_root: data/cinic10/extracted
   split: train
   color_mode: rgb
   thumbnail_mode: atlas

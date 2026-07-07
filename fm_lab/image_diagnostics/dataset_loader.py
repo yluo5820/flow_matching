@@ -1266,6 +1266,7 @@ def _load_numpy(
     labels = _load_labels(config.labels_path, project_root, len(vectors))
     selected_labels = labels[indices] if labels is not None else np.asarray([""] * len(indices))
     image_paths = [""] * len(indices)
+    atlas_metadata: dict[str, object] = {}
     if config.image_shape is not None:
         if int(np.prod(config.image_shape)) != selected.shape[1]:
             raise ConfigError(
@@ -1276,14 +1277,29 @@ def _load_numpy(
             float(np.nanmin(selected)),
             float(np.nanmax(selected)),
         )
-        image_paths = _export_array_thumbnails(
-            selected,
-            image_shape=config.image_shape,
-            value_range=value_range,
-            source_indices=indices,
-            output_dir=thumbnail_dir,
-            prefix=data_path.stem,
-        )
+        if config.thumbnail_mode == "atlas" and thumbnail_dir is not None:
+            atlas_metadata = _export_array_sprite_atlases(
+                selected,
+                image_shape=config.image_shape,
+                value_range=value_range,
+                output_dir=Path(thumbnail_dir).parent / "atlases",
+                prefix=data_path.stem,
+            )
+        elif config.thumbnail_mode == "files":
+            image_paths = _export_array_thumbnails(
+                selected,
+                image_shape=config.image_shape,
+                value_range=value_range,
+                source_indices=indices,
+                output_dir=thumbnail_dir,
+                prefix=data_path.stem,
+            )
+    extra_metadata, metadata_source = _load_numpy_metadata(
+        config,
+        project_root,
+        expected_rows=len(vectors),
+        indices=indices,
+    )
     metadata = pd.DataFrame(
         {
             "row_id": np.arange(len(indices)),
@@ -1298,11 +1314,16 @@ def _load_numpy(
             "source_index": indices,
             "sample_type": "array",
             "status": "success",
+            **atlas_metadata,
         }
     )
+    if extra_metadata is not None:
+        metadata = _merge_numpy_metadata(metadata, extra_metadata)
     source_files = [data_path]
     if config.labels_path:
         source_files.append(_resolve(config.labels_path, project_root))
+    if metadata_source is not None:
+        source_files.append(metadata_source)
     return DatasetBundle(
         metadata=metadata,
         vectors=selected,
@@ -1312,6 +1333,68 @@ def _load_numpy(
         image_shape=config.image_shape,
         value_range=config.value_range,
     )
+
+
+def _load_numpy_metadata(
+    config: InputConfig,
+    project_root: Path,
+    *,
+    expected_rows: int,
+    indices: np.ndarray,
+) -> tuple[pd.DataFrame | None, Path | None]:
+    if not config.metadata_path:
+        return None, None
+    metadata_path = _resolve(config.metadata_path, project_root)
+    if not metadata_path.exists():
+        if config.metadata_path == "metadata/per_image_metadata.jsonl":
+            return None, None
+        raise ConfigError(f"NumPy metadata input does not exist: {metadata_path}")
+    frame = _read_metadata_table(metadata_path)
+    if len(frame) == expected_rows:
+        return frame.iloc[indices].reset_index(drop=True), metadata_path
+    if "source_index" in frame:
+        lookup = frame.set_index(frame["source_index"].astype(int), drop=False)
+        missing = [int(index) for index in indices if int(index) not in lookup.index]
+        if missing:
+            raise ConfigError(
+                "NumPy metadata source_index is missing selected rows: "
+                f"{missing[:5]}"
+            )
+        return lookup.loc[indices].reset_index(drop=True), metadata_path
+    raise ConfigError(
+        f"NumPy metadata row count {len(frame)} does not match sample count "
+        f"{expected_rows}, and no source_index column was found."
+    )
+
+
+def _read_metadata_table(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return pd.read_parquet(path)
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    if suffix == ".jsonl":
+        return pd.read_json(path, lines=True)
+    if suffix == ".json":
+        return pd.read_json(path)
+    raise ConfigError(f"Unsupported NumPy metadata format: {path}")
+
+
+def _merge_numpy_metadata(
+    base: pd.DataFrame,
+    extra: pd.DataFrame,
+) -> pd.DataFrame:
+    if len(extra) != len(base):
+        raise ConfigError(
+            f"Selected NumPy metadata row count {len(extra)} does not match "
+            f"selected sample count {len(base)}."
+        )
+    merged = base.copy()
+    for column in extra.columns:
+        if column == "row_id":
+            continue
+        merged[column] = extra[column].to_numpy()
+    return merged
 
 
 def _load_image_metadata(config: InputConfig, project_root: Path) -> DatasetBundle:
@@ -1372,6 +1455,102 @@ def _export_array_thumbnails(
             image.save(path)
         paths.append(str(path.resolve()))
     return paths
+
+
+def _export_array_sprite_atlases(
+    vectors: np.ndarray,
+    *,
+    image_shape: tuple[int, ...],
+    value_range: tuple[float, float],
+    output_dir: str | Path,
+    prefix: str,
+    atlas_size: int = 2048,
+) -> dict[str, object]:
+    from PIL import Image
+
+    shape = tuple(int(value) for value in image_shape)
+    if len(shape) == 2:
+        tile_size = shape[0]
+        if shape[0] != shape[1]:
+            raise ConfigError(f"Atlas thumbnails require square images, got {shape}.")
+    elif len(shape) == 3 and shape[-1] in {1, 3, 4}:
+        tile_size = shape[0]
+        if shape[0] != shape[1]:
+            raise ConfigError(f"Atlas thumbnails require square images, got {shape}.")
+    else:
+        raise ConfigError(f"Unsupported atlas image shape: {shape}")
+
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    columns = atlas_size // tile_size
+    capacity = columns * columns
+    positions = np.arange(len(vectors), dtype=int)
+    atlas_indices = positions // capacity
+    local_positions = positions % capacity
+    digest = hashlib.sha256()
+    digest.update(b"array-atlas-v1")
+    digest.update(prefix.encode())
+    digest.update(str(shape).encode())
+    digest.update(str(tuple(float(value) for value in value_range)).encode())
+    digest.update(str(len(vectors)).encode())
+    if len(vectors):
+        digest.update(np.asarray(vectors[0], dtype=np.float32).tobytes())
+        digest.update(np.asarray(vectors[-1], dtype=np.float32).tobytes())
+    stem = f"{prefix}_{digest.hexdigest()[:12]}"
+    count = max(1, int(atlas_indices.max()) + 1 if len(vectors) else 1)
+    atlas_paths = [directory / f"{stem}_{index:02d}.png" for index in range(count)]
+    if not all(path.exists() for path in atlas_paths):
+        for path in directory.glob(f"{prefix}_*.png"):
+            if path not in atlas_paths:
+                path.unlink()
+        pixels = _array_pixels(vectors, image_shape=shape, value_range=value_range)
+        for atlas_index, path in enumerate(atlas_paths):
+            start = atlas_index * capacity
+            end = min(len(vectors), start + capacity)
+            atlas = np.zeros((atlas_size, atlas_size, 4), dtype=np.uint8)
+            for local_index, sample_index in enumerate(range(start, end)):
+                row, column = divmod(local_index, columns)
+                tile = atlas[
+                    row * tile_size : (row + 1) * tile_size,
+                    column * tile_size : (column + 1) * tile_size,
+                ]
+                tile_pixels = pixels[sample_index]
+                if tile_pixels.ndim == 2:
+                    tile[..., :3] = tile_pixels[..., None]
+                    tile[..., 3] = 255
+                elif tile_pixels.ndim == 3 and tile_pixels.shape[-1] == 1:
+                    tile[..., :3] = tile_pixels[..., :1]
+                    tile[..., 3] = 255
+                elif tile_pixels.ndim == 3 and tile_pixels.shape[-1] == 3:
+                    tile[..., :3] = tile_pixels
+                    tile[..., 3] = 255
+                elif tile_pixels.ndim == 3 and tile_pixels.shape[-1] == 4:
+                    tile[...] = tile_pixels
+                else:
+                    raise ConfigError(f"Unsupported atlas image shape: {shape}")
+            Image.fromarray(atlas, mode="RGBA").save(path, optimize=True)
+    resolved_paths = [str(path.resolve()) for path in atlas_paths]
+    return {
+        "sprite_atlas_path": [resolved_paths[index] for index in atlas_indices],
+        "sprite_atlas_index": atlas_indices,
+        "sprite_atlas_column": local_positions % columns,
+        "sprite_atlas_row": local_positions // columns,
+        "sprite_tile_size": tile_size,
+        "sprite_atlas_columns": columns,
+        "sprite_atlas_size": atlas_size,
+    }
+
+
+def _array_pixels(
+    vectors: np.ndarray,
+    *,
+    image_shape: tuple[int, ...],
+    value_range: tuple[float, float],
+) -> np.ndarray:
+    low, high = value_range
+    scale = max(high - low, np.finfo(np.float32).eps)
+    normalized = np.clip((vectors.reshape((-1, *image_shape)) - low) / scale, 0.0, 1.0)
+    return np.asarray(np.round(normalized * 255.0), dtype=np.uint8)
 
 
 def _export_grayscale_thumbnails(

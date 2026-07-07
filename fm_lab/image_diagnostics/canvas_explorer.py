@@ -277,7 +277,7 @@ def _build_atlases(
     for position, row in frame.iterrows():
         image = _load_preview(row.get("image_path"), tile_size)
         label = str(row.get("label", ""))
-        if str(row.get("dataset", "")).lower() in {"mnist", "fashion_mnist"}:
+        if _uses_label_tinted_thumbnail(row.get("dataset", "")):
             image = _tint_grayscale(image, palette.get(label, (255, 255, 255)))
         atlas_index = position // atlas_capacity
         local_position = position % atlas_capacity
@@ -320,7 +320,7 @@ def _build_array_atlases(
             tile_size=tile_size,
         )
         label = str(row.get("label", ""))
-        if str(row.get("dataset", "")).lower() in {"mnist", "fashion_mnist"}:
+        if _uses_label_tinted_thumbnail(row.get("dataset", "")):
             image = _tint_grayscale(image, palette.get(label, (255, 255, 255)))
         atlas_index = position // atlas_capacity
         local_position = position % atlas_capacity
@@ -398,6 +398,17 @@ def _tint_grayscale(image: Image.Image, color: tuple[int, int, int]) -> Image.Im
     rgba[..., 2] = color[2]
     rgba[..., 3] = grayscale
     return Image.fromarray(rgba, mode="RGBA")
+
+
+def _uses_label_tinted_thumbnail(dataset: object) -> bool:
+    return str(dataset).lower() in {
+        "mnist",
+        "fashion_mnist",
+        "photometric_mnist",
+        "photometric_fashion_mnist",
+        "background_dominance_mnist",
+        "background_dominance_fashion_mnist",
+    }
 
 
 def _atlas_digest(frame: pd.DataFrame, *, tile_size: int, atlas_size: int) -> str:

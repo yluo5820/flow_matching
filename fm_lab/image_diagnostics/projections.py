@@ -36,30 +36,45 @@ def compute_or_load_projections(
         path = output_dir / "projections" / f"{feature_name}_{variant.key}.csv"
         if save and config.skip_existing and path.exists():
             projected = pd.read_csv(path)
-            _validate_projection(
-                projected,
-                variant.key,
-                row_ids,
-                n_components=variant.n_components,
-            )
-            LOGGER.info("Loaded cached %s projection: %s", variant.name, path)
-        else:
-            coordinates = _compute_projection_variant(
-                embeddings,
-                variant,
-                project_root=project_root,
-            )
-            projected = pd.DataFrame(
-                {"row_id": row_ids.to_numpy()}
-                | {
-                    f"{variant.key}_{axis}": coordinates[:, index]
-                    for index, axis in enumerate(AXIS_NAMES[: variant.n_components])
-                }
-            )
-            if save:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                projected.to_csv(path, index=False)
-                LOGGER.info("Saved %s projection: %s", variant.name, path)
+            try:
+                _validate_projection(
+                    projected,
+                    variant.key,
+                    row_ids,
+                    n_components=variant.n_components,
+                )
+            except RuntimeError as exc:
+                LOGGER.warning(
+                    "Projection cache does not match the current features; "
+                    "recomputing %s. %s",
+                    variant.name,
+                    exc,
+                )
+            else:
+                LOGGER.info("Loaded cached %s projection: %s", variant.name, path)
+                result = result.merge(
+                    projected,
+                    on="row_id",
+                    how="left",
+                    validate="one_to_one",
+                )
+                continue
+        coordinates = _compute_projection_variant(
+            embeddings,
+            variant,
+            project_root=project_root,
+        )
+        projected = pd.DataFrame(
+            {"row_id": row_ids.to_numpy()}
+            | {
+                f"{variant.key}_{axis}": coordinates[:, index]
+                for index, axis in enumerate(AXIS_NAMES[: variant.n_components])
+            }
+        )
+        if save:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            projected.to_csv(path, index=False)
+            LOGGER.info("Saved %s projection: %s", variant.name, path)
         result = result.merge(projected, on="row_id", how="left", validate="one_to_one")
     return result
 

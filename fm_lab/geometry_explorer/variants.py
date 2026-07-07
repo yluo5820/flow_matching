@@ -171,6 +171,8 @@ _SUPPORTED_FAMILIES = {
     "cifar10_grayscale",
     "cifar100",
     "cinic10",
+    "cub200_segmentations",
+    "oxford_iiit_pet",
 }
 
 
@@ -194,6 +196,8 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
         values.setdefault("type", "cinic10")
         values.setdefault("dataset_root", "data/cinic10")
         values.setdefault("color_mode", "rgb")
+    elif config.family in {"cub200_segmentations", "oxford_iiit_pet"}:
+        values.setdefault("type", "numpy")
     else:
         values.setdefault("type", "mnist")
         values.setdefault("dataset_root", "data/mnist")
@@ -206,7 +210,13 @@ def _input_config(config: DatasetVariantConfig) -> InputConfig:
 
 
 def _default_image_shape(family: str) -> tuple[int, ...]:
-    if family in {"cifar10", "cifar100", "cinic10"}:
+    if family in {
+        "cifar10",
+        "cifar100",
+        "cinic10",
+        "cub200_segmentations",
+        "oxford_iiit_pet",
+    }:
         return (32, 32, 3)
     if family == "cifar10_grayscale":
         return (32, 32)

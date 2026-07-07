@@ -9,14 +9,37 @@ import sys
 from pathlib import Path
 
 from fm_lab.experiments.factory import resolve_device
+from fm_lab.geometry_explorer.background_dominance import (
+    DEFAULT_BACKGROUND_POOL_SIZES,
+    DEFAULT_EXPERIMENTS,
+    DEFAULT_FOREGROUND_SCALES,
+    DEFAULT_LAMBDAS,
+    BackgroundDominanceConfig,
+    build_background_dominance_experiments,
+)
 from fm_lab.geometry_explorer.bundles import load_projection_group_diagnostics
+from fm_lab.geometry_explorer.cifar_background import (
+    CIFAR_BACKGROUND_PIPELINES,
+    CifarBackgroundConfig,
+    build_cifar_background_ablation,
+)
 from fm_lab.geometry_explorer.display import metric_label
 from fm_lab.geometry_explorer.mnist_labeling import (
     label_fashion_mnist_dataset_variant,
     label_mnist_dataset_variant,
 )
 from fm_lab.geometry_explorer.model_diagnostics import build_model_diagnostics
+from fm_lab.geometry_explorer.photometric import (
+    DEFAULT_LEVEL_KEYS,
+    PhotometricBuildConfig,
+    build_photometric_ladder,
+)
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
+from fm_lab.geometry_explorer.segmentation_ablation import (
+    SEGMENTATION_DATASETS,
+    SegmentationAblationConfig,
+    build_segmentation_ablation,
+)
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
 from fm_lab.geometry_explorer.variants import build_dataset_variant, load_variant_config
 from fm_lab.geometry_explorer.views import build_projection_view
@@ -39,6 +62,266 @@ def parse_args() -> argparse.Namespace:
 
     build = subparsers.add_parser("build-dataset", help="Build and register a dataset.")
     build.add_argument("--config", required=True, help="Dataset YAML config.")
+
+    photometric = subparsers.add_parser(
+        "make-photometric-ladder",
+        help="Generate paired photometric MNIST/Fashion-MNIST variants.",
+    )
+    photometric.add_argument(
+        "--dataset",
+        default="both",
+        choices=("mnist", "fashion_mnist", "both"),
+        help="Dataset family to render. Default: both.",
+    )
+    photometric.add_argument(
+        "--mnist-root",
+        default="data/mnist",
+        help="MNIST IDX root.",
+    )
+    photometric.add_argument(
+        "--fashion-root",
+        default="data/fashion_mnist",
+        help="Fashion-MNIST IDX root.",
+    )
+    photometric.add_argument(
+        "--output-root",
+        default="data",
+        help="Root where photometric_* folders are written.",
+    )
+    photometric.add_argument(
+        "--split",
+        default="all",
+        choices=("train", "test", "all"),
+        help="Source split to sample before rendering.",
+    )
+    photometric.add_argument(
+        "--order",
+        default="auto",
+        choices=("auto", "source", "mldata"),
+        help="Source ordering before sampling. Default follows existing dataset configs.",
+    )
+    photometric.add_argument("--base-samples", type=int, default=10_000)
+    photometric.add_argument("--variants-per-base", type=int, default=5)
+    photometric.add_argument(
+        "--clean-variants-per-base",
+        type=int,
+        default=1,
+        help=(
+            "Variants per base image for level_00_clean. Default avoids exact "
+            "duplicate rows in the clean UMAP control."
+        ),
+    )
+    photometric.add_argument("--seed", type=int, default=42)
+    photometric.add_argument(
+        "--level",
+        action="append",
+        choices=DEFAULT_LEVEL_KEYS,
+        default=None,
+        help="Photometric level to render. Repeatable. Default: MVP ladder levels.",
+    )
+    photometric.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing generated photometric files.",
+    )
+
+    dominance = subparsers.add_parser(
+        "make-background-dominance",
+        help="Generate foreground/background dominance confirmation experiments.",
+    )
+    dominance.add_argument(
+        "--dataset",
+        default="both",
+        choices=("mnist", "fashion_mnist", "both"),
+        help="Dataset family to render. Default: both.",
+    )
+    dominance.add_argument("--mnist-root", default="data/mnist")
+    dominance.add_argument("--fashion-root", default="data/fashion_mnist")
+    dominance.add_argument(
+        "--output-root",
+        default="data",
+        help="Root where background_dominance_* folders are written.",
+    )
+    dominance.add_argument(
+        "--split",
+        default="all",
+        choices=("train", "test", "all"),
+    )
+    dominance.add_argument(
+        "--order",
+        default="auto",
+        choices=("auto", "source", "mldata"),
+    )
+    dominance.add_argument("--base-samples", type=int, default=10_000)
+    dominance.add_argument("--variants-per-base", type=int, default=5)
+    dominance.add_argument("--seed", type=int, default=42)
+    dominance.add_argument(
+        "--level",
+        default="level_04_background",
+        choices=("level_04_background", "level_06_full"),
+        help="Photometric rendering level used for component decomposition.",
+    )
+    dominance.add_argument(
+        "--experiment",
+        action="append",
+        choices=DEFAULT_EXPERIMENTS,
+        default=None,
+        help="Experiment to generate: a, b, c, d, or e. Repeatable. Default: all.",
+    )
+    dominance.add_argument(
+        "--lambda-value",
+        dest="lambda_values",
+        action="append",
+        type=float,
+        default=None,
+        help="Background strength lambda for experiment C. Repeatable.",
+    )
+    dominance.add_argument(
+        "--background-pool-size",
+        action="append",
+        type=int,
+        default=None,
+        help="Background template pool size for experiment D. Repeatable.",
+    )
+    dominance.add_argument(
+        "--foreground-scale",
+        action="append",
+        type=float,
+        default=None,
+        help="Foreground scale for experiment E. Repeatable.",
+    )
+    dominance.add_argument(
+        "--metrics-max-samples",
+        type=int,
+        default=5_000,
+        help="Maximum rows used for distance/kNN summaries.",
+    )
+    dominance.add_argument(
+        "--metrics-pairs",
+        type=int,
+        default=100_000,
+        help="Random pairs used for distance decomposition summaries.",
+    )
+    dominance.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing generated background-dominance files.",
+    )
+
+    cifar_background = subparsers.add_parser(
+        "make-cifar-background-ablation",
+        help="Generate CIFAR-10 background-removal ablation variants.",
+    )
+    cifar_background.add_argument("--dataset-root", default="data/cifar10")
+    cifar_background.add_argument(
+        "--output-root",
+        default="data/cifar10/background_ablation",
+        help="Root where CIFAR background ablation folders are written.",
+    )
+    cifar_background.add_argument(
+        "--split",
+        default="train",
+        choices=("train", "test", "all"),
+    )
+    cifar_background.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Optional subset size. Omit for the full selected split.",
+    )
+    cifar_background.add_argument("--sample-seed", type=int, default=42)
+    cifar_background.add_argument(
+        "--sample-strategy",
+        default="random",
+        choices=("random", "stratified"),
+    )
+    cifar_background.add_argument(
+        "--pipeline",
+        action="append",
+        choices=CIFAR_BACKGROUND_PIPELINES,
+        default=None,
+        help="Background-removal pipeline to run. Repeatable. Default: rembg.",
+    )
+    cifar_background.add_argument("--upsample-size", type=int, default=256)
+    cifar_background.add_argument("--fill", choices=("mean", "gray"), default="mean")
+    cifar_background.add_argument("--min-mask-area", type=float, default=0.03)
+    cifar_background.add_argument("--max-mask-area", type=float, default=0.90)
+    cifar_background.add_argument("--max-components", type=int, default=8)
+    cifar_background.add_argument(
+        "--min-largest-component-ratio",
+        type=float,
+        default=0.45,
+    )
+    cifar_background.add_argument("--metrics-max-samples", type=int, default=5_000)
+    cifar_background.add_argument("--metrics-pairs", type=int, default=100_000)
+    cifar_background.add_argument("--rembg-model", default="u2netp")
+    cifar_background.add_argument("--device", default="cpu")
+    cifar_background.add_argument("--grounded-sam-config", default="")
+    cifar_background.add_argument("--grounded-sam-checkpoint", default="")
+    cifar_background.add_argument("--sam-checkpoint", default="")
+    cifar_background.add_argument("--sam-model-type", default="vit_b")
+    cifar_background.add_argument("--box-threshold", type=float, default=0.20)
+    cifar_background.add_argument("--text-threshold", type=float, default=0.20)
+    cifar_background.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing output for the selected pipeline/split.",
+    )
+
+    segmentation = subparsers.add_parser(
+        "make-segmentation-ablation",
+        help="Generate ground-truth segmentation foreground/background variants.",
+    )
+    segmentation.add_argument(
+        "--dataset",
+        required=True,
+        choices=SEGMENTATION_DATASETS,
+        help="Segmentation dataset to prepare.",
+    )
+    segmentation.add_argument(
+        "--dataset-root",
+        required=True,
+        help="Dataset root. For CUB this can be the segmentation mask root.",
+    )
+    segmentation.add_argument(
+        "--output-root",
+        default="data/segmentation_ablation",
+        help="Root where prepared segmentation ablations are written.",
+    )
+    segmentation.add_argument(
+        "--split",
+        default="all",
+        choices=("all", "train", "trainval", "test"),
+    )
+    segmentation.add_argument("--image-size", type=int, default=32)
+    segmentation.add_argument("--max-samples", type=int, default=None)
+    segmentation.add_argument("--sample-seed", type=int, default=42)
+    segmentation.add_argument(
+        "--sample-strategy",
+        default="random",
+        choices=("random", "stratified"),
+    )
+    segmentation.add_argument("--fill", default="mean", choices=("mean", "gray"))
+    segmentation.add_argument(
+        "--mask-root",
+        default="",
+        help="Optional mask root, mainly for CUB segmentations.",
+    )
+    segmentation.add_argument(
+        "--image-root",
+        default="",
+        help="Optional CUB image root matching the segmentation tree.",
+    )
+    segmentation.add_argument(
+        "--no-mask-only",
+        action="store_true",
+        help="Fail instead of emitting mask-only datasets when images are missing.",
+    )
+    segmentation.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing prepared segmentation output.",
+    )
 
     build_all = subparsers.add_parser(
         "build-all",
@@ -320,6 +603,18 @@ def main() -> None:
         print(f"Built dataset variant: {result['variant_id']}")
         print(f"Dataset index: {result['dataset_path']}")
         return
+    if args.command == "make-photometric-ladder":
+        _make_photometric_ladder(args)
+        return
+    if args.command == "make-background-dominance":
+        _make_background_dominance(args)
+        return
+    if args.command == "make-cifar-background-ablation":
+        _make_cifar_background_ablation(args)
+        return
+    if args.command == "make-segmentation-ablation":
+        _make_segmentation_ablation(args)
+        return
     if args.command == "build-all":
         _build_all(args, workspace)
         return
@@ -455,6 +750,163 @@ def main() -> None:
     if args.command == "summarize":
         _summarize(args, workspace)
         return
+
+
+def _make_photometric_ladder(args: argparse.Namespace) -> None:
+    families = (
+        ("mnist", "data/mnist" if args.mnist_root is None else args.mnist_root),
+        (
+            "fashion_mnist",
+            "data/fashion_mnist" if args.fashion_root is None else args.fashion_root,
+        ),
+    )
+    if args.dataset != "both":
+        families = tuple(item for item in families if item[0] == args.dataset)
+    results: list[dict[str, object]] = []
+    for family, dataset_root in families:
+        order = args.order
+        if order == "auto":
+            order = "mldata" if family == "mnist" and args.split == "all" else "source"
+        config = PhotometricBuildConfig(
+            family=family,
+            dataset_root=dataset_root,
+            output_root=args.output_root,
+            split=args.split,
+            order=order,
+            base_samples=args.base_samples,
+            variants_per_base=args.variants_per_base,
+            clean_variants_per_base=args.clean_variants_per_base,
+            seed=args.seed,
+            levels=tuple(args.level or ()),
+            overwrite=args.overwrite,
+        )
+        results.extend(build_photometric_ladder(config, project_root=PROJECT_ROOT))
+
+    print("Generated photometric datasets:")
+    for result in results:
+        print(
+            "  - "
+            f"{result['variant_id']} ({result['rows']:,} rows): "
+            f"{result['dataset_config_path']}"
+        )
+
+
+def _make_background_dominance(args: argparse.Namespace) -> None:
+    families = (
+        ("mnist", args.mnist_root),
+        ("fashion_mnist", args.fashion_root),
+    )
+    if args.dataset != "both":
+        families = tuple(item for item in families if item[0] == args.dataset)
+    results = []
+    for family, dataset_root in families:
+        order = args.order
+        if order == "auto":
+            order = "mldata" if family == "mnist" and args.split == "all" else "source"
+        config = BackgroundDominanceConfig(
+            family=family,
+            dataset_root=dataset_root,
+            output_root=args.output_root,
+            split=args.split,
+            order=order,
+            base_samples=args.base_samples,
+            variants_per_base=args.variants_per_base,
+            seed=args.seed,
+            level=args.level,
+            experiments=tuple(args.experiment or DEFAULT_EXPERIMENTS),
+            lambdas=tuple(args.lambda_values or DEFAULT_LAMBDAS),
+            background_pool_sizes=tuple(
+                args.background_pool_size or DEFAULT_BACKGROUND_POOL_SIZES
+            ),
+            foreground_scales=tuple(args.foreground_scale or DEFAULT_FOREGROUND_SCALES),
+            metrics_max_samples=args.metrics_max_samples,
+            metrics_pairs=args.metrics_pairs,
+            overwrite=args.overwrite,
+        )
+        results.append(build_background_dominance_experiments(config, project_root=PROJECT_ROOT))
+
+    print("Generated background-dominance experiments:")
+    for result in results:
+        print(f"  {result['family']}: {result['output_dir']}")
+        if result["metrics_path"] is not None:
+            print(f"    metrics: {result['metrics_path']}")
+        for dataset in result["datasets"]:
+            print(
+                "    - "
+                f"{dataset['variant_id']} ({dataset['rows']:,} rows): "
+                f"{dataset['dataset_config_path']}"
+            )
+
+
+def _make_cifar_background_ablation(args: argparse.Namespace) -> None:
+    config = CifarBackgroundConfig(
+        dataset_root=args.dataset_root,
+        output_root=args.output_root,
+        split=args.split,
+        max_samples=args.max_samples,
+        sample_seed=args.sample_seed,
+        sample_strategy=args.sample_strategy,
+        pipelines=tuple(args.pipeline or ("rembg",)),
+        upsample_size=args.upsample_size,
+        fill=args.fill,
+        min_mask_area=args.min_mask_area,
+        max_mask_area=args.max_mask_area,
+        max_components=args.max_components,
+        min_largest_component_ratio=args.min_largest_component_ratio,
+        metrics_max_samples=args.metrics_max_samples,
+        metrics_pairs=args.metrics_pairs,
+        overwrite=args.overwrite,
+        rembg_model=args.rembg_model,
+        device=args.device,
+        grounded_sam_config=args.grounded_sam_config,
+        grounded_sam_checkpoint=args.grounded_sam_checkpoint,
+        sam_checkpoint=args.sam_checkpoint,
+        sam_model_type=args.sam_model_type,
+        box_threshold=args.box_threshold,
+        text_threshold=args.text_threshold,
+    )
+    result = build_cifar_background_ablation(config, project_root=PROJECT_ROOT)
+    print(f"Generated CIFAR-10 background ablations: {result['output_dir']}")
+    if result["metrics_path"] is not None:
+        print(f"  metrics: {result['metrics_path']}")
+    for dataset in result["datasets"]:
+        print(
+            "  - "
+            f"{dataset['variant_id']} ({dataset['rows']:,} rows): "
+            f"{dataset['dataset_config_path']}"
+        )
+
+
+def _make_segmentation_ablation(args: argparse.Namespace) -> None:
+    config = SegmentationAblationConfig(
+        dataset=args.dataset,
+        dataset_root=args.dataset_root,
+        output_root=args.output_root,
+        split=args.split,
+        image_size=args.image_size,
+        max_samples=args.max_samples,
+        sample_seed=args.sample_seed,
+        sample_strategy=args.sample_strategy,
+        fill=args.fill,
+        mask_root=args.mask_root,
+        image_root=args.image_root,
+        allow_mask_only=not args.no_mask_only,
+        overwrite=args.overwrite,
+    )
+    result = build_segmentation_ablation(config, project_root=PROJECT_ROOT)
+    print(f"Generated segmentation ablations: {result['output_dir']}")
+    if result["mask_only"]:
+        print(
+            "  mask-only output: matching source images were not found "
+            f"for {result['missing_images']:,} selected masks"
+        )
+    print(f"  metrics: {result['metrics_path']}")
+    for dataset in result["datasets"]:
+        print(
+            "  - "
+            f"{dataset['variant_id']} ({dataset['rows']:,} rows): "
+            f"{dataset['dataset_config_path']}"
+        )
 
 
 def _build_all(args: argparse.Namespace, workspace: Path) -> None:

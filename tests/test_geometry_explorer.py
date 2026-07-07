@@ -977,6 +977,10 @@ id_estimation:
     assert "coloredPointCloud" in html
     assert "colorizeGrayscaleThumbnail" in html
     assert "usesLabelTintedThumbnail(point)" in html
+    assert '"photometric_mnist"' in html
+    assert '"photometric_fashion_mnist"' in html
+    assert '"background_dominance_mnist"' in html
+    assert '"background_dominance_fashion_mnist"' in html
     assert 'id="show-thumbnails"' in html
     assert 'id="point-display-mode"' in html
     assert '<option value="class_color">Class color</option>' in html
