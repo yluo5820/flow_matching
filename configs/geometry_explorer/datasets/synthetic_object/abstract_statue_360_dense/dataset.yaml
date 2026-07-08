@@ -1,0 +1,31 @@
+family: synthetic_object
+variant: abstract_statue_360_dense
+base: analytic
+split: pose_sweep
+seed: 42
+
+object:
+  kind: abstract_statue
+  scale: 1.35
+  marker: false
+
+render:
+  backend: analytic
+  image_size: 64
+  azimuth_start: 0
+  azimuth_stop: 360
+  azimuth_steps: 1441
+  azimuth_bins: 36
+  elevation: 20
+  camera_distance: 4.0
+  focal_length: 70
+  background: [1.0, 1.0, 1.0]
+  light_position: [3.0, -4.0, 5.0]
+  light_energy: 400
+  ambient: 0.35
+  diffuse: 0.70
+  supersample: 3
+
+output:
+  value_range: [0.0, 1.0]
+  save_pngs: true

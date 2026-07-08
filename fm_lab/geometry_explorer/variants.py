@@ -33,6 +33,10 @@ class DatasetVariantConfig:
     seed: int = 42
     input: dict[str, Any] = field(default_factory=dict)
     selection: dict[str, Any] = field(default_factory=dict)
+    object: dict[str, Any] = field(default_factory=dict)
+    render: dict[str, Any] = field(default_factory=dict)
+    pose: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
 
     @property
     def variant_id(self) -> str:
@@ -58,6 +62,10 @@ def variant_config_from_dict(raw: dict[str, Any]) -> DatasetVariantConfig:
         seed=int(values.get("seed", 42)),
         input=dict(values.get("input", {})),
         selection=dict(values.get("selection", {})),
+        object=dict(values.get("object", {})),
+        render=dict(values.get("render", {})),
+        pose=dict(values.get("pose", {})),
+        output=dict(values.get("output", {})),
     )
 
 
@@ -69,6 +77,18 @@ def build_dataset_variant(
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build and register one concrete dataset variant."""
+
+    if config.family == "synthetic_object":
+        from fm_lab.geometry_explorer.synthetic_objects import (
+            build_synthetic_object_dataset,
+            synthetic_object_config_from_dict,
+        )
+
+        return build_synthetic_object_dataset(
+            synthetic_object_config_from_dict(_variant_raw(config)),
+            workspace=workspace,
+            config_path=config_path,
+        )
 
     registry = GeometryRegistry(workspace)
     output_dir = registry.workspace / "datasets" / config.family / config.variant
@@ -175,6 +195,7 @@ _SUPPORTED_FAMILIES = {
     "cub200_segmentations",
     "imagenet32",
     "oxford_iiit_pet",
+    "synthetic_object",
     "tiny_imagenet",
     "voc2012",
 }
@@ -314,4 +335,8 @@ def _variant_raw(config: DatasetVariantConfig) -> dict[str, Any]:
         "seed": config.seed,
         "input": dict(config.input),
         "selection": dict(config.selection),
+        "object": dict(config.object),
+        "render": dict(config.render),
+        "pose": dict(config.pose),
+        "output": dict(config.output),
     }

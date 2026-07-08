@@ -40,6 +40,10 @@ from fm_lab.geometry_explorer.segmentation_ablation import (
     SegmentationAblationConfig,
     build_segmentation_ablation,
 )
+from fm_lab.geometry_explorer.synthetic_objects import (
+    build_synthetic_object_dataset,
+    load_synthetic_object_config,
+)
 from fm_lab.geometry_explorer.trajectories import build_and_register_trajectory_view
 from fm_lab.geometry_explorer.variants import build_dataset_variant, load_variant_config
 from fm_lab.geometry_explorer.views import build_projection_view
@@ -62,6 +66,12 @@ def parse_args() -> argparse.Namespace:
 
     build = subparsers.add_parser("build-dataset", help="Build and register a dataset.")
     build.add_argument("--config", required=True, help="Dataset YAML config.")
+
+    synthetic = subparsers.add_parser(
+        "make-synthetic-object",
+        help="Render and register a lightweight synthetic object pose dataset.",
+    )
+    synthetic.add_argument("--config", required=True, help="Synthetic object YAML config.")
 
     photometric = subparsers.add_parser(
         "make-photometric-ladder",
@@ -602,6 +612,17 @@ def main() -> None:
         )
         print(f"Built dataset variant: {result['variant_id']}")
         print(f"Dataset index: {result['dataset_path']}")
+        return
+    if args.command == "make-synthetic-object":
+        config = load_synthetic_object_config(args.config)
+        result = build_synthetic_object_dataset(
+            config,
+            workspace=workspace,
+            config_path=args.config,
+        )
+        print(f"Generated synthetic object dataset: {result['variant_id']}")
+        print(f"Dataset index: {result['dataset_path']}")
+        print(f"Rows: {result['rows']:,}")
         return
     if args.command == "make-photometric-ladder":
         _make_photometric_ladder(args)

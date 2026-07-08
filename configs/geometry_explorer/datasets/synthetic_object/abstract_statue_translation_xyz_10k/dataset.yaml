@@ -1,0 +1,35 @@
+family: synthetic_object
+variant: abstract_statue_translation_xyz_10k
+base: analytic
+split: translation_xyz
+seed: 103
+
+object:
+  kind: abstract_statue
+  scale: 1.35
+  marker: false
+
+render:
+  backend: analytic
+  image_size: 64
+  elevation: 20.0
+  camera_distance: 4.0
+  focal_length: 70
+  background: [1.0, 1.0, 1.0]
+  light_position: [3.0, -4.0, 5.0]
+  light_energy: 400
+  ambient: 0.35
+  diffuse: 0.70
+  supersample: 3
+
+pose:
+  mode: translation_xyz
+  samples: 10000
+  translation_bins: 36
+  translation_x_range: [-0.9, 0.9]
+  translation_y_range: [-0.9, 0.9]
+  depth_range: [2.0, 8.0]
+
+output:
+  value_range: [0.0, 1.0]
+  save_pngs: true
