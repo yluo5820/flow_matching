@@ -316,6 +316,50 @@ def test_all_imbdiff_configs_enable_shared_early_stopping() -> None:
         assert load_config(path)["training"]["early_stopping"] == expected
 
 
+def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
+    expected_files = {
+        "cifar10_lt_ddpm_epsilon_local.yaml": ("discrete_diffusion", "epsilon", False),
+        "cifar10_lt_x_vloss_local.yaml": ("discrete_diffusion", "x_vloss", False),
+        "cifar10_lt_cbdm_local.yaml": ("cbdm", "epsilon", False),
+        "cifar10_lt_oc_local.yaml": ("oc", "epsilon", False),
+        "cifar10_lt_cm_local.yaml": ("cm", "epsilon", True),
+    }
+    paths = sorted(Path("configs/imbdiff/local").glob("*.yaml"))
+
+    assert {path.name for path in paths} == set(expected_files)
+    for path in paths:
+        objective_name, prediction_type, capacity_enabled = expected_files[path.name]
+        config = load_config(path)
+        assert config["model"]["base_channels"] == 32
+        assert config["model"]["channel_multipliers"] == [1, 2, 2]
+        assert config["model"]["attention_levels"] == [1]
+        assert config["model"]["num_res_blocks"] == 1
+        assert config["objective"]["name"] == objective_name
+        assert config["objective"]["prediction_type"] == prediction_type
+        assert config["training"]["batch_size"] == 16
+        assert config["training"]["steps"] == 5000
+        assert config["training"]["warmup_steps"] == 500
+        assert config["training"]["early_stopping"] == {
+            "enabled": True,
+            "patience_steps": 1000,
+            "warmup_steps": 2000,
+            "min_delta": 0.0001,
+            "ema_alpha": 0.05,
+        }
+        assert config["sampling"]["n_samples"] == 1000
+        assert config["sampling"]["sample_batch_size"] == 16
+        assert config["sampling"]["plot_max_points"] == 100
+        assert config["sampling"]["ddim_skip"] == 50
+        assert config["experiment"]["output_dir"].startswith("runs/imbdiff/local/")
+
+        source = build_source(config)
+        model = build_model(config, dim=source.dim)
+        parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        assert model.is_class_conditional
+        assert 1_000_000 < parameter_count < 1_700_000
+        assert model.capacity_metadata()["enabled"] is capacity_enabled
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",
