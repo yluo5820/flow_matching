@@ -17,6 +17,7 @@ from tqdm.auto import trange
 
 from fm_lab.couplings.base import Coupling, pair_with_condition
 from fm_lab.data.base import TargetDistribution
+from fm_lab.diffusion.discrete import DiscreteDiffusion
 from fm_lab.paths.base import FlowPath
 from fm_lab.plotting.diagnostics import plot_training_history
 from fm_lab.plotting.trajectories import (
@@ -320,6 +321,20 @@ def train_flow_matching(
         rng_state=capture_rng_state(),
     )
 
+    if getattr(objective, "name", "") == "discrete_diffusion":
+        sample_artifacts = sample_discrete_and_plot(
+            config=config,
+            run_dir=run_dir,
+            target=target,
+            source=source,
+            model=ema_model if ema_model is not None else model,
+            objective=objective,
+            device=device,
+        )
+        metrics["sampling"] = sample_artifacts
+        write_json(metrics, run_dir / "metrics.json")
+        return metrics
+
     sampling_skip_reason = _velocity_sampling_skip_reason(objective)
     if sampling_skip_reason is not None:
         metrics["sampling"] = {
@@ -342,6 +357,100 @@ def train_flow_matching(
     metrics["sampling"] = sample_artifacts
     write_json(metrics, run_dir / "metrics.json")
     return metrics
+
+
+def sample_discrete_and_plot(
+    *,
+    config: dict[str, Any],
+    run_dir: Path,
+    target: TargetDistribution,
+    source: SourceDistribution,
+    model: nn.Module,
+    objective: Any,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Generate final samples with the configured finite-step diffusion sampler."""
+
+    from fm_lab.diffusion.sampling import sample_discrete_diffusion
+
+    sampling_config = config.get("sampling", {}) or {}
+    n_samples = int(sampling_config.get("n_samples", 2048))
+    batch_size = int(sampling_config.get("sample_batch_size", n_samples))
+    if n_samples < 1 or batch_size < 1:
+        raise ValueError("Discrete sampling counts must be positive.")
+    sampler = str(sampling_config.get("sampler", "ddim")).lower()
+    ddim_skip = int(sampling_config.get("ddim_skip", 20))
+    eta = float(sampling_config.get("eta", 0.0))
+    cfg_config = sampling_config.get("classifier_free_guidance", {}) or {}
+    convention = str(cfg_config.get("convention", "fm_lab"))
+    if convention != "fm_lab":
+        raise ValueError(
+            "sampling.classifier_free_guidance.convention must be 'fm_lab'; "
+            "convert paper omega to scale explicitly."
+        )
+    guidance_scale = (
+        float(cfg_config.get("scale", 1.0))
+        if bool(cfg_config.get("enabled", True))
+        else 1.0
+    )
+    labels = _sampling_class_labels(
+        config,
+        model=model,
+        n_samples=n_samples,
+        device=device,
+    )
+    if labels is None:
+        raise ValueError("Discrete ImbDiff sampling requires a class-conditional model.")
+    diffusion: DiscreteDiffusion = objective.diffusion
+    generated_chunks: list[torch.Tensor] = []
+    seed = _sampling_seed(config)
+    with _temporary_torch_seed(seed, device):
+        for offset in range(0, n_samples, batch_size):
+            chunk_labels = labels[offset : offset + batch_size]
+            generated_chunks.append(
+                sample_discrete_diffusion(
+                    model=model,
+                    diffusion=diffusion,
+                    sample_shape=(chunk_labels.shape[0], source.dim),
+                    class_labels=chunk_labels,
+                    prediction_type=objective.prediction_type,
+                    sampler=sampler,
+                    guidance_scale=guidance_scale,
+                    ddim_skip=ddim_skip,
+                    eta=eta,
+                ).cpu()
+            )
+        target_samples, _ = _sample_target_with_optional_labels(
+            target,
+            min(n_samples, int(sampling_config.get("plot_max_points", n_samples))),
+            device=device,
+        )
+    generated = torch.cat(generated_chunks, dim=0)
+    samples_dir = run_dir / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    np.save(samples_dir / f"{sampler}.npy", generated.numpy())
+    np.save(samples_dir / "generated_labels.npy", labels.cpu().numpy())
+    target_metadata = target.metadata()
+    plot_generated_samples(
+        target_samples.cpu(),
+        {sampler: generated},
+        run_dir / "plots" / "generated_samples.png",
+        max_points=int(sampling_config.get("plot_max_points", n_samples)),
+        image_shape=target_metadata.get("image_shape"),
+        image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
+    )
+    return {
+        "sampler": sampler,
+        "n_samples": n_samples,
+        "sample_batch_size": batch_size,
+        "ddim_skip": ddim_skip if sampler == "ddim" else None,
+        "eta": eta if sampler == "ddim" else None,
+        "classifier_free_guidance_scale": guidance_scale,
+        "classifier_free_guidance_convention": convention,
+        "seed": seed,
+        "samples_path": str(samples_dir / f"{sampler}.npy"),
+        "labels_path": str(samples_dir / "generated_labels.npy"),
+    }
 
 
 @dataclass(frozen=True)
