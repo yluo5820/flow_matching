@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -50,6 +51,7 @@ class TrainingObjective(Protocol):
         t: torch.Tensor,
         compute_diagnostics: bool = True,
         class_labels: torch.Tensor | None = None,
+        original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute a scalar training loss and detached logging metrics."""
 
@@ -111,7 +113,9 @@ class FlowMatchingObjective:
         t: torch.Tensor,
         compute_diagnostics: bool = True,
         class_labels: torch.Tensor | None = None,
+        original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
+        del original_class_labels
         return self._loss(
             model=model,
             path=path,
@@ -327,7 +331,9 @@ class DiffusionObjective:
         t: torch.Tensor,
         compute_diagnostics: bool = True,
         class_labels: torch.Tensor | None = None,
+        original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
+        del original_class_labels
         if not hasattr(path, "sample_training_tuple"):
             raise ValueError("diffusion objective requires path.name: gaussian_diffusion.")
 
@@ -384,7 +390,10 @@ class DirectionOnlyStraightObjective:
         x1: torch.Tensor,
         t: torch.Tensor,
         compute_diagnostics: bool = True,
+        class_labels: torch.Tensor | None = None,
+        original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
+        del class_labels, original_class_labels
         if not hasattr(model, "direction") or not hasattr(model, "speed"):
             raise ValueError("direction_only_straight objective requires DirectionSpeedMLP.")
 
@@ -622,19 +631,27 @@ def build_objective(
     config: dict[str, Any] | None = None,
     *,
     diffusion_config: dict[str, Any] | None = None,
+    class_counts: Sequence[int] | None = None,
 ) -> TrainingObjective:
     """Build a training objective from config."""
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
-    if name in {"discrete_diffusion", "ddpm"}:
+    if name in {"discrete_diffusion", "ddpm", "cbdm"}:
         diffusion_config = {} if diffusion_config is None else diffusion_config
+        method = "cbdm" if name == "cbdm" else str(config.get("method", "ddpm"))
+        cbdm_config = config.get("cbdm", {})
         return DiscreteDiffusionObjective(
             prediction_type=str(config.get("prediction_type", "epsilon")),
             timesteps=int(diffusion_config.get("timesteps", 1000)),
             beta_start=float(diffusion_config.get("beta_start", 1e-4)),
             beta_end=float(diffusion_config.get("beta_end", 2e-2)),
             variance=str(diffusion_config.get("variance", "fixed_large")),
+            method=method,
+            class_counts=class_counts,
+            cbdm_target_distribution=str(cbdm_config.get("target_distribution", "train")),
+            cbdm_tau=float(cbdm_config.get("tau", 0.001)),
+            cbdm_gamma=float(cbdm_config.get("gamma", 0.25)),
         )
     diffusion_prediction_aliases = {
         "diffusion_epsilon": "epsilon",

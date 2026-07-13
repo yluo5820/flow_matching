@@ -10,7 +10,7 @@ from fm_lab.solvers import EulerSolver
 from fm_lab.sources import GaussianSource
 from fm_lab.training.losses import FlowMatchingObjective
 from fm_lab.training.prediction import classifier_free_guided_prediction
-from fm_lab.training.trainer import sample_and_plot
+from fm_lab.training.trainer import _sample_training_batch, sample_and_plot
 
 
 class LabelVelocity(nn.Module):
@@ -92,6 +92,21 @@ def test_flow_matching_objective_passes_class_labels() -> None:
         class_labels=labels,
     )
     assert torch.allclose(loss, torch.tensor(0.0))
+
+
+def test_training_batch_preserves_labels_before_cfg_dropout() -> None:
+    _, _, _, conditioned_labels, original_labels = _sample_training_batch(
+        source=GaussianSource(dim=2),
+        target=LabeledTarget(),
+        coupling=IndependentCoupling(shuffle_target=False),
+        batch_size=4,
+        device=torch.device("cpu"),
+        class_conditional=True,
+        condition_dropout=1.0,
+    )
+
+    assert torch.equal(conditioned_labels, torch.full((4,), -1))
+    assert torch.equal(original_labels, torch.tensor([0, 1, 0, 1]))
 
 
 def test_classifier_free_guidance_combines_velocity_predictions() -> None:

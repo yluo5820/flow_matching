@@ -220,6 +220,30 @@ def test_imbdiff_x_vloss_config_changes_only_objective_track() -> None:
     assert config["experiment"]["track"] == "ddpm_x_vloss"
 
 
+def test_imbdiff_cbdm_configs_encode_paper_regularizer() -> None:
+    paths = (
+        "configs/imbdiff/cifar10_lt_cbdm.yaml",
+        "configs/imbdiff/cifar100_lt_cbdm.yaml",
+    )
+
+    for path in paths:
+        config = load_config(path)
+        expected_classes = 100 if "cifar100" in path else 10
+        objective = build_objective(
+            config["objective"],
+            diffusion_config=config["diffusion"],
+            class_counts=[1] * expected_classes,
+        )
+
+        assert objective.method == "cbdm"
+        assert config["objective"]["cbdm"] == {
+            "target_distribution": "train",
+            "tau": 0.001,
+            "gamma": 0.25,
+        }
+        assert config["experiment"]["track"] == "cbdm"
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",

@@ -93,6 +93,7 @@ def train_flow_matching(
     objective = build_objective(
         config.get("objective", {}),
         diffusion_config=config.get("diffusion", {}),
+        class_counts=getattr(target, "class_counts", None),
     )
     _validate_training_compatibility(objective, coupling, path, model)
     condition_dropout = _condition_dropout_probability(config, model)
@@ -164,7 +165,7 @@ def train_flow_matching(
             )
             loss_metrics = {}
             if should_log:
-                x0, x1, t, class_labels = _sample_training_batch(
+                x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
                     source=source,
                     target=target,
                     coupling=coupling,
@@ -181,6 +182,7 @@ def train_flow_matching(
                     t=t,
                     compute_diagnostics=True,
                     class_labels=class_labels,
+                    original_class_labels=original_class_labels,
                 )
                 if early_stopping.enabled:
                     candidate_state = _capture_training_state(
@@ -191,7 +193,7 @@ def train_flow_matching(
                         step=step,
                     )
         else:
-            x0, x1, t, class_labels = _sample_training_batch(
+            x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
                 source=source,
                 target=target,
                 coupling=coupling,
@@ -208,6 +210,7 @@ def train_flow_matching(
                 t=t,
                 compute_diagnostics=should_log,
                 class_labels=class_labels,
+                original_class_labels=original_class_labels,
             )
             if should_log and early_stopping.enabled:
                 candidate_state = _capture_training_state(
@@ -491,7 +494,7 @@ def _train_learned_acceleration_step(
         path.train()
 
     for _ in range(schedule.theta_steps):
-        x0, x1, t, _ = _sample_training_batch(
+        x0, x1, t, _, _ = _sample_training_batch(
             source=source,
             target=target,
             coupling=coupling,
@@ -507,7 +510,7 @@ def _train_learned_acceleration_step(
         return
 
     for _ in range(schedule.psi_steps):
-        x0, x1, t, _ = _sample_training_batch(
+        x0, x1, t, _, _ = _sample_training_batch(
             source=source,
             target=target,
             coupling=coupling,
@@ -586,7 +589,13 @@ def _sample_training_batch(
     device: torch.device,
     class_conditional: bool = False,
     condition_dropout: float = 0.0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor | None,
+]:
     x0 = source.sample(batch_size, device=device)
     if class_conditional:
         x1, class_labels = _sample_target_with_optional_labels(target, batch_size, device=device)
@@ -596,12 +605,13 @@ def _sample_training_batch(
         x1 = target.sample(batch_size, device=device)
         class_labels = None
     x0, x1, class_labels = pair_with_condition(coupling, x0, x1, class_labels)
+    original_class_labels = class_labels.clone() if class_labels is not None else None
     if class_labels is not None and condition_dropout > 0:
         drop = torch.rand(batch_size, device=device) < condition_dropout
         class_labels = class_labels.clone()
         class_labels[drop] = -1
     t = sample_uniform_time(batch_size, device)
-    return x0, x1, t, class_labels
+    return x0, x1, t, class_labels, original_class_labels
 
 
 def _sample_target_with_optional_labels(
@@ -672,6 +682,7 @@ def sample_and_plot(
     objective = build_objective(
         config.get("objective", {}),
         diffusion_config=config.get("diffusion", {}),
+        class_counts=getattr(target, "class_counts", None),
     )
     if path is None:
         if guidance.density is not None and guidance.density.enabled:
