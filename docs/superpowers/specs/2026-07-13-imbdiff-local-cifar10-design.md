@@ -42,6 +42,7 @@ Every method uses the same local budget:
 training:
   batch_size: 16
   steps: 5000
+  warmup_steps: 500
   early_stopping:
     enabled: true
     warmup_steps: 2000
@@ -56,9 +57,11 @@ sampling:
   ddim_skip: 50
 ```
 
-The remaining optimizer, diffusion, conditioning, classifier-free guidance,
-and method-specific settings match their corresponding CIFAR-10 paper-profile
-configs. The earliest early stop is approximately step 3000. A measured
+The learning rate remains `0.0002`, but optimizer warmup is reduced from the
+paper profile's 5000 steps to 500 so the local run reaches its full learning
+rate. Diffusion, conditioning, classifier-free guidance, and method semantics
+remain useful references rather than strict parity requirements. The earliest
+early stop is approximately step 3000. A measured
 batch-16 forward/backward pass takes about 0.34 seconds on the current CPU, so
 single-forward methods target roughly 25–40 minutes and dual-forward methods
 roughly 40–60 minutes. Wall time remains hardware- and data-pipeline-dependent.
