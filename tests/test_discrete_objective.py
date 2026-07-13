@@ -80,12 +80,41 @@ def test_discrete_epsilon_objective_is_exact_noise_mse() -> None:
         x1=torch.randn_like(noise),
         t=torch.tensor([2, 7]),
         class_labels=labels,
+        compute_diagnostics=False,
     )
 
     assert torch.allclose(loss, (prediction.expand_as(noise) - noise).square().mean())
     assert metrics["loss"] == float(loss.detach())
+    assert not any(key.startswith("diffusion_loss_") for key in metrics)
     assert torch.equal(model.seen_t, torch.tensor([2, 7]))
     assert torch.equal(model.seen_labels, labels)
+
+
+def test_discrete_objective_logs_timestep_resolved_loss_without_changing_total() -> None:
+    objective = build_objective(
+        {"name": "discrete_diffusion", "prediction_type": "epsilon"},
+        diffusion_config={"timesteps": 1000},
+    )
+    model = FixedConditionalPrediction(torch.zeros(1, 2))
+    noise_levels = torch.arange(1.0, 7.0)
+    noise = noise_levels[:, None].expand(6, 2)
+
+    loss, metrics = objective(
+        model=model,
+        path=None,
+        x0=noise,
+        x1=torch.zeros_like(noise),
+        t=torch.tensor([0, 100, 334, 500, 667, 999]),
+        class_labels=torch.zeros(6, dtype=torch.long),
+    )
+
+    assert torch.allclose(loss, noise_levels.square().mean())
+    assert metrics["diffusion_loss_low_noise"] == pytest.approx(2.5)
+    assert metrics["diffusion_loss_low_noise_count"] == 2.0
+    assert metrics["diffusion_loss_mid_noise"] == pytest.approx(12.5)
+    assert metrics["diffusion_loss_mid_noise_count"] == 2.0
+    assert metrics["diffusion_loss_high_noise"] == pytest.approx(30.5)
+    assert metrics["diffusion_loss_high_noise_count"] == 2.0
 
 
 def test_x_prediction_velocity_loss_is_zero_for_clean_prediction() -> None:

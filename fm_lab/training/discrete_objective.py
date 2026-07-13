@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 from fm_lab.diffusion import DiscreteDiffusion
@@ -94,7 +93,7 @@ class DiscreteDiffusionObjective:
         class_labels: torch.Tensor | None = None,
         original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        del path, compute_diagnostics
+        del path
         discrete_t = (
             t.to(dtype=torch.long)
             if t.dtype in {torch.int32, torch.int64}
@@ -137,15 +136,20 @@ class DiscreteDiffusionObjective:
             use_capacity=True if self.method == "cm" else None,
         )
         predicted_epsilon = self._as_epsilon(prediction, xt, discrete_t)
-        diffusion_loss = self._diffusion_loss(
+        diffusion_loss_per_sample = self._diffusion_loss_per_sample(
             prediction=prediction,
             predicted_epsilon=predicted_epsilon,
             target_clean=target_clean,
             target_noise=target_noise,
             discrete_t=discrete_t,
         )
+        diffusion_loss = diffusion_loss_per_sample.mean()
         loss = diffusion_loss
         metrics = {"diffusion_loss": float(diffusion_loss.detach())}
+        if compute_diagnostics:
+            metrics.update(
+                self._timestep_loss_metrics(diffusion_loss_per_sample, discrete_t)
+            )
         if self.method == "cbdm":
             regularizer, commitment = self._cbdm_losses(
                 model=model,
@@ -229,7 +233,7 @@ class DiscreteDiffusionObjective:
             return prediction
         return self.diffusion.predict_epsilon_from_x0(xt, discrete_t, prediction)
 
-    def _diffusion_loss(
+    def _diffusion_loss_per_sample(
         self,
         *,
         prediction: torch.Tensor,
@@ -239,14 +243,37 @@ class DiscreteDiffusionObjective:
         discrete_t: torch.Tensor,
     ) -> torch.Tensor:
         if self.prediction_type == "epsilon":
-            return F.mse_loss(prediction, target_noise)
-        predicted_velocity = self.diffusion.velocity_target(
-            prediction, predicted_epsilon, discrete_t
-        )
-        target_velocity = self.diffusion.velocity_target(
-            target_clean, target_noise, discrete_t
-        )
-        return F.mse_loss(predicted_velocity, target_velocity)
+            squared_error = (prediction - target_noise).square()
+        else:
+            predicted_velocity = self.diffusion.velocity_target(
+                prediction, predicted_epsilon, discrete_t
+            )
+            target_velocity = self.diffusion.velocity_target(
+                target_clean, target_noise, discrete_t
+            )
+            squared_error = (predicted_velocity - target_velocity).square()
+        return squared_error.flatten(1).mean(1)
+
+    def _timestep_loss_metrics(
+        self,
+        per_sample_loss: torch.Tensor,
+        discrete_t: torch.Tensor,
+    ) -> dict[str, float]:
+        first = self.diffusion.timesteps // 3
+        second = 2 * self.diffusion.timesteps // 3
+        masks = {
+            "low_noise": discrete_t < first,
+            "mid_noise": (discrete_t >= first) & (discrete_t < second),
+            "high_noise": discrete_t >= second,
+        }
+        metrics: dict[str, float] = {}
+        for name, mask in masks.items():
+            count = int(mask.sum().item())
+            metrics[f"diffusion_loss_{name}"] = (
+                float(per_sample_loss[mask].detach().mean()) if count else 0.0
+            )
+            metrics[f"diffusion_loss_{name}_count"] = float(count)
+        return metrics
 
     def _cm_losses(
         self,
