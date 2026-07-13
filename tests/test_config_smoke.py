@@ -318,17 +318,38 @@ def test_all_imbdiff_configs_enable_shared_early_stopping() -> None:
 
 def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
     expected_files = {
-        "cifar10_lt_ddpm_epsilon_local.yaml": ("discrete_diffusion", "epsilon", False),
-        "cifar10_lt_x_vloss_local.yaml": ("discrete_diffusion", "x_vloss", False),
-        "cifar10_lt_cbdm_local.yaml": ("cbdm", "epsilon", False),
-        "cifar10_lt_oc_local.yaml": ("oc", "epsilon", False),
-        "cifar10_lt_cm_local.yaml": ("cm", "epsilon", True),
+        "cifar10_lt_ddpm_epsilon_local.yaml": (
+            "discrete_diffusion",
+            "epsilon",
+            False,
+            8000,
+            4000,
+            2000,
+        ),
+        "cifar10_lt_x_vloss_local.yaml": (
+            "discrete_diffusion",
+            "x_vloss",
+            False,
+            12000,
+            6000,
+            4000,
+        ),
+        "cifar10_lt_cbdm_local.yaml": ("cbdm", "epsilon", False, 8000, 4000, 2000),
+        "cifar10_lt_oc_local.yaml": ("oc", "epsilon", False, 8000, 4000, 2000),
+        "cifar10_lt_cm_local.yaml": ("cm", "epsilon", True, 8000, 4000, 2000),
     }
     paths = sorted(Path("configs/imbdiff/local").glob("*.yaml"))
 
     assert {path.name for path in paths} == set(expected_files)
     for path in paths:
-        objective_name, prediction_type, capacity_enabled = expected_files[path.name]
+        (
+            objective_name,
+            prediction_type,
+            capacity_enabled,
+            steps,
+            early_warmup_steps,
+            patience_steps,
+        ) = expected_files[path.name]
         config = load_config(path)
         assert config["model"]["name"] == "image_unet"
         assert config["model"]["image_shape"] == [3, 32, 32]
@@ -339,14 +360,14 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
         assert config["objective"]["name"] == objective_name
         assert config["objective"]["prediction_type"] == prediction_type
         assert config["training"]["batch_size"] == 32
-        assert config["training"]["steps"] == 8000
+        assert config["training"]["steps"] == steps
         assert config["training"]["warmup_steps"] == 500
         assert config["training"]["checkpoint_every"] == 2000
         assert config["training"]["ema_decay"] == 0.999
         assert config["training"]["early_stopping"] == {
             "enabled": True,
-            "patience_steps": 2000,
-            "warmup_steps": 4000,
+            "patience_steps": patience_steps,
+            "warmup_steps": early_warmup_steps,
             "min_delta": 0.0001,
             "ema_alpha": 0.3,
         }
