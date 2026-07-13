@@ -137,3 +137,47 @@ Primary IR=100 reference targets:
 
 Initial acceptance is correct method ranking and comparable score magnitude;
 exact equality is not expected across frameworks, hardware, and random seeds.
+
+## Round 3 commands
+
+Run a short end-to-end CIFAR-10-LT parity smoke test before allocating a full
+training run:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_train \
+  --config configs/imbdiff/cifar10_lt_ddpm_epsilon.yaml \
+  --output-dir runs/imbdiff/smoke_cifar10_ddpm \
+  --steps 2 --batch-size 2 --n-samples 4 --sample-batch-size 2
+```
+
+The smoke run should write `checkpoint.pt`, `metrics.json`,
+`samples/ddim.npy`, `samples/generated_labels.npy`, and
+`plots/generated_samples.png`. It still constructs the full paper U-Net, so it
+validates device memory as well as data and sampler integration.
+
+Launch the full epsilon-parity baselines with:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_train \
+  --config configs/imbdiff/cifar10_lt_ddpm_epsilon.yaml
+
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_train \
+  --config configs/imbdiff/cifar100_lt_ddpm_epsilon.yaml
+```
+
+The requested x-prediction with velocity-space loss comparison is:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_train \
+  --config configs/imbdiff/cifar10_lt_x_vloss.yaml
+```
+
+Resume any interrupted run by reusing its output directory and periodic
+checkpoint:
+
+```bash
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_train \
+  --config configs/imbdiff/cifar10_lt_ddpm_epsilon.yaml \
+  --output-dir runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon \
+  --resume-from runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/checkpoints/step_100000.pt
+```

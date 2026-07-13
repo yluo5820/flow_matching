@@ -178,6 +178,48 @@ def test_diffusion_config_builds_path_and_objective() -> None:
     assert model(x0, t).shape == (2, 3)
 
 
+def test_imbdiff_round3_configs_encode_paper_protocol() -> None:
+    paths = (
+        "configs/imbdiff/cifar10_lt_ddpm_epsilon.yaml",
+        "configs/imbdiff/cifar100_lt_ddpm_epsilon.yaml",
+    )
+
+    for path in paths:
+        config = load_config(path)
+        expected_classes = 100 if "cifar100" in path else 10
+        assert config["data"]["imbalance_factor"] == 0.01
+        assert config["source"]["dim"] == 3072
+        assert config["conditioning"]["num_classes"] == expected_classes
+        assert config["model"]["channel_multipliers"] == [1, 2, 2, 2]
+        assert config["model"]["attention_levels"] == [1]
+        assert config["diffusion"] == {
+            "timesteps": 1000,
+            "beta_start": 0.0001,
+            "beta_end": 0.02,
+            "variance": "fixed_large",
+        }
+        assert config["objective"] == {
+            "name": "discrete_diffusion",
+            "prediction_type": "epsilon",
+        }
+        assert config["training"]["optimizer"] == "adam"
+        assert config["training"]["warmup_steps"] == 5000
+        assert config["training"]["ema_decay"] == 0.9999
+        assert config["sampling"]["classifier_free_guidance"] == {
+            "enabled": True,
+            "convention": "fm_lab",
+            "scale": 2.5,
+            "paper_omega": 1.5,
+        }
+
+
+def test_imbdiff_x_vloss_config_changes_only_objective_track() -> None:
+    config = load_config("configs/imbdiff/cifar10_lt_x_vloss.yaml")
+
+    assert config["objective"]["prediction_type"] == "x_vloss"
+    assert config["experiment"]["track"] == "ddpm_x_vloss"
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",

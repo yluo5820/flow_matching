@@ -1,12 +1,17 @@
 import torch
 from torch import nn
 
+from fm_lab.couplings import IndependentCoupling
 from fm_lab.diffusion import DiscreteDiffusion
 from fm_lab.diffusion.sampling import (
     balanced_class_labels,
     paper_omega_to_guidance_scale,
     sample_discrete_diffusion,
 )
+from fm_lab.paths import LinearPath
+from fm_lab.solvers import EulerSolver
+from fm_lab.training.trainer import train_flow_matching
+from fm_lab.utils.checkpoints import load_checkpoint
 
 
 class RecordingConditionalModel(nn.Module):
@@ -22,6 +27,86 @@ class RecordingConditionalModel(nn.Module):
         self.timesteps.append(t.detach().clone())
         labels = context["class_labels"].to(x.dtype)
         return labels[:, None].expand_as(x) * 0.01
+
+
+class TinyTrainableConditionalModel(nn.Module):
+    is_class_conditional = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = nn.Linear(3, 2)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        return self.linear(torch.cat((x, t.float()[:, None] / 4.0), dim=1))
+
+
+class TinySource:
+    dim = 2
+
+    def sample(self, n: int, device=None) -> torch.Tensor:
+        return torch.randn(n, 2, device=device)
+
+    def metadata(self) -> dict:
+        return {"name": "tiny_source", "dim": 2}
+
+
+class TinyLabeledTarget:
+    dim = 2
+
+    def sample(self, n: int, device=None) -> torch.Tensor:
+        return self.sample_with_labels(n, device=device)[0]
+
+    def sample_with_labels(self, n: int, device=None):
+        return torch.rand(n, 2, device=device) * 2 - 1, torch.arange(n, device=device) % 2
+
+    def metadata(self) -> dict:
+        return {"name": "tiny_target", "dim": 2}
+
+
+def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 7},
+        "conditioning": {"enabled": True, "num_classes": 2, "dropout_probability": 0.1},
+        "diffusion": {
+            "timesteps": 4,
+            "beta_start": 1e-4,
+            "beta_end": 1e-2,
+            "variance": "fixed_large",
+        },
+        "objective": {"name": "discrete_diffusion", "prediction_type": "epsilon"},
+        "training": {"steps": 1, "batch_size": 2, "lr": 1e-3, "ema_decay": 0.9},
+        "sampling": {
+            "n_samples": 4,
+            "sample_batch_size": 2,
+            "sampler": "ddim",
+            "ddim_skip": 2,
+            "eta": 0.0,
+            "classes": [0, 1],
+            "classifier_free_guidance": {
+                "enabled": True,
+                "convention": "fm_lab",
+                "scale": 1.0,
+            },
+        },
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=TinyLabeledTarget(),
+        source=TinySource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TinyTrainableConditionalModel(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert metrics["sampling"]["sampler"] == "ddim"
+    assert (tmp_path / "samples" / "ddim.npy").exists()
+    assert (tmp_path / "samples" / "generated_labels.npy").exists()
+    assert (tmp_path / "plots" / "generated_samples.png").exists()
+    assert "ema_model_state_dict" in load_checkpoint(tmp_path / "checkpoint.pt")
 
 
 def test_paper_omega_conversion_matches_cfg_equations() -> None:
