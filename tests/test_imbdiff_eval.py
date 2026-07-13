@@ -4,7 +4,7 @@ import numpy as np
 
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
 from fm_lab.evaluation.report import evaluate_feature_caches, write_evaluation_report
-from fm_lab.experiments.run_imbdiff_eval import main
+from fm_lab.experiments.run_imbdiff_eval import main, parse_args
 
 
 def _feature_cache(offset: float = 0.0) -> FeatureCache:
@@ -55,6 +55,22 @@ def test_evaluation_report_contains_all_metrics_and_extensions() -> None:
         "classwise_fid",
         "group_fid",
     ]
+
+
+def test_evaluation_report_and_cli_default_to_paper_recall_k_five() -> None:
+    report = evaluate_feature_caches(
+        _feature_cache(),
+        _feature_cache(),
+        class_counts=[100, 10, 1],
+        repeats=1,
+        overall_samples=12,
+        kid_subsets=1,
+        kid_subset_size=6,
+        inception_splits=1,
+    )
+
+    assert report["provenance"]["recall_k"] == 5
+    assert parse_args(["--class-counts", "counts.json", "--output-dir", "report"]).recall_k == 5
 
 
 def test_write_report_creates_json_and_flat_csv(tmp_path) -> None:

@@ -68,7 +68,7 @@ def generative_recall(
     generated: np.ndarray,
     real: np.ndarray,
     *,
-    nearest_k: int = 3,
+    nearest_k: int = 5,
 ) -> float:
     generated, real = _feature_pair(generated, real, minimum=2)
     if nearest_k < 1 or nearest_k >= len(real):

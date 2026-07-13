@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pytest
 
@@ -49,6 +51,10 @@ def test_generative_recall_is_zero_for_distant_generated_features() -> None:
     generated = real + 100.0
 
     assert generative_recall(generated, real, nearest_k=1) == 0.0
+
+
+def test_generative_recall_defaults_to_paper_k_five() -> None:
+    assert inspect.signature(generative_recall).parameters["nearest_k"].default == 5
 
 
 def test_inception_score_matches_balanced_confident_predictions() -> None:

@@ -31,7 +31,7 @@ def evaluate_feature_caches(
     seed: int = 0,
     kid_subsets: int = 100,
     kid_subset_size: int = 1000,
-    recall_k: int = 3,
+    recall_k: int = 5,
     inception_splits: int = 10,
 ) -> dict[str, Any]:
     if repeats < 1 or overall_samples < 2:

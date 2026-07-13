@@ -36,7 +36,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--kid-subsets", type=int, default=100)
     parser.add_argument("--kid-subset-size", type=int, default=1000)
-    parser.add_argument("--recall-k", type=int, default=3)
+    parser.add_argument("--recall-k", type=int, default=5)
     parser.add_argument("--inception-splits", type=int, default=10)
     return parser.parse_args(argv)
 
