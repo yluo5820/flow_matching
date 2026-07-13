@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from fm_lab.models.capacity import (
+    CapacityConfig,
+    SwitchableLowRankConv2d,
+    apply_capacity_conv,
+    use_capacity_from_context,
+)
 from fm_lab.models.mlp import (
     SinusoidalTimeEmbedding,
     _activation,
@@ -30,6 +37,10 @@ class ImageUNetVelocity(nn.Module):
         zero_init_head: bool = True,
         num_classes: int | None = None,
         class_embedding_dim: int | None = None,
+        capacity_rank: int = 0,
+        capacity_rank_ratio: float = 0.0,
+        capacity_adapter_scale: float = 1.0,
+        capacity_parts: Sequence[str] = (),
     ) -> None:
         super().__init__()
         channels, height, width, layout = _parse_image_shape(image_shape)
@@ -45,6 +56,18 @@ class ImageUNetVelocity(nn.Module):
         self.width = width
         self.image_shape = tuple(int(value) for value in image_shape)
         self.image_layout = layout
+        self._capacity = CapacityConfig.build(
+            rank=capacity_rank,
+            rank_ratio=capacity_rank_ratio,
+            adapter_scale=capacity_adapter_scale,
+            parts=capacity_parts,
+        )
+        unsupported_parts = self._capacity.parts - {"up"}
+        if unsupported_parts:
+            raise ValueError(
+                "ImageUNetVelocity supports capacity only in ['up'], "
+                f"got {sorted(unsupported_parts)}."
+            )
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
         self.num_classes = num_classes
         self.is_class_conditional = num_classes is not None
@@ -74,8 +97,22 @@ class ImageUNetVelocity(nn.Module):
         self.down2 = nn.Sequential(nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1))
         self.down2_block = TimeResBlock(c2, c2, time_embedding_dim, activation)
         self.middle = TimeResBlock(c2, c2, time_embedding_dim, activation)
-        self.up1_block = TimeResBlock(c2 + c1, c1, time_embedding_dim, activation)
-        self.up0_block = TimeResBlock(c1 + c0, c0, time_embedding_dim, activation)
+        self.up1_block = TimeResBlock(
+            c2 + c1,
+            c1,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="up",
+        )
+        self.up0_block = TimeResBlock(
+            c1 + c0,
+            c0,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="up",
+        )
         self.output_block = nn.Sequential(
             nn.GroupNorm(_group_count(c0), c0),
             _activation(activation),
@@ -105,10 +142,32 @@ class ImageUNetVelocity(nn.Module):
         middle = self.middle(h2, time_features)
 
         u1 = F.interpolate(middle, size=h1.shape[-2:], mode="nearest")
-        u1 = self.up1_block(torch.cat([u1, h1], dim=1), time_features)
+        use_capacity = use_capacity_from_context(context)
+        u1 = self.up1_block(
+            torch.cat([u1, h1], dim=1),
+            time_features,
+            use_capacity=use_capacity,
+        )
         u0 = F.interpolate(u1, size=h0.shape[-2:], mode="nearest")
-        u0 = self.up0_block(torch.cat([u0, h0], dim=1), time_features)
+        u0 = self.up0_block(
+            torch.cat([u0, h0], dim=1),
+            time_features,
+            use_capacity=use_capacity,
+        )
         return _image_to_flat(self.output_block(u0), layout=self.image_layout)
+
+    def capacity_metadata(self) -> dict[str, object]:
+        adapter_layers = sum(
+            isinstance(module, SwitchableLowRankConv2d) for module in self.modules()
+        )
+        return {
+            "enabled": self._capacity.enabled,
+            "rank": self._capacity.rank,
+            "rank_ratio": self._capacity.rank_ratio,
+            "adapter_scale": self._capacity.adapter_scale,
+            "parts": sorted(self._capacity.parts),
+            "adapter_layers": adapter_layers,
+        }
 
 
 class DirectionSpeedImageUNet(nn.Module):
@@ -276,13 +335,24 @@ class TimeResBlock(nn.Module):
         out_channels: int,
         time_embedding_dim: int,
         activation: str,
+        *,
+        capacity: CapacityConfig | None = None,
+        capacity_part: str = "",
     ) -> None:
         super().__init__()
         self.norm1 = nn.GroupNorm(_group_count(in_channels), in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv1 = (
+            capacity.conv(capacity_part, in_channels, out_channels, 3, padding=1)
+            if capacity is not None
+            else nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        )
         self.time_proj = nn.Linear(time_embedding_dim, out_channels)
         self.norm2 = nn.GroupNorm(_group_count(out_channels), out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = (
+            capacity.conv(capacity_part, out_channels, out_channels, 3, padding=1)
+            if capacity is not None
+            else nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        )
         self.skip = (
             nn.Conv2d(in_channels, out_channels, kernel_size=1)
             if in_channels != out_channels
@@ -290,10 +360,24 @@ class TimeResBlock(nn.Module):
         )
         self.activation = _activation(activation)
 
-    def forward(self, x: torch.Tensor, time_features: torch.Tensor) -> torch.Tensor:
-        h = self.conv1(self.activation(self.norm1(x)))
+    def forward(
+        self,
+        x: torch.Tensor,
+        time_features: torch.Tensor,
+        *,
+        use_capacity: bool = True,
+    ) -> torch.Tensor:
+        h = apply_capacity_conv(
+            self.conv1,
+            self.activation(self.norm1(x)),
+            use_capacity=use_capacity,
+        )
         h = h + self.time_proj(time_features)[:, :, None, None]
-        h = self.conv2(self.activation(self.norm2(h)))
+        h = apply_capacity_conv(
+            self.conv2,
+            self.activation(self.norm2(h)),
+            use_capacity=use_capacity,
+        )
         return (h + self.skip(x)) / math.sqrt(2.0)
 
 

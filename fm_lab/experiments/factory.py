@@ -347,6 +347,8 @@ def build_model(config: dict[str, Any], dim: int):
         )
     if name in {"image_unet", "mnist_unet", "conv_unet"}:
         image_shape = tuple(int(value) for value in model_config.get("image_shape", [28, 28]))
+        capacity_config = model_config.get("capacity", {}) or {}
+        capacity_enabled = bool(capacity_config.get("enabled", False))
         return ImageUNetVelocity(
             dim=dim,
             image_shape=image_shape,
@@ -356,6 +358,18 @@ def build_model(config: dict[str, Any], dim: int):
             zero_init_head=bool(model_config.get("zero_init_head", True)),
             num_classes=num_classes,
             class_embedding_dim=class_embedding_dim,
+            capacity_rank=(
+                int(capacity_config.get("rank", 0)) if capacity_enabled else 0
+            ),
+            capacity_rank_ratio=(
+                float(capacity_config.get("rank_ratio", 0.0))
+                if capacity_enabled
+                else 0.0
+            ),
+            capacity_adapter_scale=float(capacity_config.get("adapter_scale", 1.0)),
+            capacity_parts=(
+                tuple(capacity_config.get("parts", ())) if capacity_enabled else ()
+            ),
         )
     if name in {"direction_speed_image_unet", "direction_only_image_unet"}:
         if conditioning_enabled:

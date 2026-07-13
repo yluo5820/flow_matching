@@ -8,6 +8,7 @@ from fm_lab.models.capacity import (
     apply_capacity_conv,
     use_capacity_from_context,
 )
+from fm_lab.training.losses import build_objective
 
 
 def _cm_model_config() -> dict:
@@ -20,6 +21,27 @@ def _cm_model_config() -> dict:
             "attention_levels": [1],
             "num_res_blocks": 1,
             "dropout": 0.0,
+            "capacity": {
+                "enabled": True,
+                "rank_ratio": 0.25,
+                "adapter_scale": 0.5,
+                "parts": ["up"],
+            },
+        },
+        "conditioning": {"enabled": True, "num_classes": 10},
+        "diffusion": {"timesteps": 1000},
+    }
+
+
+def _cm_image_model_config() -> dict:
+    return {
+        "model": {
+            "name": "image_unet",
+            "image_shape": [3, 8, 8],
+            "base_channels": 32,
+            "time_embedding_dim": 128,
+            "activation": "silu",
+            "zero_init_head": True,
             "capacity": {
                 "enabled": True,
                 "rank_ratio": 0.25,
@@ -62,6 +84,84 @@ def test_capacity_config_rejects_unknown_model_parts() -> None:
             adapter_scale=1.0,
             parts=["unknown"],
         )
+
+
+def test_image_unet_factory_places_cm_capacity_only_in_up_blocks() -> None:
+    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8)
+    adapter_names = [
+        name
+        for name, module in model.named_modules()
+        if isinstance(module, models.SwitchableLowRankConv2d)
+    ]
+
+    assert adapter_names == [
+        "up1_block.conv1",
+        "up1_block.conv2",
+        "up0_block.conv1",
+        "up0_block.conv2",
+    ]
+    assert model.capacity_metadata() == {
+        "enabled": True,
+        "rank": 0,
+        "rank_ratio": 0.25,
+        "adapter_scale": 0.5,
+        "parts": ["up"],
+        "adapter_layers": 4,
+    }
+
+
+def test_image_unet_capacity_switch_preserves_base_branch() -> None:
+    torch.manual_seed(4)
+    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8).eval()
+    with torch.no_grad():
+        model.output_block[-1].weight.normal_(std=0.02)
+        model.output_block[-1].bias.zero_()
+    inputs = torch.randn(2, 3 * 8 * 8)
+    timesteps = torch.tensor([10, 20])
+    labels = torch.tensor([1, 2])
+    full_context = {"class_labels": labels, "use_capacity": True}
+    base_context = {"class_labels": labels, "use_capacity": False}
+
+    initial_full = model(inputs, timesteps, context=full_context)
+    initial_base = model(inputs, timesteps, context=base_context)
+    with torch.no_grad():
+        for module in model.modules():
+            if isinstance(module, models.SwitchableLowRankConv2d):
+                module.adapter_b.normal_(std=0.2)
+    changed_full = model(inputs, timesteps, context=full_context)
+    unchanged_base = model(inputs, timesteps, context=base_context)
+
+    assert torch.equal(initial_full, initial_base)
+    assert not torch.equal(changed_full, initial_full)
+    assert torch.equal(unchanged_base, initial_base)
+
+
+def test_cm_objective_accepts_capacity_enabled_image_unet() -> None:
+    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8)
+    objective = build_objective(
+        {
+            "name": "cm",
+            "prediction_type": "epsilon",
+            "oc": {"transfer_mode": "t2h", "cut_time": -1},
+            "cm": {"consistency_weight": 1.0, "diversity_weight": 0.2},
+        },
+        diffusion_config={"timesteps": 1000},
+        class_counts=[100, 50, 25, 12, 6, 3, 2, 1, 1, 1],
+    )
+    labels = torch.tensor([0, 9])
+
+    loss, metrics = objective(
+        model=model,
+        path=None,
+        x0=torch.randn(2, 3 * 8 * 8),
+        x1=torch.randn(2, 3 * 8 * 8),
+        t=torch.tensor([100, 900]),
+        class_labels=labels,
+        original_class_labels=labels,
+    )
+
+    assert torch.isfinite(loss)
+    assert "cm_loss" in metrics
 
 
 def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:

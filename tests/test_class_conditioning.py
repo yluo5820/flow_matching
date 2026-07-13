@@ -4,7 +4,7 @@ from torch import nn
 
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling, pair_with_condition
 from fm_lab.experiments.factory import build_model
-from fm_lab.models import ImageUNetVelocity, MLPVelocity
+from fm_lab.models import ImageUNetVelocity, MLPVelocity, SwitchableLowRankConv2d
 from fm_lab.paths import LinearPath
 from fm_lab.solvers import EulerSolver
 from fm_lab.sources import GaussianSource
@@ -79,6 +79,20 @@ def test_conditional_models_accept_classes_and_null_token() -> None:
     )
     assert mlp_output.shape == (2, 3)
     assert image_output.shape == (2, 16)
+
+    cifar_image = ImageUNetVelocity(
+        dim=3 * 32 * 32,
+        image_shape=(3, 32, 32),
+        base_channels=32,
+        time_embedding_dim=128,
+        num_classes=10,
+    )
+    assert sum(parameter.numel() for parameter in cifar_image.parameters()) == 1_078_569
+    assert not any(
+        isinstance(module, SwitchableLowRankConv2d)
+        for module in cifar_image.modules()
+    )
+    assert cifar_image.capacity_metadata()["enabled"] is False
 
 
 def test_flow_matching_objective_passes_class_labels() -> None:
