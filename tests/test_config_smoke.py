@@ -330,32 +330,35 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
     for path in paths:
         objective_name, prediction_type, capacity_enabled = expected_files[path.name]
         config = load_config(path)
+        assert config["model"]["name"] == "image_unet"
+        assert config["model"]["image_shape"] == [3, 32, 32]
         assert config["model"]["base_channels"] == 32
-        assert config["model"]["channel_multipliers"] == [1, 2, 2]
-        assert config["model"]["attention_levels"] == [1]
-        assert config["model"]["num_res_blocks"] == 1
+        assert config["model"]["time_embedding_dim"] == 128
+        assert config["model"]["activation"] == "silu"
+        assert config["model"]["zero_init_head"] is True
         assert config["objective"]["name"] == objective_name
         assert config["objective"]["prediction_type"] == prediction_type
-        assert config["training"]["batch_size"] == 16
-        assert config["training"]["steps"] == 10000
+        assert config["training"]["batch_size"] == 32
+        assert config["training"]["steps"] == 8000
         assert config["training"]["warmup_steps"] == 500
+        assert config["training"]["checkpoint_every"] == 2000
         assert config["training"]["ema_decay"] == 0.999
         assert config["training"]["early_stopping"] == {
             "enabled": True,
             "patience_steps": 2000,
-            "warmup_steps": 5000,
+            "warmup_steps": 4000,
             "min_delta": 0.0001,
             "ema_alpha": 0.3,
         }
-        assert config["sampling"]["n_samples"] == 1000
-        assert config["sampling"]["sample_batch_size"] == 16
-        assert config["sampling"]["plot_max_points"] == 100
-        assert config["sampling"]["ddim_skip"] == 20
+        assert config["sampling"]["n_samples"] == 256
+        assert config["sampling"]["sample_batch_size"] == 32
+        assert config["sampling"]["plot_max_points"] == 64
+        assert config["sampling"]["ddim_skip"] == 16
         assert config["sampling"]["classifier_free_guidance"]["scale"] == 1.0
         assert config["sampling"]["classifier_free_guidance"]["paper_omega"] == 0.0
         assert config["sampling"]["live_ema_comparison"] == {
             "enabled": True,
-            "n_samples": 100,
+            "n_samples": 64,
         }
         assert config["experiment"]["output_dir"].startswith("runs/imbdiff/local/")
 
@@ -363,7 +366,10 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
         model = build_model(config, dim=source.dim)
         parameter_count = sum(parameter.numel() for parameter in model.parameters())
         assert model.is_class_conditional
-        assert 1_000_000 < parameter_count < 1_700_000
+        if capacity_enabled:
+            assert parameter_count > 1_078_569
+        else:
+            assert parameter_count == 1_078_569
         assert model.capacity_metadata()["enabled"] is capacity_enabled
 
 

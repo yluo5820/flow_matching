@@ -27,13 +27,12 @@ path:
   name: gaussian_diffusion
 
 model:
-  name: ddpm_unet
+  name: image_unet
   image_shape: [3, 32, 32]
   base_channels: 32
-  channel_multipliers: [1, 2, 2]
-  attention_levels: [1]
-  num_res_blocks: 1
-  dropout: 0.1
+  time_embedding_dim: 128
+  activation: silu
+  zero_init_head: true
 
 conditioning:
   enabled: true
@@ -57,30 +56,30 @@ objective:
 training:
   optimizer: adam
   lr: 0.0002
-  batch_size: 16
-  steps: 10000
+  batch_size: 32
+  steps: 8000
   warmup_steps: 500
   early_stopping:
     enabled: true
     patience_steps: 2000
-    warmup_steps: 5000
+    warmup_steps: 4000
     min_delta: 0.0001
     ema_alpha: 0.3
   gradient_clip: 1.0
   ema_decay: 0.999
   log_every: 250
-  checkpoint_every: 2500
+  checkpoint_every: 2000
 
 solvers:
   names: [euler]
 
 sampling:
   sampler: ddim
-  n_samples: 1000
-  sample_batch_size: 16
-  plot_max_points: 100
+  n_samples: 256
+  sample_batch_size: 32
+  plot_max_points: 64
   classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  ddim_skip: 20
+  ddim_skip: 16
   eta: 0.0
   classifier_free_guidance:
     enabled: true
@@ -89,4 +88,4 @@ sampling:
     paper_omega: 0.0
   live_ema_comparison:
     enabled: true
-    n_samples: 100
+    n_samples: 64
