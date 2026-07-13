@@ -35,6 +35,26 @@ class LabelTablePrediction(nn.Module):
         return self.predictions[labels].reshape_as(x)
 
 
+class CapacityTablePrediction(nn.Module):
+    is_class_conditional = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.full_prediction = nn.Parameter(torch.tensor([[1.0, 1.0]]))
+        self.base_prediction = nn.Parameter(torch.tensor([[3.0, 3.0]]))
+        self.seen_capacity: list[bool] = []
+
+    def capacity_metadata(self) -> dict[str, bool]:
+        return {"enabled": True}
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t
+        use_capacity = bool(context["use_capacity"])
+        self.seen_capacity.append(use_capacity)
+        prediction = self.full_prediction if use_capacity else self.base_prediction
+        return prediction.expand_as(x)
+
+
 def _objective(mode: str):
     return build_objective(
         {"name": "discrete_diffusion", "prediction_type": mode},
@@ -372,3 +392,57 @@ def test_oc_objective_uses_transferred_target_and_logs_transfer_rate() -> None:
     assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
     assert metrics["oc_transfer_rate"] == 0.5
     assert metrics["oc_transfer_rate_medium"] == 1.0
+
+
+def test_cm_matches_reference_dual_forward_objective_and_backpropagates() -> None:
+    objective = build_objective(
+        {
+            "name": "cm",
+            "prediction_type": "epsilon",
+            "oc": {"transfer_mode": "t2h", "cut_time": -1},
+            "cm": {"consistency_weight": 1.0, "diversity_weight": 0.2},
+        },
+        diffusion_config={"timesteps": 10},
+        class_counts=[9, 1],
+    )
+    model = CapacityTablePrediction()
+    torch.manual_seed(0)
+
+    loss, metrics = objective(
+        model=model,
+        path=None,
+        x0=torch.zeros(2, 2),
+        x1=torch.zeros(2, 2),
+        t=torch.tensor([2, 2]),
+        class_labels=torch.tensor([0, 1]),
+        original_class_labels=torch.tensor([0, 1]),
+    )
+    loss.backward()
+
+    assert model.seen_capacity == [True, False]
+    assert torch.allclose(loss, torch.tensor(4.2))
+    assert metrics["diffusion_loss"] == pytest.approx(1.0)
+    assert metrics["cm_consistency"] == pytest.approx(4.0)
+    assert metrics["cm_diversity"] == pytest.approx(-0.8)
+    assert metrics["cm_loss"] == pytest.approx(3.2)
+    assert model.full_prediction.grad is not None
+    assert model.base_prediction.grad is not None
+
+
+def test_cm_rejects_model_without_enabled_capacity() -> None:
+    objective = build_objective(
+        {"name": "cm"},
+        diffusion_config={"timesteps": 10},
+        class_counts=[1, 1],
+    )
+
+    with pytest.raises(ValueError, match="capacity"):
+        objective(
+            model=FixedConditionalPrediction(torch.zeros(1, 2)),
+            path=None,
+            x0=torch.zeros(1, 2),
+            x1=torch.zeros(1, 2),
+            t=torch.tensor([1]),
+            class_labels=torch.tensor([0]),
+            original_class_labels=torch.tensor([0]),
+        )

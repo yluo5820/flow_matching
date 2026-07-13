@@ -49,6 +49,7 @@ def model_prediction(
     *,
     source_label: torch.Tensor | None = None,
     class_labels: torch.Tensor | None = None,
+    use_capacity: bool | None = None,
 ) -> torch.Tensor:
     if bool(getattr(model, "requires_source_label", False)):
         if source_label is None:
@@ -57,7 +58,10 @@ def model_prediction(
     if bool(getattr(model, "is_class_conditional", False)):
         if class_labels is None:
             raise ValueError("Class-conditional model requires class labels.")
-        return model(x, t, context={"class_labels": class_labels})
+        context = {"class_labels": class_labels}
+        if use_capacity is not None:
+            context["use_capacity"] = use_capacity
+        return model(x, t, context=context)
     return model(x, t)
 
 

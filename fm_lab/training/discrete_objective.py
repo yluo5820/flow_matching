@@ -33,6 +33,8 @@ class DiscreteDiffusionObjective:
         cbdm_gamma: float = 0.25,
         oc_transfer_mode: str = "t2h",
         oc_cut_time: int = -1,
+        cm_consistency_weight: float = 1.0,
+        cm_diversity_weight: float = 0.2,
     ) -> None:
         normalized = prediction_type.lower()
         if normalized not in {"epsilon", "x_vloss"}:
@@ -41,8 +43,10 @@ class DiscreteDiffusionObjective:
             )
         self.prediction_type = normalized
         self.method = method.lower()
-        if self.method not in {"ddpm", "cbdm", "oc"}:
-            raise ValueError("Discrete diffusion method must be 'ddpm', 'cbdm', or 'oc'.")
+        if self.method not in {"ddpm", "cbdm", "oc", "cm"}:
+            raise ValueError(
+                "Discrete diffusion method must be 'ddpm', 'cbdm', 'oc', or 'cm'."
+            )
         self.beta_start = float(beta_start)
         self.beta_end = float(beta_end)
         self.diffusion = DiscreteDiffusion(
@@ -57,13 +61,26 @@ class DiscreteDiffusionObjective:
         self.cbdm_gamma = float(cbdm_gamma)
         self.oc_transfer_mode = oc_transfer_mode.lower()
         self.oc_cut_time = int(oc_cut_time)
+        self.cm_consistency_weight = float(cm_consistency_weight)
+        self.cm_diversity_weight = float(cm_diversity_weight)
         if self.method == "cbdm":
             self._validate_cbdm_config()
             self.auxiliary_probabilities = self._build_auxiliary_probabilities()
         else:
             self.auxiliary_probabilities = torch.empty(0)
-        if self.method == "oc":
+        if self.method in {"oc", "cm"}:
             self._validate_oc_config()
+        if self.method == "cm":
+            self._validate_cm_config()
+            counts = torch.tensor(self.class_counts, dtype=torch.float64)
+            probabilities = counts / counts.sum()
+            inverse_probabilities = probabilities.reciprocal()
+            inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
+            self.class_probabilities = probabilities.to(dtype=torch.float32)
+            self.inverse_class_probabilities = inverse_probabilities.to(dtype=torch.float32)
+        else:
+            self.class_probabilities = torch.empty(0)
+            self.inverse_class_probabilities = torch.empty(0)
 
     def __call__(
         self,
@@ -94,11 +111,15 @@ class DiscreteDiffusionObjective:
         target_clean = x1
         target_noise = noise
         oc_metrics: dict[str, float] = {}
-        if self.method == "oc":
+        if self.method in {"oc", "cm"}:
             if class_labels is None:
-                raise ValueError("OC requires class labels for conditional predictions.")
+                raise ValueError(
+                    f"{self.method.upper()} requires class labels for conditional predictions."
+                )
             if original_class_labels is None:
-                raise ValueError("OC requires original class labels before CFG dropout.")
+                raise ValueError(
+                    f"{self.method.upper()} requires original class labels before CFG dropout."
+                )
             target_clean, target_noise, oc_metrics = self._oc_training_targets(
                 xt=xt,
                 clean=x1,
@@ -106,23 +127,23 @@ class DiscreteDiffusionObjective:
                 discrete_t=discrete_t,
                 original_labels=original_class_labels,
             )
+        if self.method == "cm":
+            self._validate_capacity_model(model)
         prediction = model_prediction(
             model,
             xt,
             discrete_t,
             class_labels=class_labels,
+            use_capacity=True if self.method == "cm" else None,
         )
         predicted_epsilon = self._as_epsilon(prediction, xt, discrete_t)
-        if self.prediction_type == "epsilon":
-            diffusion_loss = F.mse_loss(prediction, target_noise)
-        else:
-            predicted_velocity = self.diffusion.velocity_target(
-                prediction, predicted_epsilon, discrete_t
-            )
-            target_velocity = self.diffusion.velocity_target(
-                target_clean, target_noise, discrete_t
-            )
-            diffusion_loss = F.mse_loss(predicted_velocity, target_velocity)
+        diffusion_loss = self._diffusion_loss(
+            prediction=prediction,
+            predicted_epsilon=predicted_epsilon,
+            target_clean=target_clean,
+            target_noise=target_noise,
+            discrete_t=discrete_t,
+        )
         loss = diffusion_loss
         metrics = {"diffusion_loss": float(diffusion_loss.detach())}
         if self.method == "cbdm":
@@ -135,6 +156,25 @@ class DiscreteDiffusionObjective:
             loss = loss + regularizer + commitment
             metrics["cbdm_regularizer"] = float(regularizer.detach())
             metrics["cbdm_commitment"] = float(commitment.detach())
+        if self.method == "cm":
+            base_output = model_prediction(
+                model,
+                xt,
+                discrete_t,
+                class_labels=class_labels,
+                use_capacity=False,
+            )
+            base_epsilon = self._as_epsilon(base_output, xt, discrete_t)
+            consistency, diversity = self._cm_losses(
+                full_prediction=predicted_epsilon,
+                base_prediction=base_epsilon,
+                original_labels=original_class_labels,
+            )
+            cm_loss = consistency + diversity
+            loss = loss + cm_loss
+            metrics["cm_consistency"] = float(consistency.detach())
+            metrics["cm_diversity"] = float(diversity.detach())
+            metrics["cm_loss"] = float(cm_loss.detach())
         metrics.update(oc_metrics)
         metrics["loss"] = float(loss.detach())
         return loss, metrics
@@ -149,11 +189,21 @@ class DiscreteDiffusionObjective:
             raise ValueError("CBDM tau and gamma must be non-negative.")
 
     def _validate_oc_config(self) -> None:
-        self._validate_class_counts("OC")
+        self._validate_class_counts(self.method.upper())
         if self.oc_transfer_mode not in {"t2h", "h2t", "full"}:
             raise ValueError("OC transfer_mode must be 't2h', 'h2t', or 'full'.")
         if self.oc_cut_time < -1:
             raise ValueError("OC cut_time must be -1 or a non-negative timestep.")
+
+    def _validate_cm_config(self) -> None:
+        if self.cm_consistency_weight < 0 or self.cm_diversity_weight < 0:
+            raise ValueError("CM consistency and diversity weights must be non-negative.")
+
+    @staticmethod
+    def _validate_capacity_model(model: nn.Module) -> None:
+        metadata = getattr(model, "capacity_metadata", None)
+        if not callable(metadata) or not bool(metadata().get("enabled", False)):
+            raise ValueError("CM requires a model with capacity manipulation enabled.")
 
     def _validate_class_counts(self, method: str) -> None:
         if not self.class_counts:
@@ -178,6 +228,48 @@ class DiscreteDiffusionObjective:
         if self.prediction_type == "epsilon":
             return prediction
         return self.diffusion.predict_epsilon_from_x0(xt, discrete_t, prediction)
+
+    def _diffusion_loss(
+        self,
+        *,
+        prediction: torch.Tensor,
+        predicted_epsilon: torch.Tensor,
+        target_clean: torch.Tensor,
+        target_noise: torch.Tensor,
+        discrete_t: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.prediction_type == "epsilon":
+            return F.mse_loss(prediction, target_noise)
+        predicted_velocity = self.diffusion.velocity_target(
+            prediction, predicted_epsilon, discrete_t
+        )
+        target_velocity = self.diffusion.velocity_target(
+            target_clean, target_noise, discrete_t
+        )
+        return F.mse_loss(predicted_velocity, target_velocity)
+
+    def _cm_losses(
+        self,
+        *,
+        full_prediction: torch.Tensor,
+        base_prediction: torch.Tensor,
+        original_labels: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        distance = (full_prediction - base_prediction).square().flatten(1).mean(1)
+        probabilities = self.class_probabilities.to(
+            device=distance.device, dtype=distance.dtype
+        )
+        inverse_probabilities = self.inverse_class_probabilities.to(
+            device=distance.device, dtype=distance.dtype
+        )
+        num_classes = len(self.class_counts)
+        consistency = num_classes * (
+            probabilities[original_labels] * self.cm_consistency_weight * distance
+        ).mean()
+        diversity = -num_classes * (
+            inverse_probabilities[original_labels] * self.cm_diversity_weight * distance
+        ).mean()
+        return consistency, diversity
 
     def _cbdm_losses(
         self,
@@ -373,9 +465,17 @@ class DiscreteDiffusionObjective:
                 "gamma": self.cbdm_gamma,
                 "class_counts": list(self.class_counts),
             }
-        if self.method == "oc":
+        if self.method in {"oc", "cm"}:
             metadata["oc"] = {
                 "transfer_mode": self.oc_transfer_mode,
                 "cut_time": self.oc_cut_time,
+            }
+        if self.method == "cm":
+            metadata["cm"] = {
+                "consistency_weight": self.cm_consistency_weight,
+                "diversity_weight": self.cm_diversity_weight,
+                "class_probabilities": self.class_probabilities.tolist(),
+                "inverse_class_probabilities": self.inverse_class_probabilities.tolist(),
+                "base_target": "oc",
             }
         return metadata

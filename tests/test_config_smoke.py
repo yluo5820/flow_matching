@@ -267,6 +267,40 @@ def test_imbdiff_oc_configs_encode_reference_transfer() -> None:
         assert config["experiment"]["track"] == "oc"
 
 
+def test_imbdiff_cm_configs_encode_reference_capacity_objective() -> None:
+    paths = (
+        "configs/imbdiff/cifar10_lt_cm.yaml",
+        "configs/imbdiff/cifar100_lt_cm.yaml",
+    )
+
+    for path in paths:
+        config = load_config(path)
+        expected_classes = 100 if "cifar100" in path else 10
+        objective = build_objective(
+            config["objective"],
+            diffusion_config=config["diffusion"],
+            class_counts=[1] * expected_classes,
+        )
+
+        assert objective.method == "cm"
+        assert config["model"]["capacity"] == {
+            "enabled": True,
+            "rank_ratio": 0.1,
+            "adapter_scale": 1.0,
+            "reference_declared_scale": 0.5,
+            "parts": ["up"],
+        }
+        assert config["objective"]["oc"] == {
+            "transfer_mode": "t2h",
+            "cut_time": -1,
+        }
+        assert config["objective"]["cm"] == {
+            "consistency_weight": 1.0,
+            "diversity_weight": 0.2,
+        }
+        assert config["experiment"]["track"] == "cm"
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",

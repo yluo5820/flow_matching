@@ -637,11 +637,12 @@ def build_objective(
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
-    if name in {"discrete_diffusion", "ddpm", "cbdm", "oc"}:
+    if name in {"discrete_diffusion", "ddpm", "cbdm", "oc", "cm"}:
         diffusion_config = {} if diffusion_config is None else diffusion_config
-        method = name if name in {"cbdm", "oc"} else str(config.get("method", "ddpm"))
+        method = name if name in {"cbdm", "oc", "cm"} else str(config.get("method", "ddpm"))
         cbdm_config = config.get("cbdm", {})
         oc_config = config.get("oc", {})
+        cm_config = config.get("cm", {})
         return DiscreteDiffusionObjective(
             prediction_type=str(config.get("prediction_type", "epsilon")),
             timesteps=int(diffusion_config.get("timesteps", 1000)),
@@ -655,6 +656,8 @@ def build_objective(
             cbdm_gamma=float(cbdm_config.get("gamma", 0.25)),
             oc_transfer_mode=str(oc_config.get("transfer_mode", "t2h")),
             oc_cut_time=int(oc_config.get("cut_time", -1)),
+            cm_consistency_weight=float(cm_config.get("consistency_weight", 1.0)),
+            cm_diversity_weight=float(cm_config.get("diversity_weight", 0.2)),
         )
     diffusion_prediction_aliases = {
         "diffusion_epsilon": "epsilon",
