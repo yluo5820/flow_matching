@@ -257,3 +257,118 @@ def test_cbdm_rejects_missing_labels_or_class_counts() -> None:
             x1=torch.zeros(1, 2),
             t=torch.tensor([1]),
         )
+
+
+def test_oc_t2h_filter_only_keeps_equal_or_more_frequent_references() -> None:
+    objective = build_objective(
+        {
+            "name": "oc",
+            "prediction_type": "epsilon",
+            "oc": {"transfer_mode": "t2h", "cut_time": -1},
+        },
+        diffusion_config={"timesteps": 10},
+        class_counts=[100, 1],
+    )
+
+    filtered = objective._oc_filter_reference_indices(
+        candidate_indices=torch.tensor([1, 0]),
+        original_labels=torch.tensor([0, 1]),
+        discrete_t=torch.tensor([3, 3]),
+    )
+
+    assert torch.equal(filtered, torch.tensor([0, 0]))
+    assert objective.metadata()["oc"] == {"transfer_mode": "t2h", "cut_time": -1}
+
+
+def test_oc_reference_kernel_prefers_nearest_clean_image() -> None:
+    objective = build_objective(
+        {"name": "oc"},
+        diffusion_config={"timesteps": 10},
+        class_counts=[1, 1],
+    )
+    clean = torch.tensor([[0.0, 0.0], [10.0, 10.0]], requires_grad=True)
+    noisy_clean = torch.tensor([[0.1, 0.1], [9.9, 9.9]], requires_grad=True)
+
+    weights = objective._oc_reference_weights(
+        noisy_clean=noisy_clean,
+        clean=clean,
+        discrete_t=torch.tensor([4, 4]),
+    )
+
+    assert torch.equal(weights.argmax(dim=1), torch.tensor([0, 1]))
+    assert torch.allclose(weights.sum(dim=1), torch.ones(2))
+    assert not weights.requires_grad
+
+
+def test_oc_recomputes_epsilon_from_transferred_clean_reference() -> None:
+    objective = build_objective(
+        {"name": "oc"},
+        diffusion_config={"timesteps": 10},
+        class_counts=[1, 1],
+    )
+    xt = torch.tensor([[0.3, -0.7], [1.1, 0.2]])
+    clean = torch.tensor([[2.0, 3.0], [-1.0, 4.0]])
+    discrete_t = torch.tensor([2, 7])
+    references = torch.tensor([1, 0])
+
+    transferred_clean, transferred_epsilon = objective._oc_transfer_targets(
+        xt=xt,
+        clean=clean,
+        discrete_t=discrete_t,
+        reference_indices=references,
+    )
+    expected_clean = clean[references]
+    expected_epsilon = objective.diffusion.predict_epsilon_from_x0(
+        xt, discrete_t, expected_clean
+    )
+
+    assert torch.equal(transferred_clean, expected_clean)
+    assert torch.allclose(transferred_epsilon, expected_epsilon)
+    assert not transferred_epsilon.requires_grad
+
+
+def test_oc_requires_original_labels_for_cfg_safe_frequency_filtering() -> None:
+    objective = build_objective(
+        {"name": "oc"},
+        diffusion_config={"timesteps": 10},
+        class_counts=[1, 1],
+    )
+
+    with pytest.raises(ValueError, match="original class labels"):
+        objective(
+            model=FixedConditionalPrediction(torch.zeros(1, 2)),
+            path=None,
+            x0=torch.zeros(1, 2),
+            x1=torch.zeros(1, 2),
+            t=torch.tensor([1]),
+            class_labels=torch.tensor([-1]),
+        )
+
+
+def test_oc_objective_uses_transferred_target_and_logs_transfer_rate() -> None:
+    objective = build_objective(
+        {"name": "oc", "prediction_type": "epsilon"},
+        diffusion_config={"timesteps": 10},
+        class_counts=[100, 1],
+    )
+    clean = torch.tensor([[0.0, 0.0], [10.0, 10.0]])
+    discrete_t = torch.tensor([4, 4])
+    alpha_bar = objective.diffusion.alpha_bars[discrete_t].to(dtype=clean.dtype)
+    sigma = (1.0 / alpha_bar - 1.0).sqrt()[:, None]
+    noise = torch.stack((torch.zeros(2), -clean[1] / sigma[1]))
+    model = FixedConditionalPrediction(torch.zeros(1, 2))
+    torch.manual_seed(0)
+
+    loss, metrics = objective(
+        model=model,
+        path=None,
+        x0=noise,
+        x1=clean,
+        t=discrete_t,
+        class_labels=torch.tensor([0, 1]),
+        original_class_labels=torch.tensor([0, 1]),
+    )
+
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+    assert metrics["oc_transfer_rate"] == 0.5
+    assert metrics["oc_transfer_rate_medium"] == 1.0

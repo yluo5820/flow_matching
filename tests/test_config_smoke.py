@@ -244,6 +244,29 @@ def test_imbdiff_cbdm_configs_encode_paper_regularizer() -> None:
         assert config["experiment"]["track"] == "cbdm"
 
 
+def test_imbdiff_oc_configs_encode_reference_transfer() -> None:
+    paths = (
+        "configs/imbdiff/cifar10_lt_oc.yaml",
+        "configs/imbdiff/cifar100_lt_oc.yaml",
+    )
+
+    for path in paths:
+        config = load_config(path)
+        expected_classes = 100 if "cifar100" in path else 10
+        objective = build_objective(
+            config["objective"],
+            diffusion_config=config["diffusion"],
+            class_counts=[1] * expected_classes,
+        )
+
+        assert objective.method == "oc"
+        assert config["objective"]["oc"] == {
+            "transfer_mode": "t2h",
+            "cut_time": -1,
+        }
+        assert config["experiment"]["track"] == "oc"
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",
