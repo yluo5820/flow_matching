@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -75,3 +77,82 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             self.dilation,
             self.groups,
         )
+
+
+@dataclass(frozen=True)
+class CapacityConfig:
+    rank: int
+    rank_ratio: float
+    adapter_scale: float
+    parts: frozenset[str]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        rank: int,
+        rank_ratio: float,
+        adapter_scale: float,
+        parts: Sequence[str],
+    ) -> CapacityConfig:
+        normalized_parts = frozenset(str(part).lower() for part in parts)
+        supported = {"head", "down", "middle", "up", "tail"}
+        invalid = normalized_parts - supported
+        if invalid:
+            raise ValueError(f"Unsupported capacity parts: {sorted(invalid)}")
+        return cls(
+            rank=int(rank),
+            rank_ratio=float(rank_ratio),
+            adapter_scale=float(adapter_scale),
+            parts=normalized_parts,
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.parts) and (self.rank > 0 or self.rank_ratio > 0)
+
+    def conv(
+        self,
+        part: str,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        *,
+        stride: int = 1,
+        padding: int = 0,
+    ) -> nn.Conv2d:
+        if part not in self.parts:
+            return nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride=stride,
+                padding=padding,
+            )
+        return SwitchableLowRankConv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            rank=self.rank,
+            rank_ratio=self.rank_ratio,
+            adapter_scale=self.adapter_scale,
+        )
+
+
+def apply_capacity_conv(
+    layer: nn.Conv2d,
+    inputs: torch.Tensor,
+    *,
+    use_capacity: bool,
+) -> torch.Tensor:
+    if isinstance(layer, SwitchableLowRankConv2d):
+        return layer(inputs, use_adapter=use_capacity)
+    return layer(inputs)
+
+
+def use_capacity_from_context(context: object) -> bool:
+    if isinstance(context, dict) and "use_capacity" in context:
+        return bool(context["use_capacity"])
+    return True

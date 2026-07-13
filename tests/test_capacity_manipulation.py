@@ -1,7 +1,13 @@
+import pytest
 import torch
 
 import fm_lab.models as models
 from fm_lab.experiments.factory import build_model
+from fm_lab.models.capacity import (
+    CapacityConfig,
+    apply_capacity_conv,
+    use_capacity_from_context,
+)
 
 
 def _cm_model_config() -> dict:
@@ -24,6 +30,38 @@ def _cm_model_config() -> dict:
         "conditioning": {"enabled": True, "num_classes": 10},
         "diffusion": {"timesteps": 1000},
     }
+
+
+def test_capacity_config_builds_only_selected_switchable_convolutions() -> None:
+    capacity = CapacityConfig.build(
+        rank=0,
+        rank_ratio=0.25,
+        adapter_scale=0.5,
+        parts=["up"],
+    )
+    up = capacity.conv("up", 8, 12, 3, padding=1)
+    down = capacity.conv("down", 8, 12, 3, padding=1)
+    inputs = torch.randn(2, 8, 5, 5)
+
+    assert isinstance(up, models.SwitchableLowRankConv2d)
+    assert isinstance(down, torch.nn.Conv2d)
+    assert not isinstance(down, models.SwitchableLowRankConv2d)
+    assert torch.equal(
+        apply_capacity_conv(up, inputs, use_capacity=True),
+        apply_capacity_conv(up, inputs, use_capacity=False),
+    )
+    assert use_capacity_from_context({"use_capacity": False}) is False
+    assert use_capacity_from_context({}) is True
+
+
+def test_capacity_config_rejects_unknown_model_parts() -> None:
+    with pytest.raises(ValueError, match="Unsupported capacity parts"):
+        CapacityConfig.build(
+            rank=1,
+            rank_ratio=0.0,
+            adapter_scale=1.0,
+            parts=["unknown"],
+        )
 
 
 def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:

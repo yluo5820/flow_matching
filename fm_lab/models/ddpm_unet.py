@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from fm_lab.models.capacity import SwitchableLowRankConv2d
+from fm_lab.models.capacity import (
+    CapacityConfig,
+    SwitchableLowRankConv2d,
+    apply_capacity_conv,
+    use_capacity_from_context,
+)
 from fm_lab.models.mlp import _class_labels_from_context, _embedding_labels
 
 
@@ -47,7 +51,7 @@ class DDPMUNet(nn.Module):
         self.num_classes = int(num_classes)
         self.num_timesteps = int(num_timesteps)
         self.is_class_conditional = True
-        self._capacity = _CapacityConfig.build(
+        self._capacity = CapacityConfig.build(
             rank=capacity_rank,
             rank_ratio=capacity_rank_ratio,
             adapter_scale=capacity_adapter_scale,
@@ -144,9 +148,9 @@ class DDPMUNet(nn.Module):
         embedding = self.time_mlp(_timestep_embedding(t, self.time_mlp[0].in_features))
         labels = _class_labels_from_context(context, batch, x.device)
         embedding = embedding + self.class_embedding(_embedding_labels(labels, self.num_classes))
-        use_capacity = _use_capacity_from_context(context)
+        use_capacity = use_capacity_from_context(context)
 
-        h = _apply_conv(self.input_conv, image, use_capacity=use_capacity)
+        h = apply_capacity_conv(self.input_conv, image, use_capacity=use_capacity)
         skips = [h]
         for block in self.down_blocks:
             h = (
@@ -170,7 +174,7 @@ class DDPMUNet(nn.Module):
                 )
             else:
                 h = block(h, use_capacity=use_capacity)
-        output = _apply_conv(
+        output = apply_capacity_conv(
             self.output_conv,
             F.silu(self.output_norm(h)),
             use_capacity=use_capacity,
@@ -211,7 +215,7 @@ class _ResBlock(nn.Module):
         emb_channels: int,
         dropout: float,
         *,
-        capacity: _CapacityConfig,
+        capacity: CapacityConfig,
         capacity_part: str,
     ):
         super().__init__()
@@ -240,9 +244,11 @@ class _ResBlock(nn.Module):
         *,
         use_capacity: bool,
     ) -> torch.Tensor:
-        h = _apply_conv(self.conv1, F.silu(self.norm1(x)), use_capacity=use_capacity)
+        h = apply_capacity_conv(
+            self.conv1, F.silu(self.norm1(x)), use_capacity=use_capacity
+        )
         h = h + self.emb(F.silu(embedding))[:, :, None, None]
-        h = _apply_conv(
+        h = apply_capacity_conv(
             self.conv2,
             self.dropout(F.silu(self.norm2(h))),
             use_capacity=use_capacity,
@@ -277,7 +283,7 @@ class _ConditionedBlock(nn.Module):
         dropout: float,
         attention: bool,
         *,
-        capacity: _CapacityConfig,
+        capacity: CapacityConfig,
         capacity_part: str,
     ):
         super().__init__()
@@ -308,7 +314,7 @@ class _Downsample(nn.Module):
         self,
         channels: int,
         *,
-        capacity: _CapacityConfig,
+        capacity: CapacityConfig,
         capacity_part: str,
     ):
         super().__init__()
@@ -317,7 +323,7 @@ class _Downsample(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, *, use_capacity: bool) -> torch.Tensor:
-        return _apply_conv(self.conv, x, use_capacity=use_capacity)
+        return apply_capacity_conv(self.conv, x, use_capacity=use_capacity)
 
 
 class _Upsample(nn.Module):
@@ -325,7 +331,7 @@ class _Upsample(nn.Module):
         self,
         channels: int,
         *,
-        capacity: _CapacityConfig,
+        capacity: CapacityConfig,
         capacity_part: str,
     ):
         super().__init__()
@@ -334,87 +340,8 @@ class _Upsample(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, *, use_capacity: bool) -> torch.Tensor:
-        return _apply_conv(
+        return apply_capacity_conv(
             self.conv,
             F.interpolate(x, scale_factor=2, mode="nearest"),
             use_capacity=use_capacity,
         )
-
-
-@dataclass(frozen=True)
-class _CapacityConfig:
-    rank: int
-    rank_ratio: float
-    adapter_scale: float
-    parts: frozenset[str]
-
-    @classmethod
-    def build(
-        cls,
-        *,
-        rank: int,
-        rank_ratio: float,
-        adapter_scale: float,
-        parts: Sequence[str],
-    ) -> _CapacityConfig:
-        normalized_parts = frozenset(str(part).lower() for part in parts)
-        supported = {"head", "down", "middle", "up", "tail"}
-        invalid = normalized_parts - supported
-        if invalid:
-            raise ValueError(f"Unsupported capacity parts: {sorted(invalid)}")
-        return cls(
-            rank=int(rank),
-            rank_ratio=float(rank_ratio),
-            adapter_scale=float(adapter_scale),
-            parts=normalized_parts,
-        )
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.parts) and (self.rank > 0 or self.rank_ratio > 0)
-
-    def conv(
-        self,
-        part: str,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        *,
-        stride: int = 1,
-        padding: int = 0,
-    ) -> nn.Conv2d:
-        if part not in self.parts:
-            return nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size,
-                stride=stride,
-                padding=padding,
-            )
-        return SwitchableLowRankConv2d(
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride=stride,
-            padding=padding,
-            rank=self.rank,
-            rank_ratio=self.rank_ratio,
-            adapter_scale=self.adapter_scale,
-        )
-
-
-def _apply_conv(
-    layer: nn.Conv2d,
-    inputs: torch.Tensor,
-    *,
-    use_capacity: bool,
-) -> torch.Tensor:
-    if isinstance(layer, SwitchableLowRankConv2d):
-        return layer(inputs, use_adapter=use_capacity)
-    return layer(inputs)
-
-
-def _use_capacity_from_context(context: object) -> bool:
-    if isinstance(context, dict) and "use_capacity" in context:
-        return bool(context["use_capacity"])
-    return True
