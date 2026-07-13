@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from fm_lab.models.capacity import SwitchableLowRankConv2d
 from fm_lab.models.mlp import _class_labels_from_context, _embedding_labels
 
 
@@ -27,6 +29,10 @@ class DDPMUNet(nn.Module):
         dropout: float = 0.1,
         num_classes: int,
         num_timesteps: int = 1000,
+        capacity_rank: int = 0,
+        capacity_rank_ratio: float = 0.0,
+        capacity_adapter_scale: float = 1.0,
+        capacity_parts: Sequence[str] = (),
     ) -> None:
         super().__init__()
         if len(image_shape) != 3:
@@ -41,6 +47,12 @@ class DDPMUNet(nn.Module):
         self.num_classes = int(num_classes)
         self.num_timesteps = int(num_timesteps)
         self.is_class_conditional = True
+        self._capacity = _CapacityConfig.build(
+            rank=capacity_rank,
+            rank_ratio=capacity_rank_ratio,
+            adapter_scale=capacity_adapter_scale,
+            parts=capacity_parts,
+        )
 
         time_channels = 4 * base_channels
         self.time_mlp = nn.Sequential(
@@ -49,7 +61,9 @@ class DDPMUNet(nn.Module):
             nn.Linear(time_channels, time_channels),
         )
         self.class_embedding = nn.Embedding(self.num_classes + 1, time_channels)
-        self.input_conv = nn.Conv2d(channels, base_channels, 3, padding=1)
+        self.input_conv = self._capacity.conv(
+            "head", channels, base_channels, 3, padding=1
+        )
 
         attention = set(int(level) for level in attention_levels)
         self.down_blocks = nn.ModuleList()
@@ -59,20 +73,42 @@ class DDPMUNet(nn.Module):
             output = base_channels * int(multiplier)
             for _ in range(num_res_blocks):
                 block = _ConditionedBlock(
-                    current, output, time_channels, dropout, level in attention
+                    current,
+                    output,
+                    time_channels,
+                    dropout,
+                    level in attention,
+                    capacity=self._capacity,
+                    capacity_part="down",
                 )
                 self.down_blocks.append(block)
                 current = output
                 skip_channels.append(current)
             if level != len(channel_multipliers) - 1:
-                self.down_blocks.append(_Downsample(current))
+                self.down_blocks.append(
+                    _Downsample(current, capacity=self._capacity, capacity_part="down")
+                )
                 skip_channels.append(current)
 
         self.middle = nn.ModuleList(
             [
-                _ResBlock(current, current, time_channels, dropout),
+                _ResBlock(
+                    current,
+                    current,
+                    time_channels,
+                    dropout,
+                    capacity=self._capacity,
+                    capacity_part="middle",
+                ),
                 _AttentionBlock(current),
-                _ResBlock(current, current, time_channels, dropout),
+                _ResBlock(
+                    current,
+                    current,
+                    time_channels,
+                    dropout,
+                    capacity=self._capacity,
+                    capacity_part="middle",
+                ),
             ]
         )
         self.up_blocks = nn.ModuleList()
@@ -81,14 +117,24 @@ class DDPMUNet(nn.Module):
             for index in range(num_res_blocks + 1):
                 skip = skip_channels.pop()
                 block = _ConditionedBlock(
-                    current + skip, output, time_channels, dropout, level in attention
+                    current + skip,
+                    output,
+                    time_channels,
+                    dropout,
+                    level in attention,
+                    capacity=self._capacity,
+                    capacity_part="up",
                 )
                 self.up_blocks.append(block)
                 current = output
                 if level > 0 and index == num_res_blocks:
-                    self.up_blocks.append(_Upsample(current))
+                    self.up_blocks.append(
+                        _Upsample(current, capacity=self._capacity, capacity_part="up")
+                    )
         self.output_norm = nn.GroupNorm(32, current)
-        self.output_conv = nn.Conv2d(current, channels, 3, padding=1)
+        self.output_conv = self._capacity.conv(
+            "tail", current, channels, 3, padding=1
+        )
         nn.init.zeros_(self.output_conv.weight)
         nn.init.zeros_(self.output_conv.bias)
 
@@ -98,20 +144,51 @@ class DDPMUNet(nn.Module):
         embedding = self.time_mlp(_timestep_embedding(t, self.time_mlp[0].in_features))
         labels = _class_labels_from_context(context, batch, x.device)
         embedding = embedding + self.class_embedding(_embedding_labels(labels, self.num_classes))
+        use_capacity = _use_capacity_from_context(context)
 
-        h = self.input_conv(image)
+        h = _apply_conv(self.input_conv, image, use_capacity=use_capacity)
         skips = [h]
         for block in self.down_blocks:
-            h = block(h, embedding) if isinstance(block, _ConditionedBlock) else block(h)
+            h = (
+                block(h, embedding, use_capacity=use_capacity)
+                if isinstance(block, _ConditionedBlock)
+                else block(h, use_capacity=use_capacity)
+            )
             skips.append(h)
         for block in self.middle:
-            h = block(h, embedding) if isinstance(block, _ResBlock) else block(h)
+            h = (
+                block(h, embedding, use_capacity=use_capacity)
+                if isinstance(block, _ResBlock)
+                else block(h)
+            )
         for block in self.up_blocks:
             if isinstance(block, _ConditionedBlock):
-                h = block(torch.cat((h, skips.pop()), dim=1), embedding)
+                h = block(
+                    torch.cat((h, skips.pop()), dim=1),
+                    embedding,
+                    use_capacity=use_capacity,
+                )
             else:
-                h = block(h)
-        return self.output_conv(F.silu(self.output_norm(h))).reshape(batch, self.dim)
+                h = block(h, use_capacity=use_capacity)
+        output = _apply_conv(
+            self.output_conv,
+            F.silu(self.output_norm(h)),
+            use_capacity=use_capacity,
+        )
+        return output.reshape(batch, self.dim)
+
+    def capacity_metadata(self) -> dict[str, object]:
+        adapter_layers = sum(
+            isinstance(module, SwitchableLowRankConv2d) for module in self.modules()
+        )
+        return {
+            "enabled": self._capacity.enabled,
+            "rank": self._capacity.rank,
+            "rank_ratio": self._capacity.rank_ratio,
+            "adapter_scale": self._capacity.adapter_scale,
+            "parts": sorted(self._capacity.parts),
+            "adapter_layers": adapter_layers,
+        }
 
 
 def _timestep_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
@@ -127,14 +204,27 @@ def _timestep_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
 
 
 class _ResBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, emb_channels: int, dropout: float):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        emb_channels: int,
+        dropout: float,
+        *,
+        capacity: _CapacityConfig,
+        capacity_part: str,
+    ):
         super().__init__()
         self.norm1 = nn.GroupNorm(32, in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.conv1 = capacity.conv(
+            capacity_part, in_channels, out_channels, 3, padding=1
+        )
         self.emb = nn.Linear(emb_channels, out_channels)
         self.norm2 = nn.GroupNorm(32, out_channels)
         self.dropout = nn.Dropout(dropout)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.conv2 = capacity.conv(
+            capacity_part, out_channels, out_channels, 3, padding=1
+        )
         self.skip = (
             nn.Identity()
             if in_channels == out_channels
@@ -143,10 +233,20 @@ class _ResBlock(nn.Module):
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
 
-    def forward(self, x: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
-        h = self.conv1(F.silu(self.norm1(x)))
+    def forward(
+        self,
+        x: torch.Tensor,
+        embedding: torch.Tensor,
+        *,
+        use_capacity: bool,
+    ) -> torch.Tensor:
+        h = _apply_conv(self.conv1, F.silu(self.norm1(x)), use_capacity=use_capacity)
         h = h + self.emb(F.silu(embedding))[:, :, None, None]
-        h = self.conv2(self.dropout(F.silu(self.norm2(h))))
+        h = _apply_conv(
+            self.conv2,
+            self.dropout(F.silu(self.norm2(h))),
+            use_capacity=use_capacity,
+        )
         return self.skip(x) + h
 
 
@@ -176,28 +276,145 @@ class _ConditionedBlock(nn.Module):
         emb_channels: int,
         dropout: float,
         attention: bool,
+        *,
+        capacity: _CapacityConfig,
+        capacity_part: str,
     ):
         super().__init__()
-        self.residual = _ResBlock(in_channels, out_channels, emb_channels, dropout)
+        self.residual = _ResBlock(
+            in_channels,
+            out_channels,
+            emb_channels,
+            dropout,
+            capacity=capacity,
+            capacity_part=capacity_part,
+        )
         self.attention = _AttentionBlock(out_channels) if attention else nn.Identity()
 
-    def forward(self, x: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
-        return self.attention(self.residual(x, embedding))
+    def forward(
+        self,
+        x: torch.Tensor,
+        embedding: torch.Tensor,
+        *,
+        use_capacity: bool,
+    ) -> torch.Tensor:
+        return self.attention(
+            self.residual(x, embedding, use_capacity=use_capacity)
+        )
 
 
 class _Downsample(nn.Module):
-    def __init__(self, channels: int):
+    def __init__(
+        self,
+        channels: int,
+        *,
+        capacity: _CapacityConfig,
+        capacity_part: str,
+    ):
         super().__init__()
-        self.conv = nn.Conv2d(channels, channels, 3, stride=2, padding=1)
+        self.conv = capacity.conv(
+            capacity_part, channels, channels, 3, stride=2, padding=1
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
+    def forward(self, x: torch.Tensor, *, use_capacity: bool) -> torch.Tensor:
+        return _apply_conv(self.conv, x, use_capacity=use_capacity)
 
 
 class _Upsample(nn.Module):
-    def __init__(self, channels: int):
+    def __init__(
+        self,
+        channels: int,
+        *,
+        capacity: _CapacityConfig,
+        capacity_part: str,
+    ):
         super().__init__()
-        self.conv = nn.Conv2d(channels, channels, 3, padding=1)
+        self.conv = capacity.conv(
+            capacity_part, channels, channels, 3, padding=1
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(F.interpolate(x, scale_factor=2, mode="nearest"))
+    def forward(self, x: torch.Tensor, *, use_capacity: bool) -> torch.Tensor:
+        return _apply_conv(
+            self.conv,
+            F.interpolate(x, scale_factor=2, mode="nearest"),
+            use_capacity=use_capacity,
+        )
+
+
+@dataclass(frozen=True)
+class _CapacityConfig:
+    rank: int
+    rank_ratio: float
+    adapter_scale: float
+    parts: frozenset[str]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        rank: int,
+        rank_ratio: float,
+        adapter_scale: float,
+        parts: Sequence[str],
+    ) -> _CapacityConfig:
+        normalized_parts = frozenset(str(part).lower() for part in parts)
+        supported = {"head", "down", "middle", "up", "tail"}
+        invalid = normalized_parts - supported
+        if invalid:
+            raise ValueError(f"Unsupported capacity parts: {sorted(invalid)}")
+        return cls(
+            rank=int(rank),
+            rank_ratio=float(rank_ratio),
+            adapter_scale=float(adapter_scale),
+            parts=normalized_parts,
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.parts) and (self.rank > 0 or self.rank_ratio > 0)
+
+    def conv(
+        self,
+        part: str,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        *,
+        stride: int = 1,
+        padding: int = 0,
+    ) -> nn.Conv2d:
+        if part not in self.parts:
+            return nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride=stride,
+                padding=padding,
+            )
+        return SwitchableLowRankConv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            rank=self.rank,
+            rank_ratio=self.rank_ratio,
+            adapter_scale=self.adapter_scale,
+        )
+
+
+def _apply_conv(
+    layer: nn.Conv2d,
+    inputs: torch.Tensor,
+    *,
+    use_capacity: bool,
+) -> torch.Tensor:
+    if isinstance(layer, SwitchableLowRankConv2d):
+        return layer(inputs, use_adapter=use_capacity)
+    return layer(inputs)
+
+
+def _use_capacity_from_context(context: object) -> bool:
+    if isinstance(context, dict) and "use_capacity" in context:
+        return bool(context["use_capacity"])
+    return True

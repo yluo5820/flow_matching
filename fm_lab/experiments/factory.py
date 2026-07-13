@@ -303,6 +303,8 @@ def build_model(config: dict[str, Any], dim: int):
     if name in {"ddpm_unet", "paper_ddpm_unet"}:
         if not conditioning_enabled or num_classes is None:
             raise ValueError("DDPMUNet requires class conditioning.")
+        capacity_config = model_config.get("capacity", {}) or {}
+        capacity_enabled = bool(capacity_config.get("enabled", False))
         return DDPMUNet(
             dim=dim,
             image_shape=tuple(model_config.get("image_shape", [3, 32, 32])),
@@ -313,6 +315,14 @@ def build_model(config: dict[str, Any], dim: int):
             dropout=float(model_config.get("dropout", 0.1)),
             num_classes=num_classes,
             num_timesteps=int(config.get("diffusion", {}).get("timesteps", 1000)),
+            capacity_rank=(int(capacity_config.get("rank", 0)) if capacity_enabled else 0),
+            capacity_rank_ratio=(
+                float(capacity_config.get("rank_ratio", 0.0)) if capacity_enabled else 0.0
+            ),
+            capacity_adapter_scale=float(capacity_config.get("adapter_scale", 1.0)),
+            capacity_parts=(
+                tuple(capacity_config.get("parts", ())) if capacity_enabled else ()
+            ),
         )
     if name == "mlp":
         return MLPVelocity(
