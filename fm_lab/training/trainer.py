@@ -33,13 +33,24 @@ from fm_lab.training.prediction import (
     model_prediction,
     velocity_model_for_objective,
 )
+from fm_lab.training.runtime import (
+    build_optimizer,
+    build_warmup_scheduler,
+    create_ema_model,
+    update_ema_model,
+)
 from fm_lab.training.sampling_guidance import (
     apply_density_guidance,
     apply_density_prior_rescaling,
     apply_prior_guidance,
     build_sampling_guidance_config,
 )
-from fm_lab.utils.checkpoints import save_checkpoint
+from fm_lab.utils.checkpoints import (
+    capture_rng_state,
+    load_checkpoint,
+    restore_rng_state,
+    save_checkpoint,
+)
 from fm_lab.utils.logging import write_json
 
 
@@ -68,13 +79,24 @@ def train_flow_matching(
     steps = int(training_config.get("steps", 10_000))
     lr = float(training_config.get("lr", 1e-4))
     log_every = int(training_config.get("log_every", max(1, min(500, steps))))
+    checkpoint_every = int(training_config.get("checkpoint_every", 0))
+    gradient_clip = float(training_config.get("gradient_clip", 0.0))
+    warmup_steps = int(training_config.get("warmup_steps", 0))
+    ema_decay_value = training_config.get("ema_decay")
+    ema_decay = float(ema_decay_value) if ema_decay_value is not None else None
+    if checkpoint_every < 0:
+        raise ValueError("training.checkpoint_every must be non-negative.")
+    if gradient_clip < 0:
+        raise ValueError("training.gradient_clip must be non-negative.")
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
     objective = build_objective(config.get("objective", {}))
     _validate_training_compatibility(objective, coupling, path, model)
     condition_dropout = _condition_dropout_probability(config, model)
 
     trainable_path = _is_trainable_path(path)
-    theta_optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    theta_optimizer = build_optimizer(model, training_config)
+    theta_scheduler = build_warmup_scheduler(theta_optimizer, warmup_steps=warmup_steps)
+    ema_model = create_ema_model(model) if ema_decay is not None else None
     psi_optimizer: torch.optim.Optimizer | None = None
     learned_acceleration_schedule: _LearnedAccelerationSchedule | None = None
     if trainable_path:
@@ -88,10 +110,32 @@ def train_flow_matching(
             lr=learned_acceleration_schedule.psi_lr,
         )
     history: list[dict[str, float | int]] = []
+    start_step = 1
+    resume_from = training_config.get("resume_from")
+    if resume_from:
+        if trainable_path:
+            raise ValueError("Exact resume is not yet supported for trainable paths.")
+        checkpoint = load_checkpoint(resume_from, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        theta_optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if ema_model is not None:
+            ema_model.load_state_dict(
+                checkpoint.get("ema_model_state_dict", checkpoint["model_state_dict"])
+            )
+        if theta_scheduler is not None and "scheduler_state_dict" in checkpoint:
+            theta_scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        if "rng_state_dict" in checkpoint:
+            restore_rng_state(checkpoint["rng_state_dict"])
+        history = list(checkpoint.get("history", []))
+        start_step = int(checkpoint["step"]) + 1
+        if start_step > steps:
+            raise ValueError(
+                f"Resume checkpoint step {start_step - 1} already meets training.steps={steps}."
+            )
 
     final_step = 0
     best_state: _TrainingState | None = None
-    progress = trange(1, steps + 1, desc="training", dynamic_ncols=True)
+    progress = trange(start_step, steps + 1, desc="training", dynamic_ncols=True)
     for step in progress:
         final_step = step
         should_log = step == 1 or step % log_every == 0 or step == steps
@@ -172,7 +216,13 @@ def train_flow_matching(
 
             theta_optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            if gradient_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
             theta_optimizer.step()
+            if theta_scheduler is not None:
+                theta_scheduler.step()
+            if ema_model is not None and ema_decay is not None:
+                update_ema_model(ema_model, model, decay=ema_decay)
 
         if should_log:
             record = {"step": step, **loss_metrics}
@@ -199,6 +249,20 @@ def train_flow_matching(
             if should_stop:
                 progress.set_postfix(loss=f"{record['loss']:.4f}", stopped="early")
                 break
+
+        if checkpoint_every and step % checkpoint_every == 0:
+            save_checkpoint(
+                run_dir / "checkpoints" / f"step_{step:06d}.pt",
+                model=model,
+                ema_model=ema_model,
+                optimizer=theta_optimizer,
+                scheduler=theta_scheduler,
+                step=step,
+                config=config,
+                metrics={"latest_loss": float(loss_metrics.get("loss", float("nan")))},
+                history=history,
+                rng_state=capture_rng_state(),
+            )
 
     selected_step = final_step
     selected_record = history[-1]
@@ -238,6 +302,7 @@ def train_flow_matching(
     save_checkpoint(
         run_dir / "checkpoint.pt",
         model=model,
+        ema_model=ema_model,
         optimizer=(
             {"theta": theta_optimizer, "psi": psi_optimizer}
             if psi_optimizer is not None
@@ -247,6 +312,9 @@ def train_flow_matching(
         step=selected_step,
         config=config,
         metrics=metrics,
+        history=history,
+        scheduler=theta_scheduler,
+        rng_state=capture_rng_state(),
     )
 
     sampling_skip_reason = _velocity_sampling_skip_reason(objective)
@@ -264,7 +332,7 @@ def train_flow_matching(
         target=target,
         source=source,
         path=path,
-        model=model,
+        model=ema_model if ema_model is not None else model,
         solvers=solvers,
         device=device,
     )

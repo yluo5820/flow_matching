@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override training.batch_size.",
     )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Resume exactly from a periodic or final training checkpoint.",
+    )
     parser.add_argument("--n-samples", type=int, default=None, help="Override sampling.n_samples.")
     parser.add_argument(
         "--n-trajectories",
@@ -247,6 +252,8 @@ def _training_overrides(args: argparse.Namespace) -> dict:
         training["steps"] = args.steps
     if args.batch_size is not None:
         training["batch_size"] = args.batch_size
+    if getattr(args, "resume_from", None) is not None:
+        training["resume_from"] = args.resume_from
     return training
 
 

@@ -20,6 +20,7 @@ from fm_lab.data import (
     GaussianMixture3D,
     HelixMixture,
     ImageVariantImages,
+    ImbalancedCIFARImages,
     LineSegment3D,
     MNISTImages,
     MoebiusStrip,
@@ -34,6 +35,7 @@ from fm_lab.data import (
     TwoMoons,
 )
 from fm_lab.models import (
+    DDPMUNet,
     DirectionSpeedImageUNet,
     DirectionSpeedMLP,
     ImageUNetVelocity,
@@ -61,6 +63,20 @@ from fm_lab.utils.checkpoints import load_checkpoint
 def build_target(config: dict[str, Any]):
     data_config = config.get("data", {})
     name = data_config.get("name", "two_moons").lower()
+    if name in {"cifar10_lt", "cifar100_lt", "imbalanced_cifar10", "imbalanced_cifar100"}:
+        dataset = "cifar10" if "10" in name and "100" not in name else "cifar100"
+        default_root = f"data/{dataset}"
+        return ImbalancedCIFARImages(
+            dataset=dataset,
+            root=data_config.get("root", default_root),
+            train=bool(data_config.get("train", True)),
+            download=bool(data_config.get("download", False)),
+            imbalance_type=str(data_config.get("imbalance_type", "exp")),
+            imbalance_factor=float(data_config.get("imbalance_factor", 0.01)),
+            subset_seed=int(data_config.get("subset_seed", 0)),
+            normalize=str(data_config.get("normalize", "minus_one_one")),
+            horizontal_flip=bool(data_config.get("horizontal_flip", True)),
+        )
     if data_config.get("variant_id"):
         return ImageVariantImages(
             variant_id=str(data_config["variant_id"]),
@@ -284,6 +300,20 @@ def build_model(config: dict[str, Any], dim: int):
     if class_embedding_dim is not None:
         class_embedding_dim = int(class_embedding_dim)
     name = model_config.get("name", "mlp").lower()
+    if name in {"ddpm_unet", "paper_ddpm_unet"}:
+        if not conditioning_enabled or num_classes is None:
+            raise ValueError("DDPMUNet requires class conditioning.")
+        return DDPMUNet(
+            dim=dim,
+            image_shape=tuple(model_config.get("image_shape", [3, 32, 32])),
+            base_channels=int(model_config.get("base_channels", 128)),
+            channel_multipliers=tuple(model_config.get("channel_multipliers", [1, 2, 2, 2])),
+            attention_levels=tuple(model_config.get("attention_levels", [1])),
+            num_res_blocks=int(model_config.get("num_res_blocks", 2)),
+            dropout=float(model_config.get("dropout", 0.1)),
+            num_classes=num_classes,
+            num_timesteps=int(config.get("diffusion", {}).get("timesteps", 1000)),
+        )
     if name == "mlp":
         return MLPVelocity(
             dim=dim,

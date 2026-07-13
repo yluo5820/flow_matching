@@ -91,6 +91,91 @@ class ConstantTarget:
         return {"name": "constant_one", "dim": self.dim}
 
 
+class TinyVelocity(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = nn.Linear(3, 2)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del context
+        return self.linear(torch.cat((x, t[:, None]), dim=1))
+
+
+def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> None:
+    config = {
+        "training": {
+            "steps": 4,
+            "batch_size": 4,
+            "lr": 1e-3,
+            "optimizer": "adam",
+            "warmup_steps": 2,
+            "ema_decay": 0.9,
+            "gradient_clip": 1.0,
+            "checkpoint_every": 2,
+            "log_every": 1,
+        },
+        "objective": {"name": "diffusion", "prediction_type": "epsilon"},
+        "sampling": {"n_samples": 2, "n_trajectories": 2, "nfe": 2},
+    }
+    torch.manual_seed(19)
+    initial = TinyVelocity().state_dict()
+
+    full_model = TinyVelocity()
+    full_model.load_state_dict(initial)
+    torch.manual_seed(23)
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path / "full",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=GaussianDiffusionPath(),
+        model=full_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    split_model = TinyVelocity()
+    split_model.load_state_dict(initial)
+    first_config = {**config, "training": {**config["training"], "steps": 2}}
+    torch.manual_seed(23)
+    train_flow_matching(
+        config=first_config,
+        run_dir=tmp_path / "split",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=GaussianDiffusionPath(),
+        model=split_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    resume_path = tmp_path / "split" / "checkpoints" / "step_000002.pt"
+    resumed_model = TinyVelocity()
+    resumed_config = {
+        **config,
+        "training": {**config["training"], "resume_from": str(resume_path)},
+    }
+    train_flow_matching(
+        config=resumed_config,
+        run_dir=tmp_path / "resumed",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=GaussianDiffusionPath(),
+        model=resumed_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    full = load_checkpoint(tmp_path / "full" / "checkpoint.pt")
+    resumed = load_checkpoint(tmp_path / "resumed" / "checkpoint.pt")
+    for name, tensor in full["model_state_dict"].items():
+        assert torch.equal(tensor, resumed["model_state_dict"][name])
+    for name, tensor in full["ema_model_state_dict"].items():
+        assert torch.equal(tensor, resumed["ema_model_state_dict"][name])
+
+
 def test_sample_and_plot_reuses_trajectory_sources_across_solvers(tmp_path) -> None:
     config = _sampling_config(seed=123)
 

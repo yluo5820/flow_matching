@@ -118,11 +118,13 @@ def test_training_overrides_from_cli_args() -> None:
     args = Namespace(
         steps=1234,
         batch_size=256,
+        resume_from="runs/example/checkpoints/step_100000.pt",
     )
 
     assert _training_overrides(args) == {
         "steps": 1234,
         "batch_size": 256,
+        "resume_from": "runs/example/checkpoints/step_100000.pt",
     }
 
 
