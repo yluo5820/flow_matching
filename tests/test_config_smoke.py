@@ -301,6 +301,21 @@ def test_imbdiff_cm_configs_encode_reference_capacity_objective() -> None:
         assert config["experiment"]["track"] == "cm"
 
 
+def test_all_imbdiff_configs_enable_shared_early_stopping() -> None:
+    paths = sorted(Path("configs/imbdiff").glob("*.yaml"))
+    expected = {
+        "enabled": True,
+        "patience_steps": 10000,
+        "warmup_steps": 20000,
+        "min_delta": 0.0001,
+        "ema_alpha": 0.01,
+    }
+
+    assert len(paths) == 9
+    for path in paths:
+        assert load_config(path)["training"]["early_stopping"] == expected
+
+
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
     config_paths = (
         "configs/mnist/mnist_direction_only_image_unet_ot.yaml",
