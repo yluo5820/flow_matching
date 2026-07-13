@@ -434,7 +434,9 @@ def _compute_diffusion_normal_bundle(
             device=device,
         )
         batch_rows = [{} for _ in range(batch.shape[0])]
-        for time_index, (t_value, sigma_value) in enumerate(zip(t_values, sigma_values)):
+        for time_index, (t_value, sigma_value) in enumerate(
+            zip(t_values, sigma_values, strict=True)
+        ):
             query = _diffusion_query_batch(score_model, batch, t_value)
             estimate = normal_bundle_dimension(
                 score_model,
@@ -481,7 +483,7 @@ def _compute_diffusion_flipd(
             device=device,
         )
         batch_rows = [{} for _ in range(batch.shape[0])]
-        for t_value, sigma_value in zip(t_values, sigma_values):
+        for t_value, sigma_value in zip(t_values, sigma_values, strict=True):
             query = _diffusion_query_batch(score_model, batch, t_value)
             estimate = flipd_dimension(
                 score_model,
@@ -630,7 +632,9 @@ def _selected_projection_views(
     return views
 
 
-def _validate_checkpoint_estimator_match(config: dict[str, Any], estimators: tuple[str, ...]) -> None:
+def _validate_checkpoint_estimator_match(
+    config: dict[str, Any], estimators: tuple[str, ...]
+) -> None:
     requested = set(estimators)
     is_diffusion = _is_diffusion_checkpoint(config)
     if requested & DIFFUSION_ESTIMATORS and not is_diffusion:

@@ -15,10 +15,16 @@ from fm_lab.diagnostics.solver_sensitivity import (
     solver_sensitivity_summary,
     write_distance_rows,
 )
-from fm_lab.experiments.factory import build_model, build_path, build_solvers, build_source, resolve_device
+from fm_lab.experiments.factory import (
+    build_model,
+    build_path,
+    build_solvers,
+    build_source,
+    resolve_device,
+)
+from fm_lab.plotting import plot_distance_matrix
 from fm_lab.training.losses import build_objective
 from fm_lab.training.prediction import velocity_model_for_objective
-from fm_lab.plotting import plot_distance_matrix
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.config import deep_update, load_config
 from fm_lab.utils.logging import create_run_dir, write_json
