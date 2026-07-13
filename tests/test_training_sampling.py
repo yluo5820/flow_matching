@@ -541,12 +541,14 @@ def test_train_flow_matching_restores_best_early_stopping_checkpoint(tmp_path) -
             "batch_size": 8,
             "steps": 4,
             "log_every": 1,
-            "lr": 0.0,
+            "optimizer": "adam",
+            "lr": 0.1,
+            "ema_decay": 0.5,
             "early_stopping": {
                 "enabled": True,
                 "warmup_steps": 0,
                 "patience_steps": 1,
-                "min_delta": 0.0,
+                "min_delta": 1.0e9,
                 "ema_alpha": 1.0,
             },
         },
@@ -573,6 +575,10 @@ def test_train_flow_matching_restores_best_early_stopping_checkpoint(tmp_path) -
     assert metrics["final_loss"] == metrics["checkpoint_loss"]
     assert checkpoint["step"] == 1
     assert checkpoint["metrics"]["checkpoint_step"] == 1
+    model_velocity = checkpoint["model_state_dict"]["velocity"]
+    ema_velocity = checkpoint["ema_model_state_dict"]["velocity"]
+    assert torch.equal(model_velocity, torch.zeros_like(model_velocity))
+    assert torch.equal(ema_velocity, model_velocity)
 
 
 def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:

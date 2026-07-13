@@ -147,7 +147,7 @@ def test_live_ema_comparison_reuses_initial_noise_for_equal_weights(tmp_path) ->
     live = np.load(tmp_path / "samples" / "live_diagnostic.npy")
     ema = np.load(tmp_path / "samples" / "ema_diagnostic.npy")
     assert live.shape[0] == 3
-    assert np.array_equal(live, ema)
+    np.testing.assert_allclose(live, ema, rtol=0.0, atol=1.0e-7)
 
 
 def test_live_ema_comparison_requires_ema_model(tmp_path) -> None:

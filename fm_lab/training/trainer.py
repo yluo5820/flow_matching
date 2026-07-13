@@ -187,6 +187,7 @@ def train_flow_matching(
                 if early_stopping.enabled:
                     candidate_state = _capture_training_state(
                         model=model,
+                        ema_model=ema_model,
                         path=path,
                         theta_optimizer=theta_optimizer,
                         psi_optimizer=psi_optimizer,
@@ -215,6 +216,7 @@ def train_flow_matching(
             if should_log and early_stopping.enabled:
                 candidate_state = _capture_training_state(
                     model=model,
+                    ema_model=ema_model,
                     path=path,
                     theta_optimizer=theta_optimizer,
                     psi_optimizer=psi_optimizer,
@@ -246,6 +248,7 @@ def train_flow_matching(
                 if candidate_state is None:
                     candidate_state = _capture_training_state(
                         model=model,
+                        ema_model=ema_model,
                         path=path,
                         theta_optimizer=theta_optimizer,
                         psi_optimizer=psi_optimizer,
@@ -278,6 +281,7 @@ def train_flow_matching(
         _restore_training_state(
             best_state,
             model=model,
+            ema_model=ema_model,
             path=path,
             theta_optimizer=theta_optimizer,
             psi_optimizer=psi_optimizer,
@@ -534,6 +538,7 @@ class _TrainingState:
     step: int
     model_state: dict[str, Any]
     theta_optimizer_state: dict[str, Any]
+    ema_model_state: dict[str, Any] | None = None
     path_state: dict[str, Any] | None = None
     psi_optimizer_state: dict[str, Any] | None = None
     record: dict[str, float | int] | None = None
@@ -592,6 +597,7 @@ def _train_learned_acceleration_step(
 def _capture_training_state(
     *,
     model: nn.Module,
+    ema_model: nn.Module | None,
     path: FlowPath,
     theta_optimizer: torch.optim.Optimizer,
     psi_optimizer: torch.optim.Optimizer | None,
@@ -601,6 +607,9 @@ def _capture_training_state(
     return _TrainingState(
         step=step,
         model_state=_clone_state(model.state_dict()),
+        ema_model_state=(
+            _clone_state(ema_model.state_dict()) if ema_model is not None else None
+        ),
         path_state=_clone_state(path_state) if path_state is not None else None,
         theta_optimizer_state=_clone_state(theta_optimizer.state_dict()),
         psi_optimizer_state=(
@@ -613,11 +622,18 @@ def _restore_training_state(
     state: _TrainingState,
     *,
     model: nn.Module,
+    ema_model: nn.Module | None,
     path: FlowPath,
     theta_optimizer: torch.optim.Optimizer,
     psi_optimizer: torch.optim.Optimizer | None,
 ) -> None:
     model.load_state_dict(state.model_state)
+    if state.ema_model_state is not None:
+        if ema_model is None:
+            raise ValueError(
+                "Best checkpoint state includes an EMA model, but no EMA model exists."
+            )
+        ema_model.load_state_dict(state.ema_model_state)
     theta_optimizer.load_state_dict(state.theta_optimizer_state)
     if state.path_state is not None:
         if not isinstance(path, nn.Module):
