@@ -57,16 +57,16 @@ training:
   optimizer: adam
   lr: 0.0002
   batch_size: 16
-  steps: 5000
+  steps: 10000
   warmup_steps: 500
   early_stopping:
     enabled: true
-    patience_steps: 1000
-    warmup_steps: 2000
+    patience_steps: 2000
+    warmup_steps: 5000
     min_delta: 0.0001
-    ema_alpha: 0.05
+    ema_alpha: 0.3
   gradient_clip: 1.0
-  ema_decay: 0.9999
+  ema_decay: 0.999
   log_every: 250
   checkpoint_every: 2500
 
@@ -79,10 +79,13 @@ sampling:
   sample_batch_size: 16
   plot_max_points: 100
   classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  ddim_skip: 50
+  ddim_skip: 20
   eta: 0.0
   classifier_free_guidance:
     enabled: true
     convention: fm_lab
-    scale: 2.5
-    paper_omega: 1.5
+    scale: 1.0
+    paper_omega: 0.0
+  live_ema_comparison:
+    enabled: true
+    n_samples: 100

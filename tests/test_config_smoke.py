@@ -337,19 +337,26 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
         assert config["objective"]["name"] == objective_name
         assert config["objective"]["prediction_type"] == prediction_type
         assert config["training"]["batch_size"] == 16
-        assert config["training"]["steps"] == 5000
+        assert config["training"]["steps"] == 10000
         assert config["training"]["warmup_steps"] == 500
+        assert config["training"]["ema_decay"] == 0.999
         assert config["training"]["early_stopping"] == {
             "enabled": True,
-            "patience_steps": 1000,
-            "warmup_steps": 2000,
+            "patience_steps": 2000,
+            "warmup_steps": 5000,
             "min_delta": 0.0001,
-            "ema_alpha": 0.05,
+            "ema_alpha": 0.3,
         }
         assert config["sampling"]["n_samples"] == 1000
         assert config["sampling"]["sample_batch_size"] == 16
         assert config["sampling"]["plot_max_points"] == 100
-        assert config["sampling"]["ddim_skip"] == 50
+        assert config["sampling"]["ddim_skip"] == 20
+        assert config["sampling"]["classifier_free_guidance"]["scale"] == 1.0
+        assert config["sampling"]["classifier_free_guidance"]["paper_omega"] == 0.0
+        assert config["sampling"]["live_ema_comparison"] == {
+            "enabled": True,
+            "n_samples": 100,
+        }
         assert config["experiment"]["output_dir"].startswith("runs/imbdiff/local/")
 
         source = build_source(config)
