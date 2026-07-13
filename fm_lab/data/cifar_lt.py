@@ -102,6 +102,25 @@ class ImbalancedCIFARImages:
             labels = labels.to(resolved)
         return images, labels
 
+    def all_samples_with_labels(
+        self,
+        device: torch.device | str | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, np.ndarray]:
+        """Return every retained image once, without stochastic augmentation."""
+
+        assert self._raw_images is not None
+        assert self._labels is not None
+        assert self._selected_indices is not None
+        images = _normalize(self._raw_images.float() / 255.0, self.normalize).reshape(
+            len(self._raw_images), -1
+        )
+        labels = self._labels.clone()
+        if device is not None:
+            resolved = torch.device(device)
+            images = images.to(resolved)
+            labels = labels.to(resolved)
+        return images, labels, self._selected_indices.astype(str)
+
     def log_prob(self, x: torch.Tensor) -> None:
         del x
         return None

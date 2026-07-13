@@ -78,6 +78,32 @@ def test_cifar_lt_sampling_keeps_images_and_labels_aligned(tmp_path: Path) -> No
     assert target.metadata()["image_shape"] == [3, 32, 32]
 
 
+def test_cifar_all_samples_returns_each_selected_image_once_without_augmentation(
+    tmp_path: Path,
+) -> None:
+    _write_balanced_binary_cifar(
+        tmp_path,
+        dataset="cifar10",
+        num_classes=10,
+        examples_per_class=4,
+        record_size=3073,
+        pixel_offset=1,
+    )
+    target = ImbalancedCIFARImages(
+        dataset="cifar10",
+        root=tmp_path,
+        imbalance_factor=1.0,
+        horizontal_flip=True,
+        normalize="zero_one",
+    )
+
+    images, labels, sample_ids = target.all_samples_with_labels()
+
+    assert images.shape == (40, 3072)
+    assert torch.equal(torch.round(images[:, 0] * 255).long(), labels)
+    assert np.array_equal(sample_ids, target.selected_indices.astype(str))
+
+
 def test_cifar_lt_factory_builds_reference_ir100_split(tmp_path: Path) -> None:
     _write_balanced_binary_cifar(
         tmp_path,

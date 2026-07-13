@@ -181,3 +181,28 @@ checkpoint:
   --output-dir runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon \
   --resume-from runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/checkpoints/step_100000.pt
 ```
+
+## Round 4 evaluation
+
+Place the reference TensorFlow-FID Inception checkpoint at
+`stats/pt_inception-2015-12-05-6726825d.pth`. Evaluate a completed CIFAR-10
+run directly from its generated arrays with:
+
+```bash
+printf '[5000,2997,1796,1077,645,387,232,139,83,50]' \
+  > runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/class_counts.json
+
+.conda/fm_lab/bin/python -m fm_lab.experiments.run_imbdiff_eval \
+  --generated-samples runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/samples/ddim.npy \
+  --generated-labels runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/samples/generated_labels.npy \
+  --dataset cifar10 --data-root data/cifar10 --download \
+  --class-counts runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/class_counts.json \
+  --feature-cache-dir features/imbdiff/cifar10 \
+  --output-dir runs/imbdiff/cifar10_lt_ir100_ddpm_epsilon/evaluation
+```
+
+The evaluator writes `metrics.json` and `metrics.csv`. FID and KID use the
+released ImbDiff-CM equations and feature pipeline. Recall, Inception Score,
+classwise FID, and frequency-ranked Many/Medium/Few FID are documented
+extensions. Subsequent evaluations can use `--generated-cache` and
+`--real-cache` to avoid repeating Inception extraction.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -16,7 +17,9 @@ def fid_score(generated: np.ndarray, real: np.ndarray, *, eps: float = 1e-6) -> 
     sigma_generated = np.atleast_2d(np.cov(generated, rowvar=False))
     sigma_real = np.atleast_2d(np.cov(real, rowvar=False))
     difference = np.atleast_1d(mu_generated - mu_real)
-    covariance_mean = linalg.sqrtm(sigma_generated @ sigma_real)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", linalg.LinAlgWarning)
+        covariance_mean = linalg.sqrtm(sigma_generated @ sigma_real)
     if not np.isfinite(covariance_mean).all():
         offset = np.eye(sigma_generated.shape[0]) * eps
         covariance_mean = linalg.sqrtm(

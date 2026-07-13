@@ -46,6 +46,26 @@ When adding or changing a CLI:
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
+| `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
+
+## `fm-lab-imbdiff-eval`
+
+Evaluate generated CIFAR samples using the reference TensorFlow-FID Inception
+features. FID and KID are reference-compatible; Recall, Inception Score,
+classwise FID, and rank-third Many/Medium/Few FID are documented extensions.
+
+```bash
+fm-lab-imbdiff-eval \
+  --generated-samples runs/imbdiff/cifar10/samples/ddim.npy \
+  --generated-labels runs/imbdiff/cifar10/samples/generated_labels.npy \
+  --dataset cifar10 --data-root data/cifar10 \
+  --class-counts runs/imbdiff/cifar10/class_counts.json \
+  --output-dir runs/imbdiff/cifar10/evaluation
+```
+
+Use `--generated-cache` with `--real-cache` to recompute reports without
+rerunning Inception feature extraction. The exact TensorFlow-FID weight file is
+required; the command never substitutes torchvision ImageNet weights.
 
 ## `fm-lab-sampling-timesteps`
 
