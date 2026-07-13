@@ -82,9 +82,12 @@ def run_geometry_explorer(workspace: str | Path = DEFAULT_WORKSPACE) -> None:
         """,
         unsafe_allow_html=True,
     )
-    variants = registry.dataset_variants()
+    variants = registry.dataset_variants(explorable_only=True)
     if not variants:
-        st.error(f"No dataset variants are registered under {registry.workspace}.")
+        st.error(
+            "No dataset variants with projection or trajectory views are "
+            f"registered under {registry.workspace}."
+        )
         st.stop()
 
     st.markdown('<div class="geometry-toolbar">', unsafe_allow_html=True)

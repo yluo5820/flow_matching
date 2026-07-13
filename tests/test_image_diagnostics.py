@@ -823,6 +823,105 @@ def test_projection_runner_persists_three_components(tmp_path: Path) -> None:
     assert {"pca_3d_x", "pca_3d_y", "pca_3d_z"} <= set(result.columns)
 
 
+def test_metric_mds_variant_persists_deterministic_three_components(
+    tmp_path: Path,
+) -> None:
+    features = np.asarray(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.2, 0.8, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.8, 0.2, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.2, 0.0, 0.0, 0.8],
+        ],
+        dtype=np.float32,
+    )
+    config = ProjectionConfig(
+        variants=(
+            ProjectionVariantConfig(
+                name="Metric MDS 3D",
+                key="mds_3d",
+                method="mds",
+                n_components=3,
+                metric="cosine",
+                random_state=7,
+                mds_n_init=1,
+                mds_max_iter=100,
+                mds_eps=1.0e-4,
+            ),
+        )
+    )
+
+    first = compute_or_load_projections(
+        features,
+        pd.Series(range(len(features))),
+        config,
+        tmp_path,
+        feature_name="raw",
+        save=False,
+    )
+    second = compute_or_load_projections(
+        features,
+        pd.Series(range(len(features))),
+        config,
+        tmp_path,
+        feature_name="raw",
+        save=False,
+    )
+
+    columns = ["mds_3d_x", "mds_3d_y", "mds_3d_z"]
+    assert set(columns) <= set(first.columns)
+    assert np.isfinite(first[columns].to_numpy()).all()
+    np.testing.assert_allclose(first[columns], second[columns])
+
+
+def test_projection_variants_can_include_metric_mds() -> None:
+    variants = projection_variants(
+        ProjectionConfig(
+            method="umap",
+            also_compute_pca=False,
+            also_compute_mds=True,
+            metric="cosine",
+            mds_n_init=2,
+            mds_max_iter=75,
+            mds_eps=1.0e-4,
+        )
+    )
+
+    assert [variant.method for variant in variants] == ["umap", "mds"]
+    assert variants[1].name == "MDS"
+    assert variants[1].metric == "cosine"
+    assert variants[1].mds_n_init == 2
+    assert variants[1].mds_max_iter == 75
+    assert variants[1].mds_eps == 1.0e-4
+
+
+def test_metric_mds_projection_config_is_valid() -> None:
+    config = diagnostics_config_from_dict(
+        {
+            "explorer_name": "metric_mds",
+            "input": {"type": "numpy", "data_path": "unused.npy"},
+            "projection": {
+                "variants": [
+                    {
+                        "name": "Metric MDS 3D",
+                        "key": "mds_3d",
+                        "method": "mds",
+                        "n_components": 3,
+                        "metric": "euclidean",
+                        "mds_n_init": 2,
+                        "mds_max_iter": 100,
+                        "mds_eps": 1.0e-4,
+                    }
+                ]
+            },
+        }
+    )
+
+    assert config.projection.variants[0].method == "mds"
+
+
 def test_umap_variant_can_preprocess_input_with_pca(
     tmp_path: Path,
     monkeypatch,

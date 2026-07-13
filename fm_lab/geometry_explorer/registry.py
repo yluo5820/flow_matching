@@ -364,11 +364,28 @@ class GeometryRegistry:
                 point_rows,
             )
 
-    def dataset_variants(self) -> list[DatasetVariantRecord]:
+    def dataset_variants(
+        self,
+        *,
+        explorable_only: bool = False,
+    ) -> list[DatasetVariantRecord]:
+        query = "SELECT dataset_variants.* FROM dataset_variants"
+        if explorable_only:
+            query += """
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM projection_views
+                    WHERE projection_views.variant_id = dataset_variants.variant_id
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM trajectory_views
+                    WHERE trajectory_views.variant_id = dataset_variants.variant_id
+                )
+            """
+        query += " ORDER BY family, variant"
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM dataset_variants ORDER BY family, variant"
-            ).fetchall()
+            rows = connection.execute(query).fetchall()
         return [
             DatasetVariantRecord(
                 variant_id=row["variant_id"],

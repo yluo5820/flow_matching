@@ -9,6 +9,8 @@ from typing import Any
 
 from fm_lab.utils.config import ConfigError, load_config
 
+SUPPORTED_PROJECTION_METHODS = {"umap", "pca", "tsne", "mds"}
+
 
 @dataclass(frozen=True)
 class InputConfig:
@@ -63,6 +65,9 @@ class ProjectionVariantConfig:
     perplexity: float = 30.0
     init: str = "random"
     learning_rate: float | str = "auto"
+    mds_n_init: int = 1
+    mds_max_iter: int = 300
+    mds_eps: float = 1.0e-3
     source_path: str | None = None
     source_url: str | None = None
     download: bool = False
@@ -77,6 +82,10 @@ class ProjectionConfig:
     random_state: int = 42
     also_compute_pca: bool = True
     also_compute_tsne: bool = False
+    also_compute_mds: bool = False
+    mds_n_init: int = 1
+    mds_max_iter: int = 300
+    mds_eps: float = 1.0e-3
     skip_existing: bool = True
     variants: tuple[ProjectionVariantConfig, ...] = ()
 
@@ -332,15 +341,21 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
     if features.dtype not in {"float32", "float16", "bfloat16"}:
         raise ConfigError(f"Unsupported features.dtype: {features.dtype}")
 
-    if config.projection.method not in {"umap", "pca", "tsne"}:
+    if config.projection.method not in SUPPORTED_PROJECTION_METHODS:
         raise ConfigError(f"Unsupported projection method: {config.projection.method}")
     if config.projection.n_neighbors < 2:
         raise ConfigError("projection.n_neighbors must be at least 2.")
     if config.projection.min_dist < 0.0:
         raise ConfigError("projection.min_dist must be non-negative.")
+    if config.projection.mds_n_init < 1:
+        raise ConfigError("projection.mds_n_init must be positive.")
+    if config.projection.mds_max_iter < 1:
+        raise ConfigError("projection.mds_max_iter must be positive.")
+    if config.projection.mds_eps <= 0.0:
+        raise ConfigError("projection.mds_eps must be positive.")
     projection_keys: set[str] = set()
     for variant in config.projection.variants:
-        if variant.method not in {"umap", "pca", "tsne"}:
+        if variant.method not in SUPPORTED_PROJECTION_METHODS:
             raise ConfigError(
                 f"Unsupported projection method for {variant.name!r}: {variant.method}"
             )
@@ -363,6 +378,12 @@ def validate_diagnostics_config(config: DiagnosticsRunConfig) -> None:
             raise ConfigError(f"Projection {variant.name!r} min_dist must be non-negative.")
         if variant.perplexity <= 0.0:
             raise ConfigError(f"Projection {variant.name!r} perplexity must be positive.")
+        if variant.mds_n_init < 1:
+            raise ConfigError(f"Projection {variant.name!r} mds_n_init must be positive.")
+        if variant.mds_max_iter < 1:
+            raise ConfigError(f"Projection {variant.name!r} mds_max_iter must be positive.")
+        if variant.mds_eps <= 0.0:
+            raise ConfigError(f"Projection {variant.name!r} mds_eps must be positive.")
         if variant.source_url and not variant.source_path:
             raise ConfigError(
                 f"Projection {variant.name!r} source_url requires source_path."

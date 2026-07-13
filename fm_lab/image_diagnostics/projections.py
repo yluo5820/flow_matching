@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import urllib.request
@@ -85,7 +86,7 @@ def compute_projection(
     *,
     method: str | None = None,
 ) -> np.ndarray:
-    """Compute a low-dimensional UMAP, PCA, or t-SNE representation."""
+    """Compute a low-dimensional UMAP, PCA, t-SNE, or metric MDS representation."""
 
     selected = method or config.method
     variant = ProjectionVariantConfig(
@@ -96,6 +97,9 @@ def compute_projection(
         min_dist=config.min_dist,
         metric=config.metric,
         random_state=config.random_state,
+        mds_n_init=config.mds_n_init,
+        mds_max_iter=config.mds_max_iter,
+        mds_eps=config.mds_eps,
     )
     return _compute_projection_variant(embeddings, variant)
 
@@ -110,6 +114,8 @@ def projection_variants(config: ProjectionConfig) -> tuple[ProjectionVariantConf
         methods.append("pca")
     if config.also_compute_tsne and "tsne" not in methods:
         methods.append("tsne")
+    if config.also_compute_mds and "mds" not in methods:
+        methods.append("mds")
     return tuple(
         ProjectionVariantConfig(
             name=_default_display_name(method),
@@ -119,6 +125,9 @@ def projection_variants(config: ProjectionConfig) -> tuple[ProjectionVariantConf
             min_dist=config.min_dist,
             metric=config.metric,
             random_state=config.random_state,
+            mds_n_init=config.mds_n_init,
+            mds_max_iter=config.mds_max_iter,
+            mds_eps=config.mds_eps,
         )
         for method in methods
     )
@@ -178,6 +187,11 @@ def _compute_projection_variant(
             learning_rate=variant.learning_rate,
             random_state=variant.random_state,
         ).fit_transform(projection_input)
+    if selected == "mds":
+        if len(embeddings) < 3:
+            LOGGER.warning("Fewer than three samples; using PCA coordinates for MDS output.")
+            return _pca(projection_input, variant.random_state, variant.n_components)
+        return _metric_mds(projection_input, variant)
     raise ValueError(f"Unsupported projection method: {selected}")
 
 
@@ -261,6 +275,42 @@ def _projection_input(
         components,
     )
     return _pca(embeddings, variant.random_state, variant.pca_components)
+
+
+def _metric_mds(
+    embeddings: np.ndarray,
+    variant: ProjectionVariantConfig,
+) -> np.ndarray:
+    from sklearn.manifold import MDS
+
+    parameters = inspect.signature(MDS).parameters
+    kwargs: dict[str, object] = {
+        "n_components": variant.n_components,
+        "n_init": variant.mds_n_init,
+        "max_iter": variant.mds_max_iter,
+        "eps": variant.mds_eps,
+        "random_state": variant.random_state,
+    }
+    projection_input = embeddings
+    if "metric_mds" in parameters:
+        kwargs["metric_mds"] = True
+        kwargs["metric"] = variant.metric
+        if "init" in parameters:
+            kwargs["init"] = "random"
+    else:
+        kwargs["metric"] = True
+        if variant.metric == "euclidean":
+            kwargs["dissimilarity"] = "euclidean"
+        else:
+            from sklearn.metrics import pairwise_distances
+
+            projection_input = pairwise_distances(
+                embeddings,
+                metric=variant.metric,
+            )
+            kwargs["dissimilarity"] = "precomputed"
+    coordinates = MDS(**kwargs).fit_transform(projection_input)
+    return np.asarray(coordinates, dtype=np.float32)
 
 
 def _validate_projection(

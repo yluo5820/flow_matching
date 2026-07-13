@@ -205,6 +205,7 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "light_",
         "object_",
         "pose_",
+        "pullback_",
         "quat_",
         "rotation_",
         "so3_",
@@ -270,9 +271,13 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "num_components",
         "object_classes",
         "object_count",
+        "condition_number",
         "outlier_score",
         "pipeline",
+        "product_error",
         "largest_component_ratio",
+        "metric_rank",
+        "metric_trace",
         "sample_id",
         "segmentation_mask_path",
         "source_height",
@@ -285,6 +290,7 @@ def sample_metric_columns(frame: pd.DataFrame) -> list[str]:
         "species_id",
         "touches_boundary",
         "valid_mask",
+        "volume_density",
     }
     return [
         str(column)

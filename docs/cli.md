@@ -45,6 +45,24 @@ When adding or changing a CLI:
 | `fm-lab-mnist-eval` | Evaluate a completed MNIST image-generation run. | MNIST run directory | pixel/classifier/nearest-neighbor metrics, nearest-neighbor plot |
 | `fm-lab-run-comparison` | Run a controlled multi-variant experiment. | Comparison matrix YAML | summary CSV/JSON, Markdown report |
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
+| `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
+
+## `fm-lab-sampling-timesteps`
+
+Generate a Geometry Explorer dataset whose class labels identify sampling timesteps:
+
+```bash
+fm-lab-sampling-timesteps \
+  --run-dir runs/cifar10_original_unet_diffusion_x_bs32 \
+  --workspace outputs/geometry_explorer \
+  --num-classes 16 \
+  --total-rows 2048 \
+  --build-view
+```
+
+Use `--checkpoint` to override the run checkpoint, `--solver`, `--nfe`, and
+`--schedule` to control integration, and `--variant-id` to choose the registered
+dataset id. `--overwrite` replaces an existing variant with the same id.
 
 ## `fm-lab-train`
 

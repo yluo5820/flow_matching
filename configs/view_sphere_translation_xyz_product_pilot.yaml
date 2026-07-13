@@ -1,0 +1,45 @@
+experiment: view_sphere_translation_xyz_product_pilot
+seed: 242
+objects:
+  - abstract_statue
+factor_spaces:
+  - ProductFactorSpace:
+      name: view_sphere_translation_xyz_product
+      factors:
+        - LookAtViewSphere
+        - BoundedTranslation3D:
+            bounds:
+              - [-0.25, 0.25]
+              - [-0.25, 0.25]
+              - [-0.75, 0.75]
+render_modes:
+  - colored
+n_samples: 10000
+image_size: 64
+background: white
+antialias: true
+
+camera_config:
+  radius: 4.0
+  elevation: 20.0
+  focal_length: 70.0
+  translation_target: camera_plane
+
+light_config:
+  position: [3.0, -4.0, 5.0]
+  distance: 6.0
+  energy: 400.0
+  ambient: 0.35
+  diffuse: 0.70
+
+output:
+  save_pngs: true
+
+diagnostics:
+  umap: true
+  intrinsic_dimension: true
+  pullback_metric: true
+  product_structure: true
+  latent_pixel: false
+  pullback_metric_points: 128
+  pullback_eps: 0.002

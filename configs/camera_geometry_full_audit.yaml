@@ -1,0 +1,67 @@
+experiment: camera_geometry_full_audit
+seed: 42
+objects:
+  - abstract_statue
+n_samples: 20000
+image_size: 64
+background: white
+antialias: true
+
+render_modes:
+  - silhouette
+  - depth
+  - normal
+  - colored
+
+factor_spaces:
+  - CameraSE3Factor:
+      roll_bounds: [-0.35, 0.35]
+      translation_bounds:
+        - [-0.45, 0.45]
+        - [-0.45, 0.45]
+        - [-0.80, 0.80]
+  - CameraIntrinsicsFactor:
+      focal_log_bounds: [-0.35, 0.35]
+      aspect_log_bounds: [-0.20, 0.20]
+      principal_point_bounds:
+        - [-6.0, 6.0]
+        - [-6.0, 6.0]
+      skew_bounds: [-0.10, 0.10]
+  - FullCameraFactor:
+      roll_bounds: [-0.35, 0.35]
+      translation_bounds:
+        - [-0.45, 0.45]
+        - [-0.45, 0.45]
+        - [-0.80, 0.80]
+      focal_log_bounds: [-0.35, 0.35]
+      aspect_log_bounds: [-0.20, 0.20]
+      principal_point_bounds:
+        - [-6.0, 6.0]
+        - [-6.0, 6.0]
+      skew_bounds: [-0.10, 0.10]
+
+camera_config:
+  radius: 4.0
+  elevation: 20.0
+  focal_length: 70.0
+  translation_target: camera_plane
+
+light_config:
+  position: [3.0, -4.0, 5.0]
+  ambient: 0.35
+  diffuse: 0.70
+  energy: 400.0
+
+diagnostics:
+  pullback_metric: true
+  product_structure: true
+  latent_pixel: true
+  umap: false
+  pullback_metric_points: 256
+  pullback_eps: 0.001
+  knn_samples: 3000
+  latent_pixel_distance_pairs: 100000
+  knn_k: [15]
+
+output:
+  save_pngs: false

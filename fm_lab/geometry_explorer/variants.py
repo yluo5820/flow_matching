@@ -18,7 +18,11 @@ from fm_lab.geometry_explorer.registry import (
     variant_id as make_variant_id,
 )
 from fm_lab.image_diagnostics.config import InputConfig
-from fm_lab.image_diagnostics.dataset_loader import DatasetBundle, load_dataset
+from fm_lab.image_diagnostics.dataset_loader import (
+    DatasetBundle,
+    _export_array_sprite_atlases,
+    load_dataset,
+)
 from fm_lab.image_diagnostics.save_utils import read_parquet, write_parquet
 from fm_lab.utils.config import ConfigError, load_config, save_config
 from fm_lab.utils.logging import write_json
@@ -101,6 +105,16 @@ def build_dataset_variant(
     )
     if dataset.vectors is None:
         raise RuntimeError("MNIST variant build expected raw vectors.")
+    composition = _mnist_pair_composition_config(config)
+    if composition is not None:
+        return _build_mnist_pair_composition_variant(
+            config,
+            dataset=dataset,
+            output_dir=output_dir,
+            registry=registry,
+            config_path=config_path,
+            composition=composition,
+        )
     selected_positions = _select_positions(dataset.metadata, config)
     metadata = dataset.metadata.iloc[selected_positions].reset_index(drop=True).copy()
     vectors = np.asarray(dataset.vectors[selected_positions], dtype=np.float32)
@@ -182,6 +196,228 @@ def load_variant_bundle(
         image_shape=image_shape,
         value_range=value_range,
     )
+
+
+def _mnist_pair_composition_config(config: DatasetVariantConfig) -> dict[str, Any] | None:
+    raw = config.selection.get("mnist_pair_composition")
+    if raw is None:
+        raw = config.selection.get("composition")
+    if raw is None:
+        return None
+    if config.family != "mnist":
+        raise ConfigError("MNIST pair composition is only supported for family: mnist.")
+    if not isinstance(raw, dict):
+        raise ConfigError("selection.mnist_pair_composition must be a mapping.")
+    kind = str(raw.get("type", "paired_digits"))
+    if kind != "paired_digits":
+        raise ConfigError(
+            "selection.mnist_pair_composition.type must be 'paired_digits'."
+        )
+    return dict(raw)
+
+
+def _build_mnist_pair_composition_variant(
+    config: DatasetVariantConfig,
+    *,
+    dataset: DatasetBundle,
+    output_dir: Path,
+    registry: GeometryRegistry,
+    config_path: str | Path | None,
+    composition: dict[str, Any],
+) -> dict[str, Any]:
+    vectors = np.asarray(dataset.vectors, dtype=np.float32)
+    if dataset.image_shape != (28, 28):
+        raise ConfigError(
+            "MNIST pair composition expects 28x28 source images; "
+            f"got {dataset.image_shape}."
+        )
+
+    left_digit = str(composition.get("left_digit", "1"))
+    right_digit = str(composition.get("right_digit", "8"))
+    labels = dataset.metadata["label"].astype(str).to_numpy()
+    left_candidates = np.flatnonzero(labels == left_digit)
+    right_candidates = np.flatnonzero(labels == right_digit)
+    if len(left_candidates) == 0 or len(right_candidates) == 0:
+        raise ConfigError(
+            f"MNIST pair composition requires source digits {left_digit!r} and "
+            f"{right_digit!r}; found {len(left_candidates)} and {len(right_candidates)}."
+        )
+
+    requested_pairs = composition.get(
+        "pairs",
+        composition.get("samples_per_class", min(len(left_candidates), len(right_candidates))),
+    )
+    pair_count = int(requested_pairs)
+    if pair_count < 1:
+        raise ConfigError("MNIST pair composition requires at least one pair.")
+    replace = bool(composition.get("replace", False))
+    if not replace and pair_count > min(len(left_candidates), len(right_candidates)):
+        raise ConfigError(
+            f"Requested {pair_count} MNIST digit pairs without replacement, but only "
+            f"{min(len(left_candidates), len(right_candidates))} paired samples are available."
+        )
+
+    rng = np.random.default_rng(config.seed)
+    left_positions = rng.choice(left_candidates, size=pair_count, replace=replace)
+    right_positions = rng.choice(right_candidates, size=pair_count, replace=replace)
+    left_vectors = _place_mnist_half(vectors[left_positions], side="left")
+    right_vectors = _place_mnist_half(vectors[right_positions], side="right")
+    composite_vectors = np.clip(left_vectors + right_vectors, 0.0, 1.0)
+
+    left_label = str(composition.get("left_label", f"{left_digit}_left"))
+    right_label = str(composition.get("right_label", f"{right_digit}_right"))
+    composite_label = str(
+        composition.get("composite_label", f"{left_digit}_plus_{right_digit}")
+    )
+    class_blocks = [
+        (left_label, 0, "left", left_vectors, np.ones(pair_count), np.zeros(pair_count)),
+        (right_label, 1, "right", right_vectors, np.zeros(pair_count), np.ones(pair_count)),
+        (
+            composite_label,
+            2,
+            "sum",
+            composite_vectors,
+            np.ones(pair_count),
+            np.ones(pair_count),
+        ),
+    ]
+
+    output_vectors = np.concatenate([block[3] for block in class_blocks], axis=0).astype(
+        np.float32,
+        copy=False,
+    )
+    records: list[dict[str, Any]] = []
+    original_indices = dataset.metadata.get(
+        "original_index",
+        pd.Series(np.arange(len(dataset.metadata), dtype=int)),
+    ).to_numpy()
+    source_indices = dataset.metadata.get(
+        "source_index",
+        pd.Series(np.arange(len(dataset.metadata), dtype=int)),
+    ).to_numpy()
+    for label, label_id, role, _, left_weight, right_weight in class_blocks:
+        for pair_id in range(pair_count):
+            left_position = int(left_positions[pair_id])
+            right_position = int(right_positions[pair_id])
+            source_index = (
+                source_indices[left_position]
+                if role in {"left", "sum"}
+                else source_indices[right_position]
+            )
+            records.append(
+                {
+                    "row_id": len(records),
+                    "image_path": "",
+                    "dataset": "mnist",
+                    "split": config.split,
+                    "label": label,
+                    "label_id": label_id,
+                    "family": label,
+                    "prompt_id": f"mnist_pair_{role}",
+                    "prompt": (
+                        f"MNIST {left_digit} on the left + {right_digit} on the right"
+                        if role == "sum"
+                        else f"MNIST {left_digit if role == 'left' else right_digit} "
+                        f"placed on the {role}"
+                    ),
+                    "tags": ["mnist", "paired_digits", role],
+                    "source_index": int(source_index),
+                    "left_source_index": int(source_indices[left_position]),
+                    "right_source_index": int(source_indices[right_position]),
+                    "left_original_index": int(original_indices[left_position]),
+                    "right_original_index": int(original_indices[right_position]),
+                    "pair_id": pair_id,
+                    "component_role": role,
+                    "left_digit": left_digit,
+                    "right_digit": right_digit,
+                    "left_weight": float(left_weight[pair_id]),
+                    "right_weight": float(right_weight[pair_id]),
+                    "sample_type": "mnist_pair_composition",
+                    "status": "success",
+                    "variant_id": config.variant_id,
+                    "variant": config.variant,
+                    "base_variant": config.base,
+                }
+            )
+
+    metadata = pd.DataFrame.from_records(records)
+    atlas_metadata = _export_array_sprite_atlases(
+        output_vectors,
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+        output_dir=output_dir / "assets" / "atlases",
+        prefix=f"{config.variant}_mnist_pair",
+    )
+    for key, value in atlas_metadata.items():
+        metadata[key] = value
+
+    dataset_path = write_parquet(metadata, output_dir / "dataset_index.parquet")
+    data_path = output_dir / "data.npy"
+    labels_path = output_dir / "labels.npy"
+    np.save(data_path, output_vectors)
+    np.save(labels_path, metadata["label_id"].to_numpy(dtype=np.int64))
+    save_config(_variant_raw(config), output_dir / "config_used.yaml")
+    label_counts = _label_counts(metadata)
+    manifest = {
+        "variant_id": config.variant_id,
+        "family": config.family,
+        "variant": config.variant,
+        "base": config.base,
+        "split": config.split,
+        "seed": config.seed,
+        "rows": int(len(metadata)),
+        "label_counts": label_counts,
+        "image_shape": [28, 28],
+        "value_range": [0.0, 1.0],
+        "dataset_path": str(dataset_path),
+        "data_path": str(data_path),
+        "labels_path": str(labels_path),
+        "composition": {
+            "type": "paired_digits",
+            "left_digit": left_digit,
+            "right_digit": right_digit,
+            "pairs": pair_count,
+        },
+    }
+    write_json(manifest, output_dir / "manifest.json")
+    registry.register_dataset_variant(
+        variant_id=config.variant_id,
+        family=config.family,
+        variant=config.variant,
+        base=config.base,
+        split=config.split,
+        dataset_path=dataset_path,
+        data_path=data_path,
+        labels_path=labels_path,
+        config_path=config_path or output_dir / "config_used.yaml",
+        row_count=len(metadata),
+        label_counts=label_counts,
+        image_shape=(28, 28),
+        value_range=(0.0, 1.0),
+    )
+    return {
+        "variant_id": config.variant_id,
+        "output_dir": output_dir,
+        "dataset_path": dataset_path,
+        "data_path": data_path,
+        "labels_path": labels_path,
+        "rows": len(metadata),
+        "label_counts": label_counts,
+    }
+
+
+def _place_mnist_half(vectors: np.ndarray, *, side: str) -> np.ndarray:
+    from PIL import Image
+
+    images = np.asarray(vectors, dtype=np.float32).reshape((-1, 28, 28))
+    output = np.zeros_like(images)
+    x0 = 0 if side == "left" else 14
+    resample = Image.Resampling.LANCZOS
+    for index, image in enumerate(images):
+        pixels = np.asarray(np.rint(np.clip(image, 0.0, 1.0) * 255.0), dtype=np.uint8)
+        resized = Image.fromarray(pixels, mode="L").resize((14, 28), resample=resample)
+        output[index, :, x0 : x0 + 14] = np.asarray(resized, dtype=np.float32) / 255.0
+    return output.reshape((len(images), 28 * 28))
 
 
 _SUPPORTED_FAMILIES = {

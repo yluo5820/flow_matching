@@ -1,0 +1,22 @@
+family: mnist
+variant: pair_1_8_composition
+base: original
+split: all
+seed: 42
+
+input:
+  dataset_root: data/mnist
+  split: all
+  order: mldata
+  thumbnail_mode: atlas
+  download: false
+
+selection:
+  mnist_pair_composition:
+    type: paired_digits
+    left_digit: "1"
+    right_digit: "8"
+    pairs: 6000
+    left_label: "1_left"
+    right_label: "8_right"
+    composite_label: "1_plus_8"

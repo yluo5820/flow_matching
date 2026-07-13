@@ -19,6 +19,15 @@ from fm_lab.utils.logging import write_json
 SUPPORTED_OBJECT_KINDS = {"marked_cube", "abstract_statue", "offset_monument"}
 TRANSLATION_POSE_MODES = {"translation_xy", "translation_z", "translation_xyz"}
 SUPPORTED_POSE_MODES = {"azimuth", "so3", "sphere", *TRANSLATION_POSE_MODES}
+SUPPORTED_RENDER_MODES = {
+    "colored",
+    "grayscale",
+    "silhouette",
+    "depth",
+    "normal",
+    "gray_ambient",
+    "gray_directional",
+}
 
 
 @dataclass(frozen=True)
@@ -340,11 +349,48 @@ def render_marked_cube(
 ) -> np.ndarray:
     """Render one analytic RGB synthetic object image in [0, 1]."""
 
+    return render_synthetic_object(
+        object_spec=object_spec,
+        render=render,
+        azimuth_deg=azimuth_deg,
+        rotation_matrix=rotation_matrix,
+        camera_position=camera_position,
+        camera_frame=camera_frame,
+        render_mode="colored",
+    )
+
+
+def render_synthetic_object(
+    *,
+    object_spec: SyntheticObjectSpec | None = None,
+    render: SyntheticRenderConfig | None = None,
+    azimuth_deg: float = 0.0,
+    rotation_matrix: np.ndarray | None = None,
+    object_translation: np.ndarray | None = None,
+    camera_position: np.ndarray | None = None,
+    camera_frame: _CameraFrame | None = None,
+    light_position: np.ndarray | tuple[float, float, float] | None = None,
+    focal_length: float | None = None,
+    aspect_ratio: float = 1.0,
+    principal_point_offset: np.ndarray | tuple[float, float] | None = None,
+    skew: float = 0.0,
+    render_mode: str = "colored",
+) -> np.ndarray:
+    """Render one analytic RGB synthetic object image in [0, 1]."""
+
     spec = object_spec or SyntheticObjectSpec()
     cfg = render or SyntheticRenderConfig()
+    mode = str(render_mode).lower()
+    if mode not in SUPPORTED_RENDER_MODES:
+        supported = ", ".join(sorted(SUPPORTED_RENDER_MODES))
+        raise ConfigError(f"Unsupported render_mode {render_mode!r}: {supported}.")
     scale = cfg.supersample
     canvas_size = cfg.image_size * scale
-    background = _rgb255(cfg.background)
+    background = (
+        (0, 0, 0)
+        if mode in {"silhouette", "depth", "normal"}
+        else _rgb255(cfg.background)
+    )
     image = Image.new("RGB", (canvas_size, canvas_size), background)
     draw = ImageDraw.Draw(image)
     if camera_frame is not None:
@@ -357,29 +403,56 @@ def render_marked_cube(
             elevation_deg=cfg.elevation,
             distance=cfg.camera_distance,
         )
-    faces = _rotated_faces(_object_faces(spec), rotation_matrix)
+    faces = _translated_faces(
+        _rotated_faces(_object_faces(spec), rotation_matrix),
+        object_translation,
+    )
     visible_faces = []
+    intrinsics = _camera_intrinsics(
+        image_size=canvas_size,
+        scale=scale,
+        focal_length=float(focal_length if focal_length is not None else cfg.focal_length),
+        aspect_ratio=float(aspect_ratio),
+        principal_point_offset=principal_point_offset,
+        skew_ratio=float(skew),
+    )
     for face in faces:
         if _is_face_visible(face, camera.position):
             projected, depth = _project_points(
                 face.vertices,
                 camera=camera,
-                focal_px=cfg.focal_length * scale,
+                intrinsics=intrinsics,
                 image_size=canvas_size,
             )
             if projected is None:
                 continue
             visible_faces.append((depth, face, projected))
 
-    for _, face, projected in sorted(visible_faces, key=lambda item: item[0], reverse=True):
-        color = _lit_color(face, cfg)
+    depths = [item[0] for item in visible_faces]
+    near_depth = min(depths) if depths else 0.0
+    far_depth = max(depths) if depths else 1.0
+    for depth, face, projected in sorted(visible_faces, key=lambda item: item[0], reverse=True):
+        color = _render_mode_color(
+            face,
+            cfg,
+            mode=mode,
+            depth=float(depth),
+            near_depth=near_depth,
+            far_depth=far_depth,
+            light_position=light_position,
+        )
         draw.polygon([tuple(point) for point in projected], fill=color)
-        if spec.kind == "marked_cube" and spec.marker and face.name == spec.marker_face:
+        if (
+            mode in {"colored", "grayscale", "gray_ambient", "gray_directional"}
+            and spec.kind == "marked_cube"
+            and spec.marker
+            and face.name == spec.marker_face
+        ):
             marker = _marker_polygon(face, spec)
             projected_marker, _ = _project_points(
                 marker,
                 camera=camera,
-                focal_px=cfg.focal_length * scale,
+                intrinsics=intrinsics,
                 image_size=canvas_size,
             )
             if projected_marker is not None:
@@ -399,6 +472,15 @@ class _CameraFrame:
     right: np.ndarray
     up: np.ndarray
     forward: np.ndarray
+
+
+@dataclass(frozen=True)
+class _CameraIntrinsics:
+    fx_px: float
+    fy_px: float
+    cx_px: float
+    cy_px: float
+    skew_px: float
 
 
 @dataclass(frozen=True)
@@ -796,6 +878,24 @@ def _rotated_faces(
     )
 
 
+def _translated_faces(
+    faces: tuple[_CubeFace, ...],
+    translation: np.ndarray | None,
+) -> tuple[_CubeFace, ...]:
+    if translation is None:
+        return faces
+    offset = np.asarray(translation, dtype=np.float32).reshape(3)
+    return tuple(
+        _CubeFace(
+            name=face.name,
+            vertices=face.vertices + offset,
+            normal=face.normal,
+            base_color=face.base_color,
+        )
+        for face in faces
+    )
+
+
 def _abstract_statue_faces(scale: float) -> tuple[_CubeFace, ...]:
     parts = (
         ((0.00, 0.00, -0.72), (1.12, 0.88, 0.28), _material_ramp((0.50, 0.54, 0.58))),
@@ -932,32 +1032,112 @@ def _project_points(
     points: np.ndarray,
     *,
     camera: _CameraFrame,
-    focal_px: float,
+    intrinsics: _CameraIntrinsics,
     image_size: int,
 ) -> tuple[np.ndarray | None, float]:
+    del image_size
     relative = np.asarray(points, dtype=np.float32) - camera.position
     x = relative @ camera.right
     y = relative @ camera.up
     z = relative @ camera.forward
     if np.any(z <= 1.0e-4):
         return None, 0.0
-    center = (image_size - 1) / 2.0
     projected = np.column_stack(
         [
-            center + focal_px * x / z,
-            center - focal_px * y / z,
+            intrinsics.cx_px + (intrinsics.fx_px * x + intrinsics.skew_px * y) / z,
+            intrinsics.cy_px - intrinsics.fy_px * y / z,
         ],
     )
     return projected.astype(np.float32), float(np.mean(z))
 
 
-def _lit_color(face: _CubeFace, render: SyntheticRenderConfig) -> tuple[int, int, int]:
-    light_position = np.asarray(render.light_position, dtype=np.float32)
-    light_direction = _normalize(light_position - face.center)
+def _camera_intrinsics(
+    *,
+    image_size: int,
+    scale: int,
+    focal_length: float,
+    aspect_ratio: float,
+    principal_point_offset: np.ndarray | tuple[float, float] | None,
+    skew_ratio: float,
+) -> _CameraIntrinsics:
+    if aspect_ratio <= 0.0:
+        raise ConfigError("Camera aspect_ratio must be positive.")
+    offset = np.zeros(2, dtype=np.float32)
+    if principal_point_offset is not None:
+        offset = np.asarray(principal_point_offset, dtype=np.float32).reshape(2)
+    aspect_root = math.sqrt(float(aspect_ratio))
+    focal_px = float(focal_length) * int(scale)
+    center = (int(image_size) - 1.0) / 2.0
+    return _CameraIntrinsics(
+        fx_px=focal_px * aspect_root,
+        fy_px=focal_px / aspect_root,
+        cx_px=center + float(offset[0]) * int(scale),
+        cy_px=center + float(offset[1]) * int(scale),
+        skew_px=focal_px * float(skew_ratio),
+    )
+
+
+def _render_mode_color(
+    face: _CubeFace,
+    render: SyntheticRenderConfig,
+    *,
+    mode: str,
+    depth: float,
+    near_depth: float,
+    far_depth: float,
+    light_position: np.ndarray | tuple[float, float, float] | None,
+) -> tuple[int, int, int]:
+    if mode == "silhouette":
+        return (255, 255, 255)
+    if mode == "depth":
+        span = max(float(far_depth) - float(near_depth), 1.0e-8)
+        value = 1.0 - (float(depth) - float(near_depth)) / span
+        return _gray255(value)
+    if mode == "normal":
+        color = np.clip((face.normal + 1.0) / 2.0, 0.0, 1.0)
+        return tuple(int(round(float(channel) * 255.0)) for channel in color)
+    if mode == "gray_ambient":
+        value = float(np.clip(0.72 * render.ambient, 0.0, 1.0))
+        return _gray255(value)
+    if mode == "gray_directional":
+        return _lit_color(
+            face,
+            render,
+            base_color=(0.72, 0.72, 0.72),
+            light_position=light_position,
+        )
+    color = _lit_color(face, render, light_position=light_position)
+    if mode == "grayscale":
+        value = (
+            0.2126 * color[0] / 255.0
+            + 0.7152 * color[1] / 255.0
+            + 0.0722 * color[2] / 255.0
+        )
+        return _gray255(value)
+    return color
+
+
+def _lit_color(
+    face: _CubeFace,
+    render: SyntheticRenderConfig,
+    *,
+    base_color: tuple[float, float, float] | None = None,
+    light_position: np.ndarray | tuple[float, float, float] | None = None,
+) -> tuple[int, int, int]:
+    light = np.asarray(
+        render.light_position if light_position is None else light_position,
+        dtype=np.float32,
+    )
+    light_direction = _normalize(light - face.center)
     lambert = max(0.0, float(np.dot(face.normal, light_direction)))
     energy_scale = max(0.0, render.light_energy / 400.0)
     shade = np.clip(render.ambient + render.diffuse * energy_scale * lambert, 0.0, 1.25)
-    color = np.clip(np.asarray(face.base_color, dtype=np.float32) * shade, 0.0, 1.0)
+    color = np.clip(
+        np.asarray(face.base_color if base_color is None else base_color, dtype=np.float32)
+        * shade,
+        0.0,
+        1.0,
+    )
     return tuple(int(round(float(channel) * 255.0)) for channel in color)
 
 
@@ -1325,6 +1505,11 @@ def _config_raw(config: SyntheticObjectBuildConfig) -> dict[str, Any]:
 
 def _rgb255(values: tuple[float, float, float]) -> tuple[int, int, int]:
     return tuple(int(round(float(channel) * 255.0)) for channel in values)
+
+
+def _gray255(value: float) -> tuple[int, int, int]:
+    channel = int(round(float(np.clip(value, 0.0, 1.0)) * 255.0))
+    return (channel, channel, channel)
 
 
 def _normalize(vector: np.ndarray) -> np.ndarray:

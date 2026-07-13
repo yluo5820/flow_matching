@@ -114,6 +114,78 @@ def test_registry_registers_dataset_projection_and_trajectory(tmp_path: Path) ->
     assert grouped["run"][0].view_id == "traj"
 
 
+def test_registry_can_filter_out_variants_without_views(tmp_path: Path) -> None:
+    registry = GeometryRegistry(tmp_path / "workspace")
+    for name in ("hidden", "projection", "trajectory"):
+        registry.register_dataset_variant(
+            variant_id=f"synthetic/{name}",
+            family="synthetic",
+            variant=name,
+            base="original",
+            split="train",
+            dataset_path=tmp_path / f"{name}.parquet",
+            data_path=None,
+            labels_path=None,
+            config_path=None,
+            row_count=10,
+            label_counts={"0": 10},
+            image_shape=(8, 8),
+            value_range=(0.0, 1.0),
+        )
+
+    registry.register_projection_view(
+        view_id="projection-view",
+        variant_id="synthetic/projection",
+        feature_name="raw_pixels",
+        feature_mode="raw",
+        explorer_data_path=tmp_path / "projection.parquet",
+        output_dir=tmp_path,
+        projection_names={"umap_3d": "UMAP 3D"},
+        renderer="three3d",
+        row_count=10,
+    )
+    registry.register_model_run(
+        run_id="trajectory-run",
+        run_dir=tmp_path / "run",
+        variant_id="synthetic/trajectory",
+        family="synthetic",
+        variant="trajectory",
+        config_path=None,
+        metrics_path=None,
+    )
+    registry.register_trajectory_view(
+        view_id="trajectory-view",
+        run_id="trajectory-run",
+        variant_id="synthetic/trajectory",
+        solver="euler",
+        nfe=4,
+        coordinates_path=tmp_path / "coordinates.npz",
+        trajectory_path=tmp_path / "trajectory.npy",
+        generated_path=None,
+        target_path=None,
+        labels_path=None,
+        output_dir=tmp_path,
+        interactive_path=None,
+        n_steps=4,
+        n_trajectories=10,
+    )
+
+    assert {
+        variant.variant_id for variant in registry.dataset_variants()
+    } == {
+        "synthetic/hidden",
+        "synthetic/projection",
+        "synthetic/trajectory",
+    }
+    assert {
+        variant.variant_id
+        for variant in registry.dataset_variants(explorable_only=True)
+    } == {
+        "synthetic/projection",
+        "synthetic/trajectory",
+    }
+
+
 def test_model_run_labels_describe_model_and_prediction_target(tmp_path: Path) -> None:
     registry = GeometryRegistry(tmp_path / "workspace")
     dataset_path = tmp_path / "dataset.parquet"
@@ -194,6 +266,62 @@ def test_mnist_long_tail_variant_has_exact_counts_and_training_target(
     assert samples.shape == (12, 784)
     assert set(labels.tolist()) <= {0, 1, 2}
     assert target.metadata()["variant_id"] == "mnist/long_tail_test"
+
+
+def test_mnist_pair_composition_variant_adds_left_and_right_digits(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "mnist"
+    _write_fake_mnist(data_root, split="train", count=40)
+    config = DatasetVariantConfig(
+        family="mnist",
+        variant="pair_composition_test",
+        base="original",
+        split="train",
+        seed=11,
+        input={"dataset_root": str(data_root), "split": "train", "order": "source"},
+        selection={
+            "mnist_pair_composition": {
+                "type": "paired_digits",
+                "left_digit": "1",
+                "right_digit": "8",
+                "pairs": 3,
+            }
+        },
+    )
+
+    result = build_dataset_variant(config, workspace=tmp_path / "workspace")
+    frame = read_parquet(result["dataset_path"])
+    vectors = np.load(result["data_path"])
+    labels = np.load(result["labels_path"])
+
+    assert result["label_counts"] == {"1_left": 3, "1_plus_8": 3, "8_right": 3}
+    assert vectors.shape == (9, 28 * 28)
+    assert labels.tolist() == [0, 0, 0, 1, 1, 1, 2, 2, 2]
+    assert frame["label"].tolist() == ["1_left"] * 3 + ["8_right"] * 3 + ["1_plus_8"] * 3
+    assert frame["pair_id"].tolist() == [0, 1, 2, 0, 1, 2, 0, 1, 2]
+    assert {"sprite_atlas_path", "sprite_atlas_column", "sprite_atlas_row"} <= set(frame)
+    assert Path(str(frame["sprite_atlas_path"].iloc[0])).is_file()
+
+    images = vectors.reshape((-1, 28, 28))
+    np.testing.assert_allclose(images[:3, :, 14:], 0.0)
+    np.testing.assert_allclose(images[3:6, :, :14], 0.0)
+    np.testing.assert_allclose(vectors[6:], vectors[:3] + vectors[3:6])
+
+    target = build_target(
+        {
+            "data": {
+                "name": "mnist",
+                "variant_id": "mnist/pair_composition_test",
+                "workspace": str(tmp_path / "workspace"),
+                "normalize": "zero_one",
+            }
+        }
+    )
+    samples, sample_labels = target.sample_with_labels(6)
+    assert samples.shape == (6, 784)
+    assert set(sample_labels.tolist()) <= {0, 1, 2}
+    assert target.metadata()["image_shape"] == [28, 28]
 
 
 def test_label_mnist_dataset_variant_replaces_generated_labels(tmp_path: Path) -> None:
