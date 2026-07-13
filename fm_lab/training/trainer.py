@@ -89,7 +89,10 @@ def train_flow_matching(
     if gradient_clip < 0:
         raise ValueError("training.gradient_clip must be non-negative.")
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
-    objective = build_objective(config.get("objective", {}))
+    objective = build_objective(
+        config.get("objective", {}),
+        diffusion_config=config.get("diffusion", {}),
+    )
     _validate_training_compatibility(objective, coupling, path, model)
     condition_dropout = _condition_dropout_probability(config, model)
 
@@ -557,7 +560,10 @@ def sample_and_plot(
 
     model.eval()
     base_model = model
-    objective = build_objective(config.get("objective", {}))
+    objective = build_objective(
+        config.get("objective", {}),
+        diffusion_config=config.get("diffusion", {}),
+    )
     if path is None:
         if guidance.density is not None and guidance.density.enabled:
             raise ValueError("Density guidance requires a sampling path.")

@@ -9,6 +9,7 @@ import torch
 from torch.nn import functional as F
 
 from fm_lab.paths.base import FlowPath
+from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
 from fm_lab.training.prediction import (
     model_prediction,
     normalize_model_output,
@@ -617,11 +618,24 @@ def kernel_vstar_straightness_loss(
     return loss, estimate.metrics
 
 
-def build_objective(config: dict[str, Any] | None = None) -> TrainingObjective:
+def build_objective(
+    config: dict[str, Any] | None = None,
+    *,
+    diffusion_config: dict[str, Any] | None = None,
+) -> TrainingObjective:
     """Build a training objective from config."""
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
+    if name in {"discrete_diffusion", "ddpm"}:
+        diffusion_config = {} if diffusion_config is None else diffusion_config
+        return DiscreteDiffusionObjective(
+            prediction_type=str(config.get("prediction_type", "epsilon")),
+            timesteps=int(diffusion_config.get("timesteps", 1000)),
+            beta_start=float(diffusion_config.get("beta_start", 1e-4)),
+            beta_end=float(diffusion_config.get("beta_end", 2e-2)),
+            variance=str(diffusion_config.get("variance", "fixed_large")),
+        )
     diffusion_prediction_aliases = {
         "diffusion_epsilon": "epsilon",
         "epsilon_prediction": "epsilon",
