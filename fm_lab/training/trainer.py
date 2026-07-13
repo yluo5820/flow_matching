@@ -330,7 +330,8 @@ def train_flow_matching(
             run_dir=run_dir,
             target=target,
             source=source,
-            model=ema_model if ema_model is not None else model,
+            model=model,
+            ema_model=ema_model,
             objective=objective,
             device=device,
         )
@@ -369,6 +370,7 @@ def sample_discrete_and_plot(
     target: TargetDistribution,
     source: SourceDistribution,
     model: nn.Module,
+    ema_model: nn.Module | None = None,
     objective: Any,
     device: torch.device,
 ) -> dict[str, Any]:
@@ -381,6 +383,18 @@ def sample_discrete_and_plot(
     batch_size = int(sampling_config.get("sample_batch_size", n_samples))
     if n_samples < 1 or batch_size < 1:
         raise ValueError("Discrete sampling counts must be positive.")
+    comparison_config = sampling_config.get("live_ema_comparison", {}) or {}
+    if not isinstance(comparison_config, dict):
+        raise ValueError("sampling.live_ema_comparison must be a mapping.")
+    comparison_enabled = bool(comparison_config.get("enabled", False))
+    comparison_n_samples = 0
+    if comparison_enabled:
+        configured_comparison_count = int(comparison_config.get("n_samples", n_samples))
+        if configured_comparison_count < 1:
+            raise ValueError("live_ema_comparison.n_samples must be positive.")
+        if ema_model is None:
+            raise ValueError("live_ema_comparison requires EMA training weights.")
+        comparison_n_samples = min(configured_comparison_count, n_samples)
     sampler = str(sampling_config.get("sampler", "ddim")).lower()
     ddim_skip = int(sampling_config.get("ddim_skip", 20))
     eta = float(sampling_config.get("eta", 0.0))
@@ -405,14 +419,17 @@ def sample_discrete_and_plot(
     if labels is None:
         raise ValueError("Discrete ImbDiff sampling requires a class-conditional model.")
     diffusion: DiscreteDiffusion = objective.diffusion
+    sampling_model = ema_model if ema_model is not None else model
     generated_chunks: list[torch.Tensor] = []
+    live_chunks: list[torch.Tensor] = []
+    ema_chunks: list[torch.Tensor] = []
     seed = _sampling_seed(config)
     with _temporary_torch_seed(seed, device):
         for offset in range(0, n_samples, batch_size):
             chunk_labels = labels[offset : offset + batch_size]
             generated_chunks.append(
                 sample_discrete_diffusion(
-                    model=model,
+                    model=sampling_model,
                     diffusion=diffusion,
                     sample_shape=(chunk_labels.shape[0], source.dim),
                     class_labels=chunk_labels,
@@ -423,6 +440,31 @@ def sample_discrete_and_plot(
                     eta=eta,
                 ).cpu()
             )
+        if comparison_enabled:
+            assert ema_model is not None
+            for offset in range(0, comparison_n_samples, batch_size):
+                end = min(offset + batch_size, comparison_n_samples)
+                chunk_labels = labels[offset:end]
+                initial_noise = torch.randn(
+                    (chunk_labels.shape[0], source.dim), device=device
+                )
+                sample_kwargs = {
+                    "diffusion": diffusion,
+                    "sample_shape": (chunk_labels.shape[0], source.dim),
+                    "class_labels": chunk_labels,
+                    "prediction_type": objective.prediction_type,
+                    "sampler": sampler,
+                    "guidance_scale": guidance_scale,
+                    "ddim_skip": ddim_skip,
+                    "eta": eta,
+                    "initial_noise": initial_noise,
+                }
+                live_chunks.append(
+                    sample_discrete_diffusion(model=model, **sample_kwargs).cpu()
+                )
+                ema_chunks.append(
+                    sample_discrete_diffusion(model=ema_model, **sample_kwargs).cpu()
+                )
         target_samples, _ = _sample_target_with_optional_labels(
             target,
             min(n_samples, int(sampling_config.get("plot_max_points", n_samples))),
@@ -442,7 +484,7 @@ def sample_discrete_and_plot(
         image_shape=target_metadata.get("image_shape"),
         image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
     )
-    return {
+    result = {
         "sampler": sampler,
         "n_samples": n_samples,
         "sample_batch_size": batch_size,
@@ -454,6 +496,29 @@ def sample_discrete_and_plot(
         "samples_path": str(samples_dir / f"{sampler}.npy"),
         "labels_path": str(samples_dir / "generated_labels.npy"),
     }
+    if comparison_enabled:
+        live_generated = torch.cat(live_chunks, dim=0)
+        ema_generated = torch.cat(ema_chunks, dim=0)
+        live_path = samples_dir / "live_diagnostic.npy"
+        ema_path = samples_dir / "ema_diagnostic.npy"
+        plot_path = run_dir / "plots" / "live_vs_ema.png"
+        np.save(live_path, live_generated.numpy())
+        np.save(ema_path, ema_generated.numpy())
+        plot_generated_samples(
+            target_samples.cpu(),
+            {"live": live_generated, "ema": ema_generated},
+            plot_path,
+            max_points=comparison_n_samples,
+            image_shape=target_metadata.get("image_shape"),
+            image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
+        )
+        result["live_ema_comparison"] = {
+            "n_samples": comparison_n_samples,
+            "live_samples_path": str(live_path),
+            "ema_samples_path": str(ema_path),
+            "plot_path": str(plot_path),
+        }
+    return result
 
 
 @dataclass(frozen=True)

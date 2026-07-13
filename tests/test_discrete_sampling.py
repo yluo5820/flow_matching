@@ -1,3 +1,5 @@
+import numpy as np
+import pytest
 import torch
 from torch import nn
 
@@ -63,8 +65,15 @@ class TinyLabeledTarget:
         return {"name": "tiny_target", "dim": 2}
 
 
-def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
-    config = {
+def _tiny_training_config(
+    *,
+    lr: float = 1e-3,
+    ema_decay: float | None = 0.9,
+) -> dict:
+    training = {"steps": 1, "batch_size": 2, "lr": lr}
+    if ema_decay is not None:
+        training["ema_decay"] = ema_decay
+    return {
         "experiment": {"seed": 7},
         "conditioning": {"enabled": True, "num_classes": 2, "dropout_probability": 0.1},
         "diffusion": {
@@ -74,7 +83,7 @@ def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
             "variance": "fixed_large",
         },
         "objective": {"name": "discrete_diffusion", "prediction_type": "epsilon"},
-        "training": {"steps": 1, "batch_size": 2, "lr": 1e-3, "ema_decay": 0.9},
+        "training": training,
         "sampling": {
             "n_samples": 4,
             "sample_batch_size": 2,
@@ -87,8 +96,13 @@ def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
                 "convention": "fm_lab",
                 "scale": 1.0,
             },
+            "live_ema_comparison": {"enabled": True, "n_samples": 2},
         },
     }
+
+
+def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
+    config = _tiny_training_config()
 
     metrics = train_flow_matching(
         config=config,
@@ -106,7 +120,51 @@ def test_discrete_training_smoke_writes_generated_samples(tmp_path) -> None:
     assert (tmp_path / "samples" / "ddim.npy").exists()
     assert (tmp_path / "samples" / "generated_labels.npy").exists()
     assert (tmp_path / "plots" / "generated_samples.png").exists()
+    comparison = metrics["sampling"]["live_ema_comparison"]
+    assert comparison["n_samples"] == 2
+    assert (tmp_path / "samples" / "live_diagnostic.npy").exists()
+    assert (tmp_path / "samples" / "ema_diagnostic.npy").exists()
+    assert (tmp_path / "plots" / "live_vs_ema.png").exists()
     assert "ema_model_state_dict" in load_checkpoint(tmp_path / "checkpoint.pt")
+
+
+def test_live_ema_comparison_reuses_initial_noise_for_equal_weights(tmp_path) -> None:
+    config = _tiny_training_config(lr=0.0)
+    config["sampling"]["live_ema_comparison"]["n_samples"] = 3
+
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=TinyLabeledTarget(),
+        source=TinySource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TinyTrainableConditionalModel(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    live = np.load(tmp_path / "samples" / "live_diagnostic.npy")
+    ema = np.load(tmp_path / "samples" / "ema_diagnostic.npy")
+    assert live.shape[0] == 3
+    assert np.array_equal(live, ema)
+
+
+def test_live_ema_comparison_requires_ema_model(tmp_path) -> None:
+    config = _tiny_training_config(ema_decay=None)
+
+    with pytest.raises(ValueError, match="live_ema_comparison requires EMA"):
+        train_flow_matching(
+            config=config,
+            run_dir=tmp_path,
+            target=TinyLabeledTarget(),
+            source=TinySource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=TinyTrainableConditionalModel(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
 
 
 def test_paper_omega_conversion_matches_cfg_equations() -> None:
