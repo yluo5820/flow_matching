@@ -161,14 +161,17 @@ class DensityGuidedDiffusionVelocity(nn.Module):
         self.path = path
         self.config = config
         self.requires_source_label = bool(getattr(model, "requires_source_label", False))
+        self.is_class_conditional = bool(getattr(model, "is_class_conditional", False))
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
         source_label = None if context is None else context.get("source_label")
+        class_labels = None if context is None else context.get("class_labels")
         x_prediction = model_prediction(
             self.model,
             x,
             t,
             source_label=source_label,
+            class_labels=class_labels,
         )
         alpha_t, sigma_t, alpha_dot_t, sigma_dot_t = self.path._schedule(t)
         alpha = expand_time(alpha_t.clamp_min(self.config.min_alpha), x)

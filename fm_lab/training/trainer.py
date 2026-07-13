@@ -15,7 +15,7 @@ import torch
 from torch import nn
 from tqdm.auto import trange
 
-from fm_lab.couplings.base import Coupling
+from fm_lab.couplings.base import Coupling, pair_with_condition
 from fm_lab.data.base import TargetDistribution
 from fm_lab.paths.base import FlowPath
 from fm_lab.plotting.diagnostics import plot_training_history
@@ -28,7 +28,11 @@ from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
 from fm_lab.training.losses import build_objective, sample_uniform_time
-from fm_lab.training.prediction import model_prediction, velocity_model_for_objective
+from fm_lab.training.prediction import (
+    classifier_free_guided_prediction,
+    model_prediction,
+    velocity_model_for_objective,
+)
 from fm_lab.training.sampling_guidance import (
     apply_density_guidance,
     apply_density_prior_rescaling,
@@ -67,6 +71,7 @@ def train_flow_matching(
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
     objective = build_objective(config.get("objective", {}))
     _validate_training_compatibility(objective, coupling, path, model)
+    condition_dropout = _condition_dropout_probability(config, model)
 
     trainable_path = _is_trainable_path(path)
     theta_optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -111,12 +116,14 @@ def train_flow_matching(
             )
             loss_metrics = {}
             if should_log:
-                x0, x1, t = _sample_training_batch(
+                x0, x1, t, class_labels = _sample_training_batch(
                     source=source,
                     target=target,
                     coupling=coupling,
                     batch_size=batch_size,
                     device=device,
+                    class_conditional=bool(getattr(model, "is_class_conditional", False)),
+                    condition_dropout=condition_dropout,
                 )
                 _, loss_metrics = objective(
                     model=model,
@@ -125,6 +132,7 @@ def train_flow_matching(
                     x1=x1,
                     t=t,
                     compute_diagnostics=True,
+                    class_labels=class_labels,
                 )
                 if early_stopping.enabled:
                     candidate_state = _capture_training_state(
@@ -135,12 +143,14 @@ def train_flow_matching(
                         step=step,
                     )
         else:
-            x0, x1, t = _sample_training_batch(
+            x0, x1, t, class_labels = _sample_training_batch(
                 source=source,
                 target=target,
                 coupling=coupling,
                 batch_size=batch_size,
                 device=device,
+                class_conditional=bool(getattr(model, "is_class_conditional", False)),
+                condition_dropout=condition_dropout,
             )
             loss, loss_metrics = objective(
                 model=model,
@@ -149,6 +159,7 @@ def train_flow_matching(
                 x1=x1,
                 t=t,
                 compute_diagnostics=should_log,
+                class_labels=class_labels,
             )
             if should_log and early_stopping.enabled:
                 candidate_state = _capture_training_state(
@@ -300,7 +311,7 @@ def _train_learned_acceleration_step(
         path.train()
 
     for _ in range(schedule.theta_steps):
-        x0, x1, t = _sample_training_batch(
+        x0, x1, t, _ = _sample_training_batch(
             source=source,
             target=target,
             coupling=coupling,
@@ -316,7 +327,7 @@ def _train_learned_acceleration_step(
         return
 
     for _ in range(schedule.psi_steps):
-        x0, x1, t = _sample_training_batch(
+        x0, x1, t, _ = _sample_training_batch(
             source=source,
             target=target,
             coupling=coupling,
@@ -393,12 +404,24 @@ def _sample_training_batch(
     coupling: Coupling,
     batch_size: int,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    class_conditional: bool = False,
+    condition_dropout: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
     x0 = source.sample(batch_size, device=device)
-    x1 = target.sample(batch_size, device=device)
-    x0, x1 = coupling.pair(x0, x1)
+    if class_conditional:
+        x1, class_labels = _sample_target_with_optional_labels(target, batch_size, device=device)
+        if class_labels is None:
+            raise ValueError("Class conditioning requires a target with sample_with_labels().")
+    else:
+        x1 = target.sample(batch_size, device=device)
+        class_labels = None
+    x0, x1, class_labels = pair_with_condition(coupling, x0, x1, class_labels)
+    if class_labels is not None and condition_dropout > 0:
+        drop = torch.rand(batch_size, device=device) < condition_dropout
+        class_labels = class_labels.clone()
+        class_labels[drop] = -1
     t = sample_uniform_time(batch_size, device)
-    return x0, x1, t
+    return x0, x1, t, class_labels
 
 
 def _sample_target_with_optional_labels(
@@ -510,6 +533,26 @@ def sample_and_plot(
             source=source,
             config=guidance.density,
         )
+    generated_labels = _sampling_class_labels(
+        config,
+        model=model,
+        n_samples=n_samples,
+        device=device,
+    )
+    trajectory_labels = _sampling_class_labels(
+        config,
+        model=model,
+        n_samples=n_trajectories,
+        device=device,
+    )
+    cfg_config = sampling_config.get("classifier_free_guidance", {}) or {}
+    cfg_scale = (
+        float(cfg_config.get("scale", 1.0))
+        if bool(cfg_config.get("enabled", True))
+        else 1.0
+    )
+    if cfg_scale < 0:
+        raise ValueError("sampling.classifier_free_guidance.scale must be non-negative.")
     target_samples_cpu = target_samples.detach().cpu()
     target_labels_cpu = target_labels.detach().cpu() if target_labels is not None else None
     del target_samples
@@ -539,7 +582,14 @@ def sample_and_plot(
     trajectories_dir.mkdir(parents=True, exist_ok=True)
 
     def trajectory_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        return _model_velocity(model, x, t, source_label=trajectory_x0)
+        return _model_velocity(
+            model,
+            x,
+            t,
+            source_label=trajectory_x0,
+            class_labels=trajectory_labels,
+            guidance_scale=cfg_scale,
+        )
 
     for solver in solvers:
         generated[solver.name] = _solve_final_samples_in_chunks(
@@ -548,6 +598,8 @@ def sample_and_plot(
             x0_samples=x0_samples,
             t_grid=t_grid,
             batch_size=sample_batch_size,
+            class_labels=generated_labels,
+            guidance_scale=cfg_scale,
         )
         np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
@@ -607,6 +659,9 @@ def sample_and_plot(
     np.save(samples_dir / "target_reference.npy", target_samples_cpu.numpy())
     if target_labels_cpu is not None:
         np.save(samples_dir / "target_reference_labels.npy", target_labels_cpu.numpy())
+    if generated_labels is not None:
+        np.save(samples_dir / "generated_labels.npy", generated_labels.detach().cpu().numpy())
+        artifact_summary["classifier_free_guidance_scale"] = cfg_scale
     np.save(
         trajectories_dir / f"source_reference_nfe{nfe}.npy",
         trajectory_x0.detach().cpu().numpy(),
@@ -629,17 +684,28 @@ def _solve_final_samples_in_chunks(
     x0_samples: torch.Tensor,
     t_grid: torch.Tensor,
     batch_size: int,
+    class_labels: torch.Tensor | None = None,
+    guidance_scale: float = 1.0,
 ) -> torch.Tensor:
     final_chunks: list[torch.Tensor] = []
     for start in range(0, x0_samples.shape[0], batch_size):
         source_label = x0_samples[start : start + batch_size]
+        chunk_labels = None if class_labels is None else class_labels[start : start + batch_size]
 
         def v_fn(
             x: torch.Tensor,
             t: torch.Tensor,
             source_label: torch.Tensor = source_label,
+            class_labels: torch.Tensor | None = chunk_labels,
         ) -> torch.Tensor:
-            return _model_velocity(model, x, t, source_label=source_label)
+            return _model_velocity(
+                model,
+                x,
+                t,
+                source_label=source_label,
+                class_labels=class_labels,
+                guidance_scale=guidance_scale,
+            )
 
         final = solver.solve(
             v_fn,
@@ -666,6 +732,14 @@ def _validate_training_compatibility(
     path: FlowPath,
     model: nn.Module,
 ) -> None:
+    if bool(getattr(model, "is_class_conditional", False)):
+        if _is_trainable_path(path):
+            raise ValueError("Class conditioning with trainable paths is not supported yet.")
+        if float(getattr(objective, "straightness_weight", 0.0)) > 0:
+            raise ValueError(
+                "Class conditioning with learned-flow straightness regularization "
+                "is not supported yet."
+            )
     objective_name = getattr(objective, "name", "")
     direction_objective_names = {
         "direction_only_straight",
@@ -726,12 +800,56 @@ def _model_velocity(
     t: torch.Tensor,
     *,
     source_label: torch.Tensor | None = None,
+    class_labels: torch.Tensor | None = None,
+    guidance_scale: float = 1.0,
 ) -> torch.Tensor:
     if _requires_source_label(model):
         if source_label is None:
             raise ValueError("Source-label-conditioned model requires source labels.")
         return model_prediction(model, x, t, source_label=source_label)
+    if bool(getattr(model, "is_class_conditional", False)):
+        if class_labels is None:
+            raise ValueError("Class-conditional model requires sampling class labels.")
+        return classifier_free_guided_prediction(
+            model,
+            x,
+            t,
+            class_labels=class_labels,
+            guidance_scale=guidance_scale,
+        )
     return model_prediction(model, x, t)
+
+
+def _condition_dropout_probability(config: dict[str, Any], model: nn.Module) -> float:
+    if not bool(getattr(model, "is_class_conditional", False)):
+        return 0.0
+    conditioning = config.get("conditioning", {}) or {}
+    probability = float(conditioning.get("dropout_probability", 0.1))
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("conditioning.dropout_probability must be between 0 and 1.")
+    return probability
+
+
+def _sampling_class_labels(
+    config: dict[str, Any],
+    *,
+    model: nn.Module,
+    n_samples: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if not bool(getattr(model, "is_class_conditional", False)):
+        return None
+    conditioning = config.get("conditioning", {}) or {}
+    num_classes = int(conditioning["num_classes"])
+    sampling = config.get("sampling", {}) or {}
+    requested = sampling.get("classes", list(range(num_classes)))
+    classes = torch.as_tensor(requested, device=device, dtype=torch.long).flatten()
+    if classes.numel() == 0:
+        raise ValueError("sampling.classes must contain at least one class.")
+    if torch.any(classes < 0) or torch.any(classes >= num_classes):
+        raise ValueError(f"sampling.classes must be in [0, {num_classes - 1}].")
+    repeats = (n_samples + classes.numel() - 1) // classes.numel()
+    return classes.repeat(repeats)[:n_samples]
 
 
 def _line_containment_stats(

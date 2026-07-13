@@ -61,13 +61,23 @@ class MLPVelocity(nn.Module):
         depth: int = 4,
         activation: str = "silu",
         time_embedding_dim: int = 64,
+        num_classes: int | None = None,
+        class_embedding_dim: int | None = None,
     ) -> None:
         super().__init__()
         self.dim = dim
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
+        self.num_classes = num_classes
+        self.is_class_conditional = num_classes is not None
+        condition_dim = int(class_embedding_dim or time_embedding_dim)
+        self.class_embedding = (
+            nn.Embedding(int(num_classes) + 1, condition_dim)
+            if num_classes is not None
+            else None
+        )
 
         layers: list[nn.Module] = []
-        input_dim = dim + time_embedding_dim
+        input_dim = dim + time_embedding_dim + (condition_dim if num_classes is not None else 0)
         for layer_idx in range(depth):
             layers.append(nn.Linear(input_dim if layer_idx == 0 else hidden_dim, hidden_dim))
             layers.append(_activation(activation))
@@ -75,9 +85,12 @@ class MLPVelocity(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
-        del context
         time_features = self.time_embedding(t)
-        return self.net(torch.cat([x, time_features], dim=1))
+        features = [x, time_features]
+        if self.class_embedding is not None:
+            labels = _class_labels_from_context(context, x.shape[0], x.device)
+            features.append(self.class_embedding(_embedding_labels(labels, self.num_classes)))
+        return self.net(torch.cat(features, dim=1))
 
 
 class DirectionSpeedMLP(nn.Module):
@@ -163,3 +176,26 @@ def _source_label_from_context(context) -> torch.Tensor:
             if value is not None:
                 return value
     raise ValueError("DirectionSpeedMLP requires source_label context.")
+
+
+def _class_labels_from_context(
+    context,
+    batch_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if isinstance(context, dict) and context.get("class_labels") is not None:
+        labels = context["class_labels"]
+        if labels.shape != (batch_size,):
+            raise ValueError(
+                f"Expected class_labels shape ({batch_size},), got {tuple(labels.shape)}."
+            )
+        return labels.to(device=device, dtype=torch.long)
+    raise ValueError("Class-conditional model requires context['class_labels'].")
+
+
+def _embedding_labels(labels: torch.Tensor, num_classes: int | None) -> torch.Tensor:
+    if num_classes is None:
+        raise ValueError("num_classes is required for class conditioning.")
+    if torch.any(labels < -1) or torch.any(labels >= num_classes):
+        raise ValueError(f"Class labels must be in [-1, {num_classes - 1}].")
+    return torch.where(labels < 0, torch.full_like(labels, num_classes), labels)

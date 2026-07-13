@@ -36,6 +36,31 @@ Run a very small smoke training job:
 
 The full default config uses a longer toy training budget and saves checkpoint, metrics, generated samples, trajectories, and plots.
 
+### Class-conditional generation
+
+Class conditioning uses a learned class embedding and a learned null token for
+classifier-free guidance. During training, `dropout_probability` replaces class labels
+with the null token. During sampling, requested classes repeat to fill
+`sampling.n_samples`, and `generated_labels.npy` is saved with the generated samples.
+
+```yaml
+conditioning:
+  enabled: true
+  num_classes: 10
+  embedding_dim: 128
+  dropout_probability: 0.15
+
+sampling:
+  classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  classifier_free_guidance:
+    scale: 2.0
+```
+
+See `configs/mnist/mnist_class_conditional_cfg.yaml` for a complete image U-Net
+example. Conditional training requires a target implementing `sample_with_labels()`
+and a coupling that preserves target indices. Independent and minibatch-OT couplings
+support this interface.
+
 ## Documentation
 
 - [CLI lookup](docs/cli.md): maintained reference for every `fm-lab-*` command.

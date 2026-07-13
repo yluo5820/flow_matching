@@ -8,7 +8,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from fm_lab.models.mlp import SinusoidalTimeEmbedding, _activation, _source_label_from_context
+from fm_lab.models.mlp import (
+    SinusoidalTimeEmbedding,
+    _activation,
+    _class_labels_from_context,
+    _embedding_labels,
+    _source_label_from_context,
+)
 
 
 class ImageUNetVelocity(nn.Module):
@@ -22,6 +28,8 @@ class ImageUNetVelocity(nn.Module):
         time_embedding_dim: int = 128,
         activation: str = "silu",
         zero_init_head: bool = True,
+        num_classes: int | None = None,
+        class_embedding_dim: int | None = None,
     ) -> None:
         super().__init__()
         channels, height, width, layout = _parse_image_shape(image_shape)
@@ -38,6 +46,19 @@ class ImageUNetVelocity(nn.Module):
         self.image_shape = tuple(int(value) for value in image_shape)
         self.image_layout = layout
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
+        self.num_classes = num_classes
+        self.is_class_conditional = num_classes is not None
+        condition_dim = int(class_embedding_dim or time_embedding_dim)
+        self.class_embedding = (
+            nn.Embedding(int(num_classes) + 1, condition_dim)
+            if num_classes is not None
+            else None
+        )
+        self.class_projection = (
+            nn.Linear(condition_dim, time_embedding_dim)
+            if num_classes is not None
+            else None
+        )
         self.time_mlp = nn.Sequential(
             nn.Linear(time_embedding_dim, time_embedding_dim),
             _activation(activation),
@@ -65,7 +86,6 @@ class ImageUNetVelocity(nn.Module):
             nn.init.zeros_(self.output_block[-1].bias)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
-        del context
         image = _flat_to_image(
             x,
             channels=self.channels,
@@ -74,6 +94,10 @@ class ImageUNetVelocity(nn.Module):
             layout=self.image_layout,
         )
         time_features = self.time_mlp(self.time_embedding(t))
+        if self.class_embedding is not None and self.class_projection is not None:
+            labels = _class_labels_from_context(context, x.shape[0], x.device)
+            class_features = self.class_embedding(_embedding_labels(labels, self.num_classes))
+            time_features = time_features + self.class_projection(class_features)
 
         h0 = self.input_block(image, time_features)
         h1 = self.down1_block(self.down1(h0), time_features)

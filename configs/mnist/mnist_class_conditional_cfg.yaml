@@ -1,0 +1,64 @@
+experiment:
+  name: mnist_class_conditional_cfg
+  seed: 0
+  output_dir: runs/mnist_class_conditional_cfg
+
+data:
+  name: mnist
+  root: data/mnist
+  train: true
+  download: true
+  normalize: minus_one_one
+  dequantize: true
+
+source:
+  name: gaussian
+  dim: 784
+
+coupling:
+  name: independent
+
+path:
+  name: linear
+
+model:
+  name: image_unet
+  image_shape: [28, 28]
+  base_channels: 32
+  time_embedding_dim: 128
+
+conditioning:
+  enabled: true
+  num_classes: 10
+  embedding_dim: 128
+  dropout_probability: 0.15
+
+objective:
+  name: flow_matching
+  model_output: velocity
+
+training:
+  batch_size: 256
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 500
+  early_stopping:
+    enabled: true
+    warmup_steps: 10000
+    patience_steps: 5000
+    min_delta: 1.0e-3
+    ema_alpha: 0.3
+
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 100
+  n_trajectories: 10
+  nfe: 64
+  sample_batch_size: 100
+  classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  classifier_free_guidance:
+    scale: 2.0

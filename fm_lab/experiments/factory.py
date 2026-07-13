@@ -271,6 +271,18 @@ def build_path(config: dict[str, Any]):
 
 def build_model(config: dict[str, Any], dim: int):
     model_config = config.get("model", {})
+    conditioning_config = config.get("conditioning", {}) or {}
+    conditioning_enabled = bool(conditioning_config.get("enabled", False))
+    num_classes = (
+        int(conditioning_config["num_classes"])
+        if conditioning_enabled
+        else None
+    )
+    if conditioning_enabled and num_classes < 1:
+        raise ValueError("conditioning.num_classes must be positive.")
+    class_embedding_dim = conditioning_config.get("embedding_dim")
+    if class_embedding_dim is not None:
+        class_embedding_dim = int(class_embedding_dim)
     name = model_config.get("name", "mlp").lower()
     if name == "mlp":
         return MLPVelocity(
@@ -279,8 +291,12 @@ def build_model(config: dict[str, Any], dim: int):
             depth=int(model_config.get("depth", 4)),
             activation=model_config.get("activation", "silu"),
             time_embedding_dim=int(model_config.get("time_embedding_dim", 64)),
+            num_classes=num_classes,
+            class_embedding_dim=class_embedding_dim,
         )
     if name in {"direction_speed_mlp", "direction_only"}:
+        if conditioning_enabled:
+            raise ValueError("Class conditioning is not supported by direction-speed models.")
         return DirectionSpeedMLP(
             dim=dim,
             hidden_dim=int(model_config.get("hidden_dim", 256)),
@@ -298,8 +314,12 @@ def build_model(config: dict[str, Any], dim: int):
             time_embedding_dim=int(model_config.get("time_embedding_dim", 128)),
             activation=model_config.get("activation", "silu"),
             zero_init_head=bool(model_config.get("zero_init_head", True)),
+            num_classes=num_classes,
+            class_embedding_dim=class_embedding_dim,
         )
     if name in {"direction_speed_image_unet", "direction_only_image_unet"}:
+        if conditioning_enabled:
+            raise ValueError("Class conditioning is not supported by direction-speed models.")
         image_shape = tuple(int(value) for value in model_config.get("image_shape", [28, 28]))
         return DirectionSpeedImageUNet(
             dim=dim,

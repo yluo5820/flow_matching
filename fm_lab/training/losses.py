@@ -10,6 +10,7 @@ from torch.nn import functional as F
 
 from fm_lab.paths.base import FlowPath
 from fm_lab.training.prediction import (
+    model_prediction,
     normalize_model_output,
     normalize_x_prediction_loss_space,
     velocity_model_for_objective,
@@ -47,6 +48,7 @@ class TrainingObjective(Protocol):
         x1: torch.Tensor,
         t: torch.Tensor,
         compute_diagnostics: bool = True,
+        class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute a scalar training loss and detached logging metrics."""
 
@@ -107,6 +109,7 @@ class FlowMatchingObjective:
         x1: torch.Tensor,
         t: torch.Tensor,
         compute_diagnostics: bool = True,
+        class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         return self._loss(
             model=model,
@@ -120,6 +123,7 @@ class FlowMatchingObjective:
             include_interpolant_acceleration=True,
             detach_path=False,
             straightness_detach_inputs=True,
+            class_labels=class_labels,
         )
 
     def theta_update_loss(
@@ -130,6 +134,7 @@ class FlowMatchingObjective:
         x0: torch.Tensor,
         x1: torch.Tensor,
         t: torch.Tensor,
+        class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Loss for updating the Eulerian velocity model while freezing the path."""
 
@@ -145,6 +150,7 @@ class FlowMatchingObjective:
             include_interpolant_acceleration=False,
             detach_path=True,
             straightness_detach_inputs=True,
+            class_labels=class_labels,
         )
 
     def psi_update_loss(
@@ -155,6 +161,7 @@ class FlowMatchingObjective:
         x0: torch.Tensor,
         x1: torch.Tensor,
         t: torch.Tensor,
+        class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Loss for updating the learned interpolant while treating the model as fixed."""
 
@@ -170,6 +177,7 @@ class FlowMatchingObjective:
             include_interpolant_acceleration=True,
             detach_path=False,
             straightness_detach_inputs=False,
+            class_labels=class_labels,
         )
 
     def metadata(self) -> dict[str, Any]:
@@ -212,6 +220,7 @@ class FlowMatchingObjective:
         include_interpolant_acceleration: bool,
         detach_path: bool,
         straightness_detach_inputs: bool,
+        class_labels: torch.Tensor | None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         xt = path.sample_xt(x0, x1, t)
         target_velocity = path.target_velocity(x0, x1, t)
@@ -223,7 +232,7 @@ class FlowMatchingObjective:
         metrics: dict[str, float] = {}
         velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
-            prediction = model(xt, t)
+            prediction = model_prediction(model, xt, t, class_labels=class_labels)
             if self.model_output == "x":
                 predicted_velocity = x_prediction_to_velocity(
                     prediction,
@@ -316,13 +325,14 @@ class DiffusionObjective:
         x1: torch.Tensor,
         t: torch.Tensor,
         compute_diagnostics: bool = True,
+        class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         if not hasattr(path, "sample_training_tuple"):
             raise ValueError("diffusion objective requires path.name: gaussian_diffusion.")
 
         sample = path.sample_training_tuple(x0, x1, t)
         target = self._target(sample)
-        prediction = model(sample.xt, t)
+        prediction = model_prediction(model, sample.xt, t, class_labels=class_labels)
         diffusion_loss = F.mse_loss(prediction, target)
         metrics = {
             "diffusion_loss": float(diffusion_loss.detach().cpu()),
