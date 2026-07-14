@@ -1496,6 +1496,130 @@ def test_early_stopping_resume_preserves_best_state_and_ignores_log_cadence(
     )
 
 
+def test_final_best_checkpoint_resumes_from_terminal_continuation_without_duplicate_history(
+    tmp_path,
+) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 8,
+            "steps": 8,
+            "log_every": 1,
+            "optimizer": "adam",
+            "lr": 0.1,
+            "warmup_steps": 2,
+            "ema_decay": 0.5,
+            "early_stopping": {
+                "enabled": True,
+                "warmup_steps": 0,
+                "patience_steps": 3,
+                "min_delta": 1.0e9,
+                "ema_alpha": 1.0,
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+    initial = TrainableConstantVelocity(dim=2, value=0.0).state_dict()
+
+    full_model = TrainableConstantVelocity(dim=2, value=0.0)
+    full_model.load_state_dict(initial)
+    torch.manual_seed(41)
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path / "full",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=full_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    first_model = TrainableConstantVelocity(dim=2, value=0.0)
+    first_model.load_state_dict(initial)
+    first_config = {**config, "training": {**config["training"], "steps": 2}}
+    torch.manual_seed(41)
+    train_flow_matching(
+        config=first_config,
+        run_dir=tmp_path / "first",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=first_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    first_checkpoint_path = tmp_path / "first" / "checkpoint.pt"
+    first_checkpoint = load_checkpoint(first_checkpoint_path)
+    assert first_checkpoint["step"] == 1
+    assert first_checkpoint["metrics"]["trained_steps"] == 2
+    assert first_checkpoint["continuation_state"]["step"] == 2
+
+    resumed_model = TrainableConstantVelocity(dim=2, value=99.0)
+    resumed_config = {
+        **config,
+        "training": {
+            **config["training"],
+            "resume_from": str(first_checkpoint_path),
+        },
+    }
+    train_flow_matching(
+        config=resumed_config,
+        run_dir=tmp_path / "resumed",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=resumed_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    full = load_checkpoint(tmp_path / "full" / "checkpoint.pt")
+    resumed = load_checkpoint(tmp_path / "resumed" / "checkpoint.pt")
+    assert [row["step"] for row in resumed["history"]] == [1, 2, 3, 4]
+    assert resumed["history"] == full["history"]
+    assert resumed["metrics"]["early_stopping"] == full["metrics"]["early_stopping"]
+    assert resumed["metrics"]["checkpoint_step"] == full["metrics"]["checkpoint_step"]
+    for key in ("model_state_dict", "ema_model_state_dict", "optimizer_state_dict"):
+        torch.testing.assert_close(resumed[key], full[key], rtol=0, atol=0)
+
+    malformed_states = {
+        "missing_scheduler": ("theta_scheduler_state", None, True),
+        "malformed_ema": ("ema_model_state", None, False),
+        "unexpected_path": ("path_state", {}, False),
+        "unexpected_path_optimizer": ("psi_optimizer_state", {}, False),
+    }
+    for name, (field, value, remove) in malformed_states.items():
+        malformed_checkpoint = copy.deepcopy(first_checkpoint)
+        training_state = malformed_checkpoint["continuation_state"]["training_state"]
+        if remove:
+            training_state.pop(field)
+        else:
+            training_state[field] = value
+        malformed_path = tmp_path / f"malformed_{name}.pt"
+        torch.save(malformed_checkpoint, malformed_path)
+        malformed_config = copy.deepcopy(resumed_config)
+        malformed_config["training"]["resume_from"] = str(malformed_path)
+
+        with pytest.raises(ValueError, match="continuation_state training_state"):
+            train_flow_matching(
+                config=malformed_config,
+                run_dir=tmp_path / f"malformed_{name}",
+                target=ConstantTarget(),
+                source=ConstantSource(),
+                coupling=IndependentCoupling(),
+                path=LinearPath(),
+                model=RejectingStateLoadVelocity(),
+                solvers=[EulerSolver()],
+                device=torch.device("cpu"),
+            )
+
+
 def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:
     config = {
         "experiment": {"seed": 0},
