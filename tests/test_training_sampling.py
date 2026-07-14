@@ -8,6 +8,7 @@ from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearP
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
 from fm_lab.training.losses import build_objective
+from fm_lab.training.prediction import velocity_model_for_objective
 from fm_lab.training.sampling_guidance import (
     DensityGuidanceConfig,
     DensityGuidedDiffusionVelocity,
@@ -99,6 +100,19 @@ class TinyVelocity(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
         del context
         return self.linear(torch.cat((x, t[:, None]), dim=1))
+
+
+class CapacityAwareTarget(nn.Module):
+    is_class_conditional = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[dict[str, object]] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t
+        self.contexts.append(context)
+        return torch.ones_like(x)
 
 
 def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> None:
@@ -276,12 +290,13 @@ def test_sample_and_plot_supports_source_label_conditioned_models(tmp_path) -> N
     assert (tmp_path / "samples" / "euler_nfe3.npy").exists()
 
 
-def test_sample_and_plot_converts_x_predictions_to_velocity(tmp_path) -> None:
+def test_sample_and_plot_converts_target_predictions_to_velocity(tmp_path) -> None:
     config = _sampling_config(seed=111)
     config["objective"] = {
         "name": "flow_matching",
-        "model_output": "x",
-        "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.05,
     }
 
     sample_and_plot(
@@ -297,6 +312,47 @@ def test_sample_and_plot_converts_x_predictions_to_velocity(tmp_path) -> None:
 
     generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
     assert np.allclose(generated, 1.0)
+
+
+def test_velocity_model_converts_source_predictions() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "source",
+            "loss_space": "target",
+        }
+    )
+    model = velocity_model_for_objective(
+        TrainableConstantVelocity(dim=2, value=0.0),
+        LinearPath(),
+        objective,
+    )
+
+    velocity = model(torch.full((1, 2), 0.25), torch.full((1,), 0.25))
+
+    assert torch.allclose(velocity, torch.ones_like(velocity))
+
+
+def test_velocity_model_forwards_class_and_capacity_context() -> None:
+    base_model = CapacityAwareTarget()
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+        }
+    )
+    model = velocity_model_for_objective(base_model, LinearPath(), objective)
+
+    velocity = model(
+        torch.full((1, 2), 0.5),
+        torch.full((1,), 0.5),
+        context={"class_labels": torch.tensor([1]), "use_capacity": False},
+    )
+
+    assert torch.allclose(velocity, torch.ones_like(velocity))
+    assert torch.equal(base_model.contexts[-1]["class_labels"], torch.tensor([1]))
+    assert base_model.contexts[-1]["use_capacity"] is False
 
 
 def test_sample_and_plot_applies_prior_guidance_to_sources(tmp_path) -> None:

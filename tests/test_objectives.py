@@ -27,6 +27,40 @@ class TimeScaledVelocity(nn.Module):
         return t[:, None] * x
 
 
+class FixedPrediction(nn.Module):
+    def __init__(self, prediction: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("prediction", prediction)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return self.prediction.expand_as(x)
+
+
+class MinimalLinearPath:
+    name = "minimal_linear"
+
+    def sample_xt(
+        self,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        return (1 - t[:, None]) * x0 + t[:, None] * x1
+
+    def target_velocity(
+        self,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        t: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        del t, kwargs
+        return x1 - x0
+
+
 class FixedDirectionSpeed(nn.Module):
     requires_source_label = True
 
@@ -61,48 +95,115 @@ def test_default_objective_matches_flow_matching_loss() -> None:
     assert objective_metrics["flow_matching_loss"] == 0.0
 
 
-def test_flow_matching_x_prediction_can_train_against_clean_target() -> None:
-    model = ConstantVelocity(dim=2, value=2.0)
-    path = LinearPath()
-    x0 = torch.zeros(4, 2)
-    x1 = torch.full((4, 2), 2.0)
-    t = torch.full((4,), 0.5)
+def test_target_output_velocity_loss_matches_analytical_linear_velocity() -> None:
+    source = torch.tensor([[1.0, -1.0]])
+    target = torch.tensor([[3.0, 1.0]])
+    t = torch.tensor([0.25])
+    model = FixedPrediction(target)
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "min_denom": 1e-3,
+        }
+    )
+
+    loss, metrics = objective(
+        model=model,
+        path=LinearPath(),
+        x0=source,
+        x1=target,
+        t=t,
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
+    assert metrics["model_output"] == "target"
+    assert metrics["loss_space"] == "velocity"
+
+
+def test_source_output_target_loss_matches_analytical_linear_target() -> None:
+    source = torch.tensor([[1.0, -1.0]])
+    target = torch.tensor([[3.0, 1.0]])
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "source",
+            "loss_space": "target",
+        }
+    )
+
+    loss, metrics = objective(
+        model=FixedPrediction(source),
+        path=LinearPath(),
+        x0=source,
+        x1=target,
+        t=torch.tensor([0.25]),
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
+    assert metrics["flow_matching_loss"] == 0.0
+
+
+def test_flow_matching_prediction_aliases_and_metadata_are_canonical() -> None:
     objective = build_objective(
         {
             "name": "flow_matching",
             "model_output": "x",
-            "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
+            "loss_space": "v",
+            "min_denom": 0.05,
         }
     )
 
-    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+    assert objective.model_output == "target"
+    assert objective.loss_space == "velocity"
+    assert objective.metadata()["model_output"] == "target"
+    assert objective.metadata()["loss_space"] == "velocity"
+    assert objective.metadata()["min_denom"] == 0.05
+    assert "x_prediction" not in objective.metadata()
 
-    assert torch.allclose(loss, torch.tensor(0.0))
-    assert metrics["x_prediction_loss"] == 0.0
-    assert metrics["flow_matching_loss"] == 0.0
-    assert objective.metadata()["model_output"] == "x"
-    assert objective.metadata()["x_prediction"]["loss_space"] == "clean"
 
-
-def test_flow_matching_x_prediction_can_train_in_velocity_space() -> None:
-    model = ConstantVelocity(dim=2, value=2.0)
-    path = LinearPath()
-    x0 = torch.zeros(4, 2)
-    x1 = torch.full((4, 2), 2.0)
-    t = torch.full((4,), 0.5)
+def test_flow_matching_conversion_requires_convertible_path() -> None:
     objective = build_objective(
         {
             "name": "flow_matching",
-            "model_output": "x",
-            "x_prediction": {"loss_space": "velocity", "min_denom": 0.05},
+            "model_output": "target",
+            "loss_space": "velocity",
         }
     )
 
-    loss, metrics = objective(model=model, path=path, x0=x0, x1=x1, t=t)
+    try:
+        objective(
+            model=FixedPrediction(torch.ones(1, 2)),
+            path=MinimalLinearPath(),
+            x0=torch.zeros(1, 2),
+            x1=torch.ones(1, 2),
+            t=torch.full((1,), 0.5),
+        )
+    except ValueError as exc:
+        assert "ConvertibleFlowPath" in str(exc)
+    else:
+        raise AssertionError("Expected conversion to require ConvertibleFlowPath.")
 
-    assert torch.allclose(loss, torch.tensor(0.0))
-    assert metrics["flow_matching_loss"] == 0.0
-    assert "x_prediction_loss" not in metrics
+
+def test_velocity_output_velocity_loss_supports_minimal_flow_path() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        }
+    )
+
+    loss, _ = objective(
+        model=FixedPrediction(torch.ones(1, 2)),
+        path=MinimalLinearPath(),
+        x0=torch.zeros(1, 2),
+        x1=torch.ones(1, 2),
+        t=torch.full((1,), 0.5),
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
 
 
 def test_learned_flow_straightness_is_zero_for_constant_field() -> None:

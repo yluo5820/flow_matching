@@ -9,14 +9,12 @@ from typing import Any, Protocol
 import torch
 from torch.nn import functional as F
 
-from fm_lab.paths.base import FlowPath
+from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
+from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
 from fm_lab.training.prediction import (
     model_prediction,
-    normalize_model_output,
-    normalize_x_prediction_loss_space,
     velocity_model_for_objective,
-    x_prediction_to_velocity,
 )
 
 
@@ -32,7 +30,7 @@ def flow_matching_loss(
     x0: torch.Tensor,
     x1: torch.Tensor,
     t: torch.Tensor,
-) -> tuple[torch.Tensor, dict[str, float]]:
+) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute MSE conditional flow matching loss."""
 
     return FlowMatchingObjective()(model=model, path=path, x0=x0, x1=x1, t=t)
@@ -52,7 +50,7 @@ class TrainingObjective(Protocol):
         compute_diagnostics: bool = True,
         class_labels: torch.Tensor | None = None,
         original_class_labels: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute a scalar training loss and detached logging metrics."""
 
     def metadata(self) -> dict[str, Any]:
@@ -86,8 +84,8 @@ class FlowMatchingObjective:
 
     loss: str = "mse"
     model_output: str = "velocity"
-    x_prediction_loss_space: str = "clean"
-    x_prediction_min_denom: float = 1e-3
+    loss_space: str = "velocity"
+    min_denom: float = 1e-3
     straightness_weight: float = 0.0
     straightness_sample_size: int | None = None
     interpolant_acceleration_weight: float = 0.0
@@ -95,13 +93,11 @@ class FlowMatchingObjective:
     name: str = "flow_matching"
 
     def __post_init__(self) -> None:
-        self.model_output = normalize_model_output(self.model_output)
-        self.x_prediction_loss_space = normalize_x_prediction_loss_space(
-            self.x_prediction_loss_space
-        )
+        self.model_output = normalize_prediction_kind(self.model_output).value
+        self.loss_space = normalize_prediction_kind(self.loss_space).value
         self.loss = self.loss.lower()
-        if self.x_prediction_min_denom <= 0:
-            raise ValueError("objective.x_prediction.min_denom must be positive.")
+        if self.min_denom <= 0:
+            raise ValueError("objective.min_denom must be positive")
 
     def __call__(
         self,
@@ -114,7 +110,7 @@ class FlowMatchingObjective:
         compute_diagnostics: bool = True,
         class_labels: torch.Tensor | None = None,
         original_class_labels: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         del original_class_labels
         return self._loss(
             model=model,
@@ -140,7 +136,7 @@ class FlowMatchingObjective:
         x1: torch.Tensor,
         t: torch.Tensor,
         class_labels: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Loss for updating the Eulerian velocity model while freezing the path."""
 
         return self._loss(
@@ -167,7 +163,7 @@ class FlowMatchingObjective:
         x1: torch.Tensor,
         t: torch.Tensor,
         class_labels: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Loss for updating the learned interpolant while treating the model as fixed."""
 
         return self._loss(
@@ -190,10 +186,8 @@ class FlowMatchingObjective:
             "name": self.name,
             "loss": self.loss,
             "model_output": self.model_output,
-            "x_prediction": {
-                "loss_space": self.x_prediction_loss_space,
-                "min_denom": self.x_prediction_min_denom,
-            },
+            "loss_space": self.loss_space,
+            "min_denom": self.min_denom,
             "straightness": {
                 "weight": self.straightness_weight,
                 "sample_size": self.straightness_sample_size,
@@ -226,7 +220,7 @@ class FlowMatchingObjective:
         detach_path: bool,
         straightness_detach_inputs: bool,
         class_labels: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         xt = path.sample_xt(x0, x1, t)
         target_velocity = path.target_velocity(x0, x1, t)
         if detach_path:
@@ -234,34 +228,41 @@ class FlowMatchingObjective:
             target_velocity = target_velocity.detach()
 
         total_loss = x0.new_tensor(0.0)
-        metrics: dict[str, float] = {}
+        metrics: dict[str, Any] = {
+            "model_output": self.model_output,
+            "loss_space": self.loss_space,
+        }
         velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
             prediction = model_prediction(model, xt, t, class_labels=class_labels)
-            if self.model_output == "x":
-                predicted_velocity = x_prediction_to_velocity(
-                    prediction,
-                    xt,
-                    t,
-                    path,
-                    min_denom=self.x_prediction_min_denom,
-                )
-                if self.x_prediction_loss_space == "clean":
-                    matching_loss = _velocity_loss(prediction, x1.detach(), self.loss)
-                    metrics["x_prediction_loss"] = float(matching_loss.detach().cpu())
-                    velocity_loss = _velocity_loss(
-                        predicted_velocity.detach(),
-                        target_velocity.detach(),
-                        self.loss,
-                    )
-                    metrics["flow_matching_loss"] = float(velocity_loss.detach().cpu())
-                else:
-                    matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
-                    metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
+            if (
+                self.model_output == PredictionKind.VELOCITY.value
+                and self.loss_space == PredictionKind.VELOCITY.value
+            ):
+                prediction_in_loss_space = prediction
+                target_in_loss_space = target_velocity
             else:
-                predicted_velocity = prediction
-                matching_loss = _velocity_loss(predicted_velocity, target_velocity, self.loss)
-                metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
+                if not isinstance(path, ConvertibleFlowPath):
+                    raise ValueError(
+                        "Prediction conversion requires a ConvertibleFlowPath with "
+                        "prediction_state()."
+                    )
+                state = path.prediction_state(xt, t, min_denom=self.min_denom)
+                prediction_in_loss_space = state.prediction(
+                    prediction,
+                    self.model_output,
+                ).convert(self.loss_space)
+                target_in_loss_space = state.prediction(
+                    target_velocity,
+                    PredictionKind.VELOCITY,
+                ).convert(self.loss_space)
+            per_sample_loss = _prediction_loss_per_sample(
+                prediction_in_loss_space,
+                target_in_loss_space,
+                self.loss,
+            )
+            matching_loss = per_sample_loss.mean()
+            metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
             total_loss = total_loss + matching_loss
 
         if include_straightness and self.straightness_weight > 0:
@@ -717,12 +718,8 @@ def build_objective(
     return FlowMatchingObjective(
         loss=str(config.get("loss", "mse")).lower(),
         model_output=str(config.get("model_output", "velocity")),
-        x_prediction_loss_space=str(
-            config.get("x_prediction", {}).get("loss_space", "clean")
-        ),
-        x_prediction_min_denom=float(
-            config.get("x_prediction", {}).get("min_denom", 1e-3)
-        ),
+        loss_space=str(config.get("loss_space", "velocity")),
+        min_denom=float(config.get("min_denom", 1e-3)),
         straightness_weight=straightness_weight,
         straightness_sample_size=straightness_sample_size,
         interpolant_acceleration_weight=interpolant_acceleration_weight,
@@ -779,6 +776,16 @@ def _velocity_loss(
     if loss == "mse":
         return F.mse_loss(predicted_velocity, target_velocity)
     raise ValueError(f"Unsupported velocity loss: {loss}")
+
+
+def _prediction_loss_per_sample(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    loss: str,
+) -> torch.Tensor:
+    if loss == "mse":
+        return (prediction - target).square().reshape(prediction.shape[0], -1).mean(dim=1)
+    raise ValueError(f"Unsupported prediction loss: {loss}")
 
 
 def _normalize_diffusion_prediction_type(prediction_type: str) -> str:
