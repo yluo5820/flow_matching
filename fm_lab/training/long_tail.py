@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 import torch
 
-from fm_lab.paths.base import FlowPath
+from fm_lab.paths.base import FlowPath, expand_time
 from fm_lab.paths.prediction import (
     PathPrediction,
     PathPredictionState,
@@ -161,6 +161,170 @@ class CBDMModifier:
         }
 
 
+@dataclass(frozen=True)
+class TransferredTargets:
+    """Source/target supervision selected by an endpoint-transfer modifier."""
+
+    source: torch.Tensor
+    target: torch.Tensor
+    metrics: dict[str, float]
+
+
+@dataclass
+class OCModifier:
+    """Online compensation target transfer for continuous linear paths."""
+
+    class_counts: Sequence[int]
+    transfer_mode: str = "t2h"
+    cut_t: float | None = None
+    min_denom: float = 1e-3
+    name: str = "oc"
+
+    def __post_init__(self) -> None:
+        self.class_counts = tuple(int(value) for value in self.class_counts)
+        if not self.class_counts or any(value <= 0 for value in self.class_counts):
+            raise ValueError("OC class_counts must all be positive.")
+        self.transfer_mode = self.transfer_mode.lower()
+        if self.transfer_mode not in {"t2h", "h2t", "full"}:
+            raise ValueError("OC transfer_mode must be 't2h', 'h2t', or 'full'.")
+        if self.cut_t is not None:
+            self.cut_t = float(self.cut_t)
+            if not math.isfinite(self.cut_t) or not 0.0 <= self.cut_t <= 1.0:
+                raise ValueError("OC cut_t must be null or a finite value in [0, 1].")
+        self.min_denom = float(self.min_denom)
+        if not math.isfinite(self.min_denom) or self.min_denom <= 0:
+            raise ValueError("OC min_denom must be finite and positive.")
+
+    def apply_cutoff(
+        self,
+        accepted: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply the noisy-source-to-clean-target continuous cutoff."""
+
+        if self.cut_t is None:
+            return accepted
+        return accepted & (t >= self.cut_t)
+
+    @torch.no_grad()
+    def reference_weights(
+        self,
+        *,
+        noisy_target: torch.Tensor,
+        target: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return stabilized reference probabilities under linear path geometry."""
+
+        noisy_flat = noisy_target.flatten(1)
+        target_flat = target.flatten(1)
+        squared_distance = (
+            noisy_flat.square().sum(dim=1, keepdim=True)
+            + target_flat.square().sum(dim=1).unsqueeze(0)
+            - 2.0 * noisy_flat @ target_flat.T
+        ).clamp_min_(0.0)
+        t_safe = t.clamp_min(self.min_denom)
+        noise_to_signal_sq = ((1.0 - t) / t_safe).square()
+        logits = -squared_distance / (2.0 * noise_to_signal_sq[:, None].clamp_min(self.min_denom))
+        logits = logits - logits.amax(dim=1, keepdim=True)
+        return logits.softmax(dim=1)
+
+    @torch.no_grad()
+    def filter_reference_indices(
+        self,
+        *,
+        candidate_indices: torch.Tensor,
+        original_labels: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reject transfers that violate frequency direction or cutoff."""
+
+        identity = torch.arange(len(candidate_indices), device=candidate_indices.device)
+        if self.transfer_mode == "full":
+            accepted = torch.ones_like(candidate_indices, dtype=torch.bool)
+        else:
+            counts = torch.tensor(
+                self.class_counts,
+                device=original_labels.device,
+                dtype=torch.long,
+            )
+            old_counts = counts[original_labels]
+            reference_labels = original_labels[candidate_indices]
+            new_counts = counts[reference_labels]
+            if self.transfer_mode == "t2h":
+                accepted = new_counts >= old_counts
+            else:
+                accepted = new_counts <= old_counts
+        accepted = self.apply_cutoff(accepted, t)
+        return torch.where(accepted, candidate_indices, identity)
+
+    @torch.no_grad()
+    def transfer_targets(
+        self,
+        context: ContinuousObjectiveContext,
+    ) -> TransferredTargets:
+        """Select paired source/target supervision without changing the sampled input."""
+
+        if context.path.name != "linear":
+            raise ValueError("Continuous OC target transfer requires a linear path.")
+        if context.original_class_labels is None:
+            raise ValueError("Continuous OC target transfer requires original class labels.")
+        t_expanded = expand_time(context.t.clamp_min(self.min_denom), context.xt)
+        noisy_target = context.xt / t_expanded
+        weights = self.reference_weights(
+            noisy_target=noisy_target,
+            target=context.target,
+            t=context.t,
+        )
+        candidates = torch.multinomial(weights, num_samples=1).squeeze(1)
+        references = self.filter_reference_indices(
+            candidate_indices=candidates,
+            original_labels=context.original_class_labels,
+            t=context.t,
+        )
+        return TransferredTargets(
+            source=context.source[references],
+            target=context.target[references],
+            metrics=self._transfer_metrics(references, context.t),
+        )
+
+    def _transfer_metrics(
+        self,
+        references: torch.Tensor,
+        t: torch.Tensor,
+    ) -> dict[str, float]:
+        identity = torch.arange(len(references), device=references.device)
+        transferred = references != identity
+        masks = {
+            "noisy": t < (1.0 / 3.0),
+            "middle": (t >= (1.0 / 3.0)) & (t < (2.0 / 3.0)),
+            "clean": t >= (2.0 / 3.0),
+        }
+        metrics = {"oc.transfer_rate": float(transferred.float().mean().cpu())}
+        for name, mask in masks.items():
+            metrics[f"oc.transfer_rate.{name}"] = self._masked_rate(
+                transferred,
+                mask,
+            )
+        return metrics
+
+    @staticmethod
+    def _masked_rate(values: torch.Tensor, mask: torch.Tensor) -> float:
+        mask = mask.to(device=values.device)
+        if not bool(mask.any()):
+            return 0.0
+        return float(values[mask].float().mean().cpu())
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "transfer_mode": self.transfer_mode,
+            "cut_t": self.cut_t,
+            "min_denom": self.min_denom,
+            "class_counts": list(self.class_counts),
+        }
+
+
 def build_continuous_modifiers(
     configs: Sequence[Mapping[str, Any]] | None,
     class_counts: Sequence[int] | None,
@@ -205,6 +369,16 @@ def build_continuous_modifiers(
                     tau=float(config.get("tau", 0.001)),
                     gamma=float(config.get("gamma", 0.25)),
                     comparison_space=str(config.get("comparison_space", "velocity")),
+                )
+            )
+            continue
+        if name == "oc":
+            modifiers.append(
+                OCModifier(
+                    class_counts=normalized_counts,
+                    transfer_mode=str(config.get("transfer_mode", "t2h")),
+                    cut_t=config.get("cut_t"),
+                    min_denom=float(config.get("min_denom", 1e-3)),
                 )
             )
             continue

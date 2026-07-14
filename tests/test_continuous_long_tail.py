@@ -3,7 +3,11 @@ import torch
 from torch import nn
 
 from fm_lab.paths import LinearPath
-from fm_lab.training.long_tail import CBDMModifier, build_continuous_modifiers
+from fm_lab.training.long_tail import (
+    CBDMModifier,
+    OCModifier,
+    build_continuous_modifiers,
+)
 from fm_lab.training.losses import build_objective
 
 
@@ -21,6 +25,20 @@ class LabelTablePrediction(nn.Module):
         self.seen_t.append(t.detach().clone())
         self.seen_labels.append(labels.detach().clone())
         return self.predictions[labels].reshape_as(x)
+
+
+class RecordingPrediction(nn.Module):
+    is_class_conditional = True
+
+    def __init__(self, value: float) -> None:
+        super().__init__()
+        self.value = value
+        self.seen_x: list[torch.Tensor] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t, context
+        self.seen_x.append(x.detach().clone())
+        return torch.full_like(x, self.value)
 
 
 @pytest.mark.parametrize(
@@ -70,6 +88,109 @@ def test_continuous_modifier_builder_validates_names_and_class_counts() -> None:
         )
     with pytest.raises(ValueError, match="cbdm, oc, and cm"):
         build_continuous_modifiers([{"name": "other"}], [1, 1])
+
+
+def test_oc_cut_t_uses_noisy_source_to_clean_target_direction() -> None:
+    modifier = OCModifier(
+        class_counts=[100, 10],
+        transfer_mode="t2h",
+        cut_t=0.6,
+    )
+
+    accepted = modifier.apply_cutoff(
+        torch.tensor([True, True, True]),
+        torch.tensor([0.2, 0.6, 0.9]),
+    )
+
+    assert torch.equal(accepted, torch.tensor([False, True, True]))
+
+
+@pytest.mark.parametrize(
+    ("transfer_mode", "candidate_indices", "expected"),
+    [
+        ("t2h", [1, 0], [0, 0]),
+        ("h2t", [1, 0], [1, 1]),
+        ("full", [1, 0], [1, 0]),
+    ],
+)
+def test_oc_transfer_mode_respects_class_frequency_direction(
+    transfer_mode: str,
+    candidate_indices: list[int],
+    expected: list[int],
+) -> None:
+    modifier = OCModifier(
+        class_counts=[100, 10],
+        transfer_mode=transfer_mode,
+    )
+
+    references = modifier.filter_reference_indices(
+        candidate_indices=torch.tensor(candidate_indices),
+        original_labels=torch.tensor([0, 1]),
+        t=torch.tensor([0.5, 0.5]),
+    )
+
+    assert torch.equal(references, torch.tensor(expected))
+
+
+def test_oc_reference_weights_are_finite_at_continuous_endpoints() -> None:
+    modifier = OCModifier(class_counts=[100, 10], min_denom=1e-3)
+
+    weights = modifier.reference_weights(
+        noisy_target=torch.tensor([[0.0, 1.0], [2.0, 3.0]]),
+        target=torch.tensor([[1.0, 0.0], [3.0, 2.0]]),
+        t=torch.tensor([0.0, 1.0]),
+    )
+
+    assert torch.isfinite(weights).all()
+    assert torch.allclose(weights.sum(dim=1), torch.ones(2))
+
+
+@pytest.mark.parametrize(
+    ("prediction_kind", "prediction_value"),
+    [("source", 0.0), ("target", 10.0), ("velocity", 10.0)],
+)
+def test_oc_supervises_transferred_pair_without_reconstructing_xt(
+    prediction_kind: str,
+    prediction_value: float,
+) -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": prediction_kind,
+            "loss_space": prediction_kind,
+            "modifiers": [
+                {
+                    "name": "oc",
+                    "transfer_mode": "t2h",
+                    "cut_t": None,
+                    "min_denom": 1e-3,
+                }
+            ],
+        },
+        class_counts=[100, 10],
+    )
+    model = RecordingPrediction(prediction_value)
+    source = torch.tensor([[20.0], [0.0]])
+    target = torch.tensor([[0.0], [10.0]])
+    t = torch.tensor([0.5, 0.5])
+
+    torch.manual_seed(0)
+    loss, metrics = objective(
+        model=model,
+        path=LinearPath(),
+        x0=source,
+        x1=target,
+        t=t,
+        class_labels=torch.tensor([1, 0]),
+        original_class_labels=torch.tensor([1, 0]),
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
+    assert torch.equal(model.seen_x[0], torch.tensor([[10.0], [5.0]]))
+    assert metrics["oc.transfer_rate"] == pytest.approx(0.5)
+    assert metrics["oc.transfer_rate.noisy"] == 0.0
+    assert metrics["oc.transfer_rate.middle"] == pytest.approx(0.5)
+    assert metrics["oc.transfer_rate.clean"] == 0.0
 
 
 def _cbdm_gradients(

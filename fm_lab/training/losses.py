@@ -16,6 +16,7 @@ from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
 from fm_lab.training.long_tail import (
     ContinuousObjectiveContext,
     ContinuousObjectiveModifier,
+    OCModifier,
     build_continuous_modifiers,
 )
 from fm_lab.training.prediction import (
@@ -266,10 +267,42 @@ class FlowMatchingObjective:
                     self.model_output,
                 )
                 prediction_in_loss_space = base_prediction.convert(self.loss_space)
-                target_in_loss_space = state.prediction(
-                    target_velocity,
-                    PredictionKind.VELOCITY,
-                ).convert(self.loss_space)
+                oc_modifiers = [
+                    modifier for modifier in self.modifiers if isinstance(modifier, OCModifier)
+                ]
+                if oc_modifiers:
+                    context = ContinuousObjectiveContext(
+                        model=model,
+                        path=path,
+                        state=state,
+                        xt=xt,
+                        t=t,
+                        class_labels=class_labels,
+                        original_class_labels=original_class_labels,
+                        base_prediction=base_prediction,
+                        source=x0,
+                        target=x1,
+                        base_loss_per_sample=prediction_in_loss_space.new_zeros(
+                            len(prediction_in_loss_space)
+                        ),
+                    )
+                    transferred = oc_modifiers[0].transfer_targets(context)
+                    supervision_source = transferred.source
+                    supervision_target = transferred.target
+                    metrics.update(transferred.metrics)
+                    if self.loss_space == PredictionKind.SOURCE.value:
+                        target_in_loss_space = supervision_source
+                    elif self.loss_space == PredictionKind.TARGET.value:
+                        target_in_loss_space = supervision_target
+                    else:
+                        target_in_loss_space = supervision_target - supervision_source
+                else:
+                    supervision_source = x0
+                    supervision_target = x1
+                    target_in_loss_space = state.prediction(
+                        target_velocity,
+                        PredictionKind.VELOCITY,
+                    ).convert(self.loss_space)
             per_sample_loss = _prediction_loss_per_sample(
                 prediction_in_loss_space,
                 target_in_loss_space,
@@ -290,11 +323,13 @@ class FlowMatchingObjective:
                     class_labels=class_labels,
                     original_class_labels=original_class_labels,
                     base_prediction=base_prediction,
-                    source=x0,
-                    target=x1,
+                    source=supervision_source,
+                    target=supervision_target,
                     base_loss_per_sample=per_sample_loss,
                 )
                 for modifier in self.modifiers:
+                    if isinstance(modifier, OCModifier):
+                        continue
                     modifier_loss, modifier_metrics = modifier(context)
                     total_loss = total_loss + modifier_loss
                     metrics.update(modifier_metrics)
