@@ -13,6 +13,11 @@ from torch.nn import functional as F
 from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
+from fm_lab.training.long_tail import (
+    ContinuousObjectiveContext,
+    ContinuousObjectiveModifier,
+    build_continuous_modifiers,
+)
 from fm_lab.training.prediction import (
     model_prediction,
     velocity_model_for_objective,
@@ -91,6 +96,7 @@ class FlowMatchingObjective:
     straightness_sample_size: int | None = None
     interpolant_acceleration_weight: float = 0.0
     learned_interpolant: KernelVStarConfig = field(default_factory=KernelVStarConfig)
+    modifiers: tuple[ContinuousObjectiveModifier, ...] = field(default_factory=tuple)
     name: str = "flow_matching"
 
     def __post_init__(self) -> None:
@@ -112,7 +118,6 @@ class FlowMatchingObjective:
         class_labels: torch.Tensor | None = None,
         original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
-        del original_class_labels
         return self._loss(
             model=model,
             path=path,
@@ -126,6 +131,7 @@ class FlowMatchingObjective:
             detach_path=False,
             straightness_detach_inputs=True,
             class_labels=class_labels,
+            original_class_labels=original_class_labels,
         )
 
     def theta_update_loss(
@@ -153,6 +159,7 @@ class FlowMatchingObjective:
             detach_path=True,
             straightness_detach_inputs=True,
             class_labels=class_labels,
+            original_class_labels=class_labels,
         )
 
     def psi_update_loss(
@@ -180,6 +187,7 @@ class FlowMatchingObjective:
             detach_path=False,
             straightness_detach_inputs=False,
             class_labels=class_labels,
+            original_class_labels=class_labels,
         )
 
     def metadata(self) -> dict[str, Any]:
@@ -204,6 +212,7 @@ class FlowMatchingObjective:
                 "bandwidth_scale": self.learned_interpolant.bandwidth_scale,
                 "min_bandwidth": self.learned_interpolant.min_bandwidth,
             },
+            "modifiers": [modifier.metadata() for modifier in self.modifiers],
         }
 
     def _loss(
@@ -221,6 +230,7 @@ class FlowMatchingObjective:
         detach_path: bool,
         straightness_detach_inputs: bool,
         class_labels: torch.Tensor | None,
+        original_class_labels: torch.Tensor | None,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         xt = path.sample_xt(x0, x1, t)
         target_velocity = path.target_velocity(x0, x1, t)
@@ -236,9 +246,11 @@ class FlowMatchingObjective:
         velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
             prediction = model_prediction(model, xt, t, class_labels=class_labels)
+            state = None
             if (
                 self.model_output == PredictionKind.VELOCITY.value
                 and self.loss_space == PredictionKind.VELOCITY.value
+                and not self.modifiers
             ):
                 prediction_in_loss_space = prediction
                 target_in_loss_space = target_velocity
@@ -249,10 +261,11 @@ class FlowMatchingObjective:
                         "prediction_state()."
                     )
                 state = path.prediction_state(xt, t, min_denom=self.min_denom)
-                prediction_in_loss_space = state.prediction(
+                base_prediction = state.prediction(
                     prediction,
                     self.model_output,
-                ).convert(self.loss_space)
+                )
+                prediction_in_loss_space = base_prediction.convert(self.loss_space)
                 target_in_loss_space = state.prediction(
                     target_velocity,
                     PredictionKind.VELOCITY,
@@ -264,7 +277,27 @@ class FlowMatchingObjective:
             )
             matching_loss = per_sample_loss.mean()
             metrics["flow_matching_loss"] = float(matching_loss.detach().cpu())
+            metrics["base.loss"] = float(matching_loss.detach().cpu())
             total_loss = total_loss + matching_loss
+            if self.modifiers:
+                assert state is not None
+                context = ContinuousObjectiveContext(
+                    model=model,
+                    path=path,
+                    state=state,
+                    xt=xt,
+                    t=t,
+                    class_labels=class_labels,
+                    original_class_labels=original_class_labels,
+                    base_prediction=base_prediction,
+                    source=x0,
+                    target=x1,
+                    base_loss_per_sample=per_sample_loss,
+                )
+                for modifier in self.modifiers:
+                    modifier_loss, modifier_metrics = modifier(context)
+                    total_loss = total_loss + modifier_loss
+                    metrics.update(modifier_metrics)
 
         if include_straightness and self.straightness_weight > 0:
             if self.learned_interpolant.mode == "kernel_vstar":
@@ -715,6 +748,7 @@ def build_objective(
     if interpolant_acceleration_weight < 0:
         raise ValueError("objective.interpolant_acceleration.weight must be non-negative.")
     learned_interpolant_config = _build_kernel_vstar_config(config.get("learned_interpolant", {}))
+    modifiers = build_continuous_modifiers(config.get("modifiers", []), class_counts)
 
     return FlowMatchingObjective(
         loss=str(config.get("loss", "mse")).lower(),
@@ -725,6 +759,7 @@ def build_objective(
         straightness_sample_size=straightness_sample_size,
         interpolant_acceleration_weight=interpolant_acceleration_weight,
         learned_interpolant=learned_interpolant_config,
+        modifiers=modifiers,
         name=name,
     )
 
