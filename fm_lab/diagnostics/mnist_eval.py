@@ -331,14 +331,26 @@ def _load_or_train_classifier(
     dataset: str,
 ) -> tuple[MNISTClassifier, dict[str, Any]]:
     trained_now = False
+    migrated_legacy_checkpoint = False
     if checkpoint_path.exists():
-        payload = _load_classifier_payload(
-            classifier=classifier,
-            checkpoint_path=checkpoint_path,
-            device=device,
-            dataset=dataset,
-            normalize=normalize,
-        )
+        try:
+            payload = _load_classifier_payload(
+                classifier=classifier,
+                checkpoint_path=checkpoint_path,
+                device=device,
+                dataset=dataset,
+                normalize=normalize,
+            )
+        except ValueError:
+            if dataset != "mnist":
+                raise
+            payload = _load_legacy_mnist_payload(
+                classifier=classifier,
+                checkpoint_path=checkpoint_path,
+                device=device,
+                normalize=normalize,
+            )
+            migrated_legacy_checkpoint = True
         classifier_steps = int(payload["steps"])
     else:
         classifier_steps = steps
@@ -362,7 +374,7 @@ def _load_or_train_classifier(
         device=device,
     )
     state_dict_fingerprint = _state_dict_sha256(classifier.state_dict())
-    if trained_now:
+    if trained_now or migrated_legacy_checkpoint:
         torch.save(
             {
                 "model_state_dict": classifier.state_dict(),
@@ -382,6 +394,7 @@ def _load_or_train_classifier(
         "dataset": dataset,
         "checkpoint_path": str(checkpoint_path),
         "trained_now": trained_now,
+        "migrated_legacy_checkpoint": migrated_legacy_checkpoint,
         "classifier_steps": classifier_steps,
         "test_accuracy": accuracy,
         "normalize": normalize,
@@ -552,6 +565,31 @@ def _load_classifier_payload(
         classifier.load_state_dict(payload["model_state_dict"])
     except RuntimeError as exc:
         raise ValueError("Classifier checkpoint weights do not match the architecture.") from exc
+    return payload
+
+
+def _load_legacy_mnist_payload(
+    *,
+    classifier: MNISTClassifier,
+    checkpoint_path: Path,
+    device: torch.device,
+    normalize: str,
+) -> dict[str, Any]:
+    payload = torch.load(checkpoint_path, map_location=device)
+    if isinstance(payload, dict) and "evaluator_version" in payload:
+        raise ValueError("Strict MNIST classifier checkpoint validation failed.")
+    if not isinstance(payload, dict) or not {
+        "model_state_dict",
+        "steps",
+        "normalize",
+    }.issubset(payload):
+        raise ValueError("Legacy MNIST classifier checkpoint is malformed.")
+    if _normalization_family(str(payload["normalize"])) != _normalization_family(normalize):
+        raise ValueError("Legacy MNIST classifier normalization does not match inputs.")
+    try:
+        classifier.load_state_dict(payload["model_state_dict"])
+    except RuntimeError as exc:
+        raise ValueError("Legacy MNIST classifier weights are incompatible.") from exc
     return payload
 
 

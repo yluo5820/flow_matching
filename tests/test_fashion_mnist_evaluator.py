@@ -6,8 +6,10 @@ import torch
 
 from fm_lab.diagnostics.mnist_eval import (
     FashionMNISTFeatureEvaluator,
+    LabeledImageTensors,
     MNISTClassifier,
     _load_classifier_payload,
+    _load_or_train_classifier,
     _state_dict_sha256,
 )
 from fm_lab.evaluation.features import extract_classifier_features
@@ -159,3 +161,41 @@ def test_classifier_checkpoint_validates_state_dict_fingerprint(tmp_path: Path) 
         normalize="minus_one_one",
     )
     assert loaded["held_out_accuracy"] == 0.93
+
+
+def test_legacy_mnist_checkpoint_is_migrated_to_strict_schema(tmp_path: Path) -> None:
+    path = tmp_path / "mnist.pt"
+    classifier = MNISTClassifier()
+    torch.save(
+        {
+            "model_state_dict": classifier.state_dict(),
+            "steps": 12,
+            "normalize": "zero_one",
+        },
+        path,
+    )
+    data = LabeledImageTensors(
+        images=torch.rand(20, 28 * 28),
+        labels=torch.arange(20) % 10,
+    )
+
+    _, metadata = _load_or_train_classifier(
+        classifier=MNISTClassifier(),
+        train_data=data,
+        test_data=data,
+        checkpoint_path=path,
+        normalize="zero_one",
+        steps=0,
+        batch_size=5,
+        eval_samples=10,
+        lr=1.0e-3,
+        device=torch.device("cpu"),
+        dataset="mnist",
+    )
+    migrated = torch.load(path, map_location="cpu")
+
+    assert metadata["migrated_legacy_checkpoint"] is True
+    assert migrated["architecture"] == "mnist_classifier_v1"
+    assert migrated["state_dict_sha256"] == _state_dict_sha256(
+        migrated["model_state_dict"]
+    )
