@@ -33,17 +33,29 @@ def evaluate_feature_caches(
     kid_subset_size: int = 1000,
     recall_k: int = 5,
     inception_splits: int = 10,
+    require_balanced_generated: bool = False,
+    per_class_recall: bool = False,
+    conditional_diagnostics: bool = False,
 ) -> dict[str, Any]:
     if repeats < 1 or overall_samples < 2:
         raise ValueError("Evaluation requires positive repeats and at least two samples.")
     if len(class_counts) != len(np.unique(real.labels)):
         raise ValueError("class_counts must align with the classes in the real cache.")
+    if require_balanced_generated:
+        generated_counts = np.bincount(generated.labels, minlength=len(class_counts))
+        if len(generated_counts) != len(class_counts) or np.any(
+            generated_counts != generated_counts[0]
+        ):
+            raise ValueError("Balanced evaluation requires equal generated samples per class.")
     sample_size = min(overall_samples, len(generated.features))
     groups = frequency_ranked_groups(class_counts)
     rng = np.random.default_rng(seed)
     overall_values = {name: [] for name in ("fid", "kid", "recall", "inception_score")}
     class_values: dict[int, list[float]] = {}
     group_values = {name: [] for name in groups}
+    macro_class_values: list[float] = []
+    worst_class_values: list[float] = []
+    class_recall_values: dict[int, list[float]] = {}
     repeat_records = []
 
     for repeat in range(repeats):
@@ -63,6 +75,17 @@ def evaluate_feature_caches(
         score = inception_score(probabilities, splits=inception_splits)
         per_class = classwise_fid(features, labels, real.features, real.labels)
         per_group = grouped_fid(features, labels, real.features, real.labels, groups)
+        per_recall = (
+            _classwise_recall(
+                features,
+                labels,
+                real.features,
+                real.labels,
+                nearest_k=recall_k,
+            )
+            if per_class_recall
+            else {}
+        )
         overall_values["fid"].append(fid)
         overall_values["kid"].append(kid)
         overall_values["recall"].append(recall)
@@ -71,6 +94,10 @@ def evaluate_feature_caches(
             class_values.setdefault(class_id, []).append(value)
         for name, value in per_group.items():
             group_values[name].append(value)
+        macro_class_values.append(float(np.mean(list(per_class.values()))))
+        worst_class_values.append(float(np.max(list(per_class.values()))))
+        for class_id, value in per_recall.items():
+            class_recall_values.setdefault(class_id, []).append(value)
         repeat_records.append(
             {
                 "repeat": repeat,
@@ -83,6 +110,9 @@ def evaluate_feature_caches(
                 "inception_score": score,
                 "classwise_fid": {str(key): value for key, value in per_class.items()},
                 "group_fid": per_group,
+                "classwise_recall": {
+                    str(key): value for key, value in per_recall.items()
+                },
             }
         )
 
@@ -91,7 +121,14 @@ def evaluate_feature_caches(
         f"class_{class_id}": summarize(values) for class_id, values in sorted(class_values.items())
     }
     metrics["group_fid"] = {name: summarize(values) for name, values in group_values.items()}
-    return {
+    if per_class_recall:
+        metrics["macro_classwise_fid"] = summarize(macro_class_values)
+        metrics["worst_class_fid"] = summarize(worst_class_values)
+        metrics["classwise_recall"] = {
+            f"class_{class_id}": summarize(values)
+            for class_id, values in sorted(class_recall_values.items())
+        }
+    report = {
         "metrics": metrics,
         "groups": groups,
         "class_counts": [int(value) for value in class_counts],
@@ -114,7 +151,64 @@ def evaluate_feature_caches(
             "kid_subset_size": kid_subset_size,
             "recall_k": recall_k,
             "inception_splits": inception_splits,
+            "require_balanced_generated": require_balanced_generated,
+            "per_class_recall": per_class_recall,
+            "conditional_diagnostics": conditional_diagnostics,
         },
+    }
+    if conditional_diagnostics:
+        report["conditional"] = _conditional_diagnostics(
+            generated.labels,
+            generated.probabilities,
+            num_classes=len(class_counts),
+        )
+    return report
+
+
+def _classwise_recall(
+    generated: np.ndarray,
+    generated_labels: np.ndarray,
+    real: np.ndarray,
+    real_labels: np.ndarray,
+    *,
+    nearest_k: int,
+) -> dict[int, float]:
+    result = {}
+    for class_id in sorted(np.unique(real_labels).tolist()):
+        generated_class = generated[generated_labels == class_id]
+        real_class = real[real_labels == class_id]
+        result[int(class_id)] = generative_recall(
+            generated_class,
+            real_class,
+            nearest_k=nearest_k,
+        )
+    return result
+
+
+def _conditional_diagnostics(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    num_classes: int,
+) -> dict[str, Any]:
+    labels = np.asarray(labels, dtype=np.int64)
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    if probabilities.shape != (len(labels), num_classes):
+        raise ValueError("Conditional probabilities must align with labels and classes.")
+    if np.any(labels < 0) or np.any(labels >= num_classes):
+        raise ValueError("Conditional labels must be valid class identifiers.")
+    predicted = probabilities.argmax(axis=1)
+    confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
+    np.add.at(confusion, (labels, predicted), 1)
+    return {
+        "requested_class_accuracy": float(np.mean(predicted == labels)),
+        "mean_requested_class_probability": float(
+            np.mean(probabilities[np.arange(len(labels)), labels])
+        ),
+        "predicted_class_histogram": np.bincount(
+            predicted, minlength=num_classes
+        ).astype(int).tolist(),
+        "confusion_matrix": confusion.tolist(),
     }
 
 

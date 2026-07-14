@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
 from fm_lab.evaluation.report import evaluate_feature_caches, write_evaluation_report
@@ -71,6 +72,64 @@ def test_evaluation_report_and_cli_default_to_paper_recall_k_five() -> None:
 
     assert report["provenance"]["recall_k"] == 5
     assert parse_args(["--class-counts", "counts.json", "--output-dir", "report"]).recall_k == 5
+
+
+def test_balanced_evaluation_rejects_unequal_generated_class_counts() -> None:
+    generated = _feature_cache()
+    generated.labels[-1] = 1
+
+    with pytest.raises(ValueError, match="equal generated samples per class"):
+        evaluate_feature_caches(
+            generated,
+            _feature_cache(),
+            class_counts=[100, 10, 1],
+            repeats=1,
+            overall_samples=12,
+            kid_subsets=1,
+            kid_subset_size=6,
+            recall_k=2,
+            inception_splits=1,
+            require_balanced_generated=True,
+        )
+
+
+def test_fashion_extensions_report_tail_and_conditional_diagnostics() -> None:
+    report = evaluate_feature_caches(
+        _feature_cache(),
+        _feature_cache(),
+        class_counts=[100, 10, 1],
+        repeats=1,
+        overall_samples=12,
+        kid_subsets=1,
+        kid_subset_size=6,
+        recall_k=2,
+        inception_splits=1,
+        require_balanced_generated=True,
+        per_class_recall=True,
+        conditional_diagnostics=True,
+    )
+
+    assert report["metrics"]["macro_classwise_fid"]["mean"] == 0.0
+    assert report["metrics"]["worst_class_fid"]["mean"] == 0.0
+    assert set(report["metrics"]["classwise_recall"]) == {
+        "class_0",
+        "class_1",
+        "class_2",
+    }
+    assert all(
+        value["mean"] == 1.0
+        for value in report["metrics"]["classwise_recall"].values()
+    )
+    assert report["conditional"]["requested_class_accuracy"] == 1.0
+    assert report["conditional"]["mean_requested_class_probability"] == pytest.approx(
+        0.8 + 0.2 / 3
+    )
+    assert report["conditional"]["predicted_class_histogram"] == [4, 4, 4]
+    assert report["conditional"]["confusion_matrix"] == [
+        [4, 0, 0],
+        [0, 4, 0],
+        [0, 0, 4],
+    ]
 
 
 def test_write_report_creates_json_and_flat_csv(tmp_path) -> None:
