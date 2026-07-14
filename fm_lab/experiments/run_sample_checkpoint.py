@@ -21,7 +21,7 @@ from fm_lab.experiments.factory import (
 from fm_lab.geometry_explorer.registry import DEFAULT_WORKSPACE, GeometryRegistry
 from fm_lab.image_diagnostics.canvas_explorer import prepare_array_sprite_atlases
 from fm_lab.image_diagnostics.save_utils import write_parquet
-from fm_lab.training.trainer import sample_and_plot
+from fm_lab.training.trainer import sample_and_plot, validate_checkpoint_compatibility
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.config import ConfigError, deep_update, load_config, save_config
 from fm_lab.utils.logging import write_json
@@ -223,6 +223,8 @@ def main() -> None:
     sampling_overrides = _sampling_overrides(args)
     if sampling_overrides:
         config = deep_update(config, {"sampling": sampling_overrides})
+
+    validate_checkpoint_compatibility(checkpoint, active_config=config)
 
     if output_dir.resolve() != run_dir.resolve():
         config = deep_update(config, {"experiment": {"output_dir": str(output_dir)}})

@@ -2,6 +2,8 @@ import json
 from argparse import Namespace
 from types import SimpleNamespace
 
+import pytest
+
 import fm_lab.experiments.run_sample_checkpoint as sample_checkpoint_cli
 from fm_lab.experiments.run_sample_checkpoint import (
     _sampling_overrides as _checkpoint_sampling_overrides,
@@ -283,7 +285,15 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
         sample_checkpoint_cli,
         "load_checkpoint",
         lambda path, map_location: {
-            "config": {"sampling": {"nfe": 3}},
+            "config": {
+                "path": {"name": "linear"},
+                "objective": {
+                    "name": "flow_matching",
+                    "model_output": "velocity",
+                    "loss_space": "velocity",
+                },
+                "sampling": {"nfe": 3},
+            },
             "model_state_dict": {"weight": 1.0},
         },
     )
@@ -314,6 +324,59 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
     sample_checkpoint_cli.main()
 
     assert model.device == "mps"
+
+
+def test_sample_checkpoint_rejects_discrete_metadata_before_building_model(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "checkpoint.pt"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_bytes(b"checkpoint")
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "parse_args",
+        lambda: Namespace(
+            run_dir=str(run_dir),
+            checkpoint=None,
+            output_dir=None,
+            device="cpu",
+            register_only=False,
+        ),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "resolve_device", lambda value: value)
+    monkeypatch.setattr(sample_checkpoint_cli, "_sampling_overrides", lambda args: {})
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "load_checkpoint",
+        lambda path, map_location: {
+            "config": {
+                "path": {"name": "linear"},
+                "objective": {
+                    "name": "discrete_diffusion",
+                    "model_output": "target",
+                    "loss_space": "velocity",
+                },
+            },
+            "model_state_dict": {},
+        },
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_model",
+        lambda *args, **kwargs: pytest.fail("model must not be built"),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "build_target", lambda config: object())
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_source",
+        lambda config: SimpleNamespace(dim=2),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "build_path", lambda config: object())
+
+    with pytest.raises(ValueError, match="discrete checkpoints are incompatible"):
+        sample_checkpoint_cli.main()
 
 
 def test_sample_checkpoint_register_only_uses_existing_sampling_payload(

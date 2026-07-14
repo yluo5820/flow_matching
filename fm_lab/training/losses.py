@@ -12,7 +12,6 @@ from torch.nn import functional as F
 
 from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
-from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
 from fm_lab.training.long_tail import (
     ContinuousEndpointTransferModifier,
     ContinuousModifier,
@@ -452,6 +451,8 @@ class DirectionOnlyStraightObjective:
     speed_weight: float = 1.0
     eps: float = 1e-8
     name: str = "direction_only_straight"
+    model_output: str = "velocity"
+    loss_space: str = "velocity"
 
     def __call__(
         self,
@@ -515,6 +516,8 @@ class DirectionOnlyStraightObjective:
     def metadata(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "model_output": self.model_output,
+            "loss_space": self.loss_space,
             "direction_weight": self.direction_weight,
             "speed_weight": self.speed_weight,
             "eps": self.eps,
@@ -709,28 +712,6 @@ def build_objective(
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
-    if name in {"discrete_diffusion", "ddpm", "cbdm", "oc", "cm"}:
-        diffusion_config = {} if diffusion_config is None else diffusion_config
-        method = name if name in {"cbdm", "oc", "cm"} else str(config.get("method", "ddpm"))
-        cbdm_config = config.get("cbdm", {})
-        oc_config = config.get("oc", {})
-        cm_config = config.get("cm", {})
-        return DiscreteDiffusionObjective(
-            prediction_type=str(config.get("prediction_type", "epsilon")),
-            timesteps=int(diffusion_config.get("timesteps", 1000)),
-            beta_start=float(diffusion_config.get("beta_start", 1e-4)),
-            beta_end=float(diffusion_config.get("beta_end", 2e-2)),
-            variance=str(diffusion_config.get("variance", "fixed_large")),
-            method=method,
-            class_counts=class_counts,
-            cbdm_target_distribution=str(cbdm_config.get("target_distribution", "train")),
-            cbdm_tau=float(cbdm_config.get("tau", 0.001)),
-            cbdm_gamma=float(cbdm_config.get("gamma", 0.25)),
-            oc_transfer_mode=str(oc_config.get("transfer_mode", "t2h")),
-            oc_cut_time=int(oc_config.get("cut_time", -1)),
-            cm_consistency_weight=float(cm_config.get("consistency_weight", 1.0)),
-            cm_diversity_weight=float(cm_config.get("diversity_weight", 0.2)),
-        )
     diffusion_prediction_aliases = {
         "diffusion_epsilon": "epsilon",
         "epsilon_prediction": "epsilon",

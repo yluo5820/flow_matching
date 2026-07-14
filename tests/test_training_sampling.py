@@ -20,7 +20,7 @@ from fm_lab.training.trainer import (
     sample_and_plot,
     train_flow_matching,
 )
-from fm_lab.utils.checkpoints import load_checkpoint
+from fm_lab.utils.checkpoints import load_checkpoint, save_checkpoint
 
 
 class ZeroVelocity(nn.Module):
@@ -114,6 +114,41 @@ class CapacityAwareTarget(nn.Module):
         del t
         self.contexts.append(context)
         return torch.ones_like(x)
+
+
+class AnalyticalTargetPrediction(nn.Module):
+    is_class_conditional = True
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t
+        assert context is not None
+        assert "class_labels" in context
+        return torch.ones_like(x)
+
+
+class AuditingEulerSolver(EulerSolver):
+    def __init__(self, *, min_denom: float) -> None:
+        super().__init__()
+        self.min_denom = min_denom
+        self.evaluations = 0
+
+    def solve(self, v_fn, x0, t_grid, return_trajectory=False, **kwargs):
+        def audited_v_fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            velocity = v_fn(x, t)
+            expected = (torch.ones_like(x) - x) / (
+                1.0 - t[:, None]
+            ).clamp_min(self.min_denom)
+            assert torch.allclose(velocity, expected)
+            self.evaluations += 1
+            return velocity
+
+        return super().solve(
+            audited_v_fn,
+            x0,
+            t_grid,
+            return_trajectory=return_trajectory,
+            **kwargs,
+        )
 
 
 def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> None:
@@ -313,6 +348,95 @@ def test_sample_and_plot_converts_target_predictions_to_velocity(tmp_path) -> No
 
     generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
     assert np.allclose(generated, 1.0)
+
+
+def test_sample_and_plot_records_generic_ode_contract_and_balances_labels(tmp_path) -> None:
+    config = _sampling_config(seed=112)
+    config["conditioning"] = {"enabled": True, "num_classes": 10}
+    config["sampling"]["classes"] = [2, 5, 9]
+    config["sampling"]["classifier_free_guidance"] = {"scale": 1.25}
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.05,
+    }
+    solver = AuditingEulerSolver(min_denom=0.05)
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        path=LinearPath(),
+        model=AnalyticalTargetPrediction(),
+        solvers=[solver],
+        device=torch.device("cpu"),
+    )
+
+    generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
+    labels = np.load(tmp_path / "samples" / "generated_labels.npy")
+    counts = np.asarray([(labels == class_id).sum() for class_id in (2, 5, 9)])
+    assert np.allclose(generated, 1.0)
+    assert solver.evaluations > 0
+    assert counts.max() - counts.min() <= 1
+    assert summary["output_kind"] == "target"
+    assert summary["path"] == "linear"
+    assert summary["min_denom"] == 0.05
+    assert summary["solvers"] == ["euler"]
+    assert summary["nfe"] == 3
+    assert summary["guidance"]["classifier_free_guidance"]["scale"] == 1.25
+    assert summary["seed"] == 112
+
+
+def test_resume_rejects_discrete_checkpoint_metadata_before_loading_weights(tmp_path) -> None:
+    checkpoint_model = TrainableConstantVelocity(dim=2, value=0.0)
+    checkpoint_optimizer = torch.optim.Adam(checkpoint_model.parameters(), lr=1.0e-3)
+    checkpoint_path = tmp_path / "discrete.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model=checkpoint_model,
+        optimizer=checkpoint_optimizer,
+        step=0,
+        config={
+            "path": {"name": "linear"},
+            "objective": {
+                "name": "discrete_diffusion",
+                "model_output": "target",
+                "loss_space": "velocity",
+            },
+        },
+        metrics={},
+        history=[],
+    )
+    config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+        "training": {
+            "batch_size": 2,
+            "steps": 1,
+            "lr": 1.0e-3,
+            "resume_from": str(checkpoint_path),
+        },
+        "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
+    }
+
+    with pytest.raises(ValueError, match="discrete checkpoints are incompatible"):
+        train_flow_matching(
+            config=config,
+            run_dir=tmp_path / "run",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=TrainableConstantVelocity(dim=2, value=0.0),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
 
 
 @pytest.mark.parametrize("model_output", ["target", "source"])
@@ -534,6 +658,13 @@ def test_direction_only_training_guard_accepts_minibatch_ot_coupling() -> None:
         LinearPath(),
         UnitXDirectionSpeed(),
     )
+
+
+def test_direction_only_objective_declares_velocity_prediction_contract() -> None:
+    objective = build_objective({"name": "direction_only_straight"})
+
+    assert objective.model_output == "velocity"
+    assert objective.loss_space == "velocity"
 
 
 def test_direction_only_training_guard_accepts_arbitrary_coupling_name() -> None:

@@ -110,9 +110,7 @@ def velocity_model_for_objective(
     path: FlowPath,
     objective: object,
 ) -> nn.Module:
-    output = normalize_prediction_kind(
-        getattr(objective, "model_output", getattr(objective, "prediction_type", "velocity"))
-    )
+    output = output_kind_for_objective(objective)
     if output is PredictionKind.VELOCITY:
         return model
     min_denom = float(getattr(objective, "min_denom", 1e-3))
@@ -122,3 +120,14 @@ def velocity_model_for_objective(
         model_output=output,
         min_denom=min_denom,
     )
+
+
+def output_kind_for_objective(objective: object) -> PredictionKind:
+    """Return the canonical meaning of a continuous objective's model output."""
+
+    output = getattr(objective, "model_output", None)
+    if output is None:
+        output = getattr(objective, "prediction_type", None)
+    if output is None:
+        raise ValueError("Continuous objective is missing model output metadata.")
+    return normalize_prediction_kind(output)

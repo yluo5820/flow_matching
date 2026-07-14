@@ -17,7 +17,6 @@ from tqdm.auto import trange
 
 from fm_lab.couplings.base import Coupling, pair_with_condition
 from fm_lab.data.base import TargetDistribution
-from fm_lab.diffusion.discrete import DiscreteDiffusion
 from fm_lab.paths.base import FlowPath
 from fm_lab.plotting.diagnostics import plot_training_history
 from fm_lab.plotting.trajectories import (
@@ -32,6 +31,7 @@ from fm_lab.training.losses import build_objective, sample_uniform_time
 from fm_lab.training.prediction import (
     classifier_free_guided_prediction,
     model_prediction,
+    output_kind_for_objective,
     velocity_model_for_objective,
 )
 from fm_lab.training.runtime import (
@@ -96,6 +96,7 @@ def train_flow_matching(
         class_counts=getattr(target, "class_counts", None),
     )
     _validate_training_compatibility(objective, coupling, path, model)
+    checkpoint_config = _checkpoint_config(config, path=path, objective=objective)
     condition_dropout = _condition_dropout_probability(config, model)
 
     trainable_path = _is_trainable_path(path)
@@ -121,6 +122,10 @@ def train_flow_matching(
         if trainable_path:
             raise ValueError("Exact resume is not yet supported for trainable paths.")
         checkpoint = load_checkpoint(resume_from, map_location=device)
+        validate_checkpoint_compatibility(
+            checkpoint,
+            active_config=checkpoint_config,
+        )
         model.load_state_dict(checkpoint["model_state_dict"])
         theta_optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if ema_model is not None:
@@ -268,7 +273,7 @@ def train_flow_matching(
                 optimizer=theta_optimizer,
                 scheduler=theta_scheduler,
                 step=step,
-                config=config,
+                config=checkpoint_config,
                 metrics={"latest_loss": float(loss_metrics.get("loss", float("nan")))},
                 history=history,
                 rng_state=capture_rng_state(),
@@ -321,27 +326,12 @@ def train_flow_matching(
         ),
         path_module=path if isinstance(path, nn.Module) else None,
         step=selected_step,
-        config=config,
+        config=checkpoint_config,
         metrics=metrics,
         history=history,
         scheduler=theta_scheduler,
         rng_state=capture_rng_state(),
     )
-
-    if getattr(objective, "name", "") == "discrete_diffusion":
-        sample_artifacts = sample_discrete_and_plot(
-            config=config,
-            run_dir=run_dir,
-            target=target,
-            source=source,
-            model=model,
-            ema_model=ema_model,
-            objective=objective,
-            device=device,
-        )
-        metrics["sampling"] = sample_artifacts
-        write_json(metrics, run_dir / "metrics.json")
-        return metrics
 
     sampling_skip_reason = _velocity_sampling_skip_reason(objective)
     if sampling_skip_reason is not None:
@@ -365,164 +355,6 @@ def train_flow_matching(
     metrics["sampling"] = sample_artifacts
     write_json(metrics, run_dir / "metrics.json")
     return metrics
-
-
-def sample_discrete_and_plot(
-    *,
-    config: dict[str, Any],
-    run_dir: Path,
-    target: TargetDistribution,
-    source: SourceDistribution,
-    model: nn.Module,
-    ema_model: nn.Module | None = None,
-    objective: Any,
-    device: torch.device,
-) -> dict[str, Any]:
-    """Generate final samples with the configured finite-step diffusion sampler."""
-
-    from fm_lab.diffusion.sampling import sample_discrete_diffusion
-
-    sampling_config = config.get("sampling", {}) or {}
-    n_samples = int(sampling_config.get("n_samples", 2048))
-    batch_size = int(sampling_config.get("sample_batch_size", n_samples))
-    if n_samples < 1 or batch_size < 1:
-        raise ValueError("Discrete sampling counts must be positive.")
-    comparison_config = sampling_config.get("live_ema_comparison", {}) or {}
-    if not isinstance(comparison_config, dict):
-        raise ValueError("sampling.live_ema_comparison must be a mapping.")
-    comparison_enabled = bool(comparison_config.get("enabled", False))
-    comparison_n_samples = 0
-    if comparison_enabled:
-        configured_comparison_count = int(comparison_config.get("n_samples", n_samples))
-        if configured_comparison_count < 1:
-            raise ValueError("live_ema_comparison.n_samples must be positive.")
-        if ema_model is None:
-            raise ValueError("live_ema_comparison requires EMA training weights.")
-        comparison_n_samples = min(configured_comparison_count, n_samples)
-    sampler = str(sampling_config.get("sampler", "ddim")).lower()
-    ddim_skip = int(sampling_config.get("ddim_skip", 20))
-    eta = float(sampling_config.get("eta", 0.0))
-    cfg_config = sampling_config.get("classifier_free_guidance", {}) or {}
-    convention = str(cfg_config.get("convention", "fm_lab"))
-    if convention != "fm_lab":
-        raise ValueError(
-            "sampling.classifier_free_guidance.convention must be 'fm_lab'; "
-            "convert paper omega to scale explicitly."
-        )
-    guidance_scale = (
-        float(cfg_config.get("scale", 1.0))
-        if bool(cfg_config.get("enabled", True))
-        else 1.0
-    )
-    labels = _sampling_class_labels(
-        config,
-        model=model,
-        n_samples=n_samples,
-        device=device,
-    )
-    if labels is None:
-        raise ValueError("Discrete ImbDiff sampling requires a class-conditional model.")
-    diffusion: DiscreteDiffusion = objective.diffusion
-    sampling_model = ema_model if ema_model is not None else model
-    generated_chunks: list[torch.Tensor] = []
-    live_chunks: list[torch.Tensor] = []
-    ema_chunks: list[torch.Tensor] = []
-    seed = _sampling_seed(config)
-    with _temporary_torch_seed(seed, device):
-        for offset in range(0, n_samples, batch_size):
-            chunk_labels = labels[offset : offset + batch_size]
-            generated_chunks.append(
-                sample_discrete_diffusion(
-                    model=sampling_model,
-                    diffusion=diffusion,
-                    sample_shape=(chunk_labels.shape[0], source.dim),
-                    class_labels=chunk_labels,
-                    prediction_type=objective.prediction_type,
-                    sampler=sampler,
-                    guidance_scale=guidance_scale,
-                    ddim_skip=ddim_skip,
-                    eta=eta,
-                ).cpu()
-            )
-        if comparison_enabled:
-            assert ema_model is not None
-            for offset in range(0, comparison_n_samples, batch_size):
-                end = min(offset + batch_size, comparison_n_samples)
-                chunk_labels = labels[offset:end]
-                initial_noise = torch.randn(
-                    (chunk_labels.shape[0], source.dim), device=device
-                )
-                sample_kwargs = {
-                    "diffusion": diffusion,
-                    "sample_shape": (chunk_labels.shape[0], source.dim),
-                    "class_labels": chunk_labels,
-                    "prediction_type": objective.prediction_type,
-                    "sampler": sampler,
-                    "guidance_scale": guidance_scale,
-                    "ddim_skip": ddim_skip,
-                    "eta": eta,
-                    "initial_noise": initial_noise,
-                }
-                live_chunks.append(
-                    sample_discrete_diffusion(model=model, **sample_kwargs).cpu()
-                )
-                ema_chunks.append(
-                    sample_discrete_diffusion(model=ema_model, **sample_kwargs).cpu()
-                )
-        target_samples, _ = _sample_target_with_optional_labels(
-            target,
-            min(n_samples, int(sampling_config.get("plot_max_points", n_samples))),
-            device=device,
-        )
-    generated = torch.cat(generated_chunks, dim=0)
-    samples_dir = run_dir / "samples"
-    samples_dir.mkdir(parents=True, exist_ok=True)
-    np.save(samples_dir / f"{sampler}.npy", generated.numpy())
-    np.save(samples_dir / "generated_labels.npy", labels.cpu().numpy())
-    target_metadata = target.metadata()
-    plot_generated_samples(
-        target_samples.cpu(),
-        {sampler: generated},
-        run_dir / "plots" / "generated_samples.png",
-        max_points=int(sampling_config.get("plot_max_points", n_samples)),
-        image_shape=target_metadata.get("image_shape"),
-        image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
-    )
-    result = {
-        "sampler": sampler,
-        "n_samples": n_samples,
-        "sample_batch_size": batch_size,
-        "ddim_skip": ddim_skip if sampler == "ddim" else None,
-        "eta": eta if sampler == "ddim" else None,
-        "classifier_free_guidance_scale": guidance_scale,
-        "classifier_free_guidance_convention": convention,
-        "seed": seed,
-        "samples_path": str(samples_dir / f"{sampler}.npy"),
-        "labels_path": str(samples_dir / "generated_labels.npy"),
-    }
-    if comparison_enabled:
-        live_generated = torch.cat(live_chunks, dim=0)
-        ema_generated = torch.cat(ema_chunks, dim=0)
-        live_path = samples_dir / "live_diagnostic.npy"
-        ema_path = samples_dir / "ema_diagnostic.npy"
-        plot_path = run_dir / "plots" / "live_vs_ema.png"
-        np.save(live_path, live_generated.numpy())
-        np.save(ema_path, ema_generated.numpy())
-        plot_generated_samples(
-            target_samples.cpu(),
-            {"live": live_generated, "ema": ema_generated},
-            plot_path,
-            max_points=comparison_n_samples,
-            image_shape=target_metadata.get("image_shape"),
-            image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
-        )
-        result["live_ema_comparison"] = {
-            "n_samples": comparison_n_samples,
-            "live_samples_path": str(live_path),
-            "ema_samples_path": str(ema_path),
-            "plot_path": str(plot_path),
-        }
-    return result
 
 
 @dataclass(frozen=True)
@@ -837,6 +669,10 @@ def sample_and_plot(
     requires_source_label = _requires_source_label(model)
     generated: dict[str, torch.Tensor] = {}
     artifact_summary: dict[str, Any] = {
+        "output_kind": output_kind_for_objective(objective).value,
+        "path": getattr(path, "name", None),
+        "min_denom": float(getattr(objective, "min_denom", 1.0e-3)),
+        "solvers": [solver.name for solver in solvers],
         "n_samples": n_samples,
         "n_trajectories": n_trajectories,
         "nfe": nfe,
@@ -847,8 +683,11 @@ def sample_and_plot(
         "seed": sampling_seed,
     }
     guidance_summary = guidance.summary()
-    if guidance_summary:
-        artifact_summary["guidance"] = guidance_summary
+    guidance_summary["classifier_free_guidance"] = {
+        "enabled": bool(cfg_config.get("enabled", True)),
+        "scale": cfg_scale,
+    }
+    artifact_summary["guidance"] = guidance_summary
     if image_shape is not None:
         artifact_summary["image_shape"] = image_shape
         artifact_summary["image_value_range"] = image_value_range
@@ -1032,6 +871,89 @@ def _validate_training_compatibility(
         raise ValueError("direction_only_straight requires a linear path in v1.")
     if not _requires_source_label(model):
         raise ValueError("direction_only_straight requires a source-label-conditioned model.")
+
+
+_DISCRETE_OBJECTIVE_NAMES = frozenset({"discrete_diffusion", "ddpm", "cbdm", "oc", "cm"})
+
+
+def validate_checkpoint_compatibility(
+    checkpoint: dict[str, Any],
+    *,
+    active_config: dict[str, Any],
+) -> None:
+    """Reject incompatible or ambiguous checkpoints before loading model state."""
+
+    serialized_config = checkpoint.get("config")
+    if not isinstance(serialized_config, dict):
+        raise ValueError("Checkpoint is missing continuous prediction metadata: config.")
+    serialized = _continuous_checkpoint_contract(serialized_config, label="Checkpoint")
+    active = _continuous_checkpoint_contract(active_config, label="Active config")
+    mismatches = [
+        name
+        for name in ("path", "objective", "model_output", "loss_space")
+        if serialized[name] != active[name]
+    ]
+    if mismatches:
+        details = ", ".join(
+            f"{name}={serialized[name]!r} (checkpoint) != {active[name]!r} (active)"
+            for name in mismatches
+        )
+        raise ValueError(f"Checkpoint metadata is incompatible with the active config: {details}.")
+
+
+def _continuous_checkpoint_contract(
+    config: dict[str, Any],
+    *,
+    label: str,
+) -> dict[str, str]:
+    objective_config = config.get("objective")
+    if not isinstance(objective_config, dict):
+        raise ValueError(f"{label} is missing continuous prediction metadata: objective.")
+    objective_name = str(objective_config.get("name", "")).lower()
+    if objective_name in _DISCRETE_OBJECTIVE_NAMES:
+        raise ValueError("discrete checkpoints are incompatible with continuous ODE sampling.")
+    path_config = config.get("path")
+    if not isinstance(path_config, dict) or not path_config.get("name"):
+        raise ValueError(f"{label} is missing continuous prediction metadata: path.name.")
+    missing = [
+        key for key in ("name", "model_output", "loss_space") if key not in objective_config
+    ]
+    if missing:
+        fields = ", ".join(f"objective.{key}" for key in missing)
+        raise ValueError(f"{label} is missing continuous prediction metadata: {fields}.")
+    return {
+        "path": str(path_config["name"]).lower(),
+        "objective": objective_name,
+        "model_output": str(objective_config["model_output"]).lower(),
+        "loss_space": str(objective_config["loss_space"]).lower(),
+    }
+
+
+def _checkpoint_config(
+    config: dict[str, Any],
+    *,
+    path: FlowPath,
+    objective: Any,
+) -> dict[str, Any]:
+    checkpoint_config = copy.deepcopy(config)
+    path_config = dict(checkpoint_config.get("path", {}) or {})
+    path_config["name"] = str(getattr(path, "name", path.__class__.__name__)).lower()
+    checkpoint_config["path"] = path_config
+    objective_config = dict(checkpoint_config.get("objective", {}) or {})
+    objective_config["name"] = str(getattr(objective, "name", "")).lower()
+    model_output = getattr(objective, "model_output", None)
+    if model_output is None:
+        model_output = getattr(objective, "prediction_type", None)
+    if model_output is None:
+        raise ValueError("Continuous objective is missing model output metadata.")
+    objective_config["model_output"] = str(model_output).lower()
+    objective_config["loss_space"] = str(
+        getattr(objective, "loss_space", model_output)
+    ).lower()
+    if hasattr(objective, "min_denom"):
+        objective_config["min_denom"] = float(objective.min_denom)
+    checkpoint_config["objective"] = objective_config
+    return checkpoint_config
 
 
 def _velocity_sampling_skip_reason(objective: Any) -> str | None:
