@@ -5,6 +5,8 @@ from torch import nn
 from fm_lab.paths import LinearPath
 from fm_lab.training.long_tail import (
     CBDMModifier,
+    ContinuousEndpointTransferModifier,
+    ContinuousObjectiveModifier,
     OCModifier,
     build_continuous_modifiers,
 )
@@ -143,6 +145,33 @@ def test_oc_reference_weights_are_finite_at_continuous_endpoints() -> None:
 
     assert torch.isfinite(weights).all()
     assert torch.allclose(weights.sum(dim=1), torch.ones(2))
+
+
+def test_oc_reference_weights_promote_float16_endpoint_math() -> None:
+    modifier = OCModifier(class_counts=[100, 10], min_denom=1e-3)
+
+    weights = modifier.reference_weights(
+        noisy_target=torch.tensor(
+            [[1_000.0, -1_000.0], [-1_000.0, 1_000.0]],
+            dtype=torch.float16,
+        ),
+        target=torch.tensor(
+            [[1.0, -1.0], [-1.0, 1.0]],
+            dtype=torch.float16,
+        ),
+        t=torch.tensor([0.0, 1.0], dtype=torch.float16),
+    )
+
+    assert weights.dtype == torch.float32
+    assert torch.isfinite(weights).all()
+    assert torch.allclose(weights.sum(dim=1), torch.ones(2))
+
+
+def test_oc_uses_endpoint_transfer_protocol_without_callable_contract() -> None:
+    modifier = OCModifier(class_counts=[100, 10])
+
+    assert isinstance(modifier, ContinuousEndpointTransferModifier)
+    assert not isinstance(modifier, ContinuousObjectiveModifier)
 
 
 @pytest.mark.parametrize(

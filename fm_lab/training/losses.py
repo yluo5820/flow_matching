@@ -14,9 +14,9 @@ from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.discrete_objective import DiscreteDiffusionObjective
 from fm_lab.training.long_tail import (
+    ContinuousEndpointTransferModifier,
+    ContinuousModifier,
     ContinuousObjectiveContext,
-    ContinuousObjectiveModifier,
-    OCModifier,
     build_continuous_modifiers,
 )
 from fm_lab.training.prediction import (
@@ -97,7 +97,7 @@ class FlowMatchingObjective:
     straightness_sample_size: int | None = None
     interpolant_acceleration_weight: float = 0.0
     learned_interpolant: KernelVStarConfig = field(default_factory=KernelVStarConfig)
-    modifiers: tuple[ContinuousObjectiveModifier, ...] = field(default_factory=tuple)
+    modifiers: tuple[ContinuousModifier, ...] = field(default_factory=tuple)
     name: str = "flow_matching"
 
     def __post_init__(self) -> None:
@@ -268,7 +268,9 @@ class FlowMatchingObjective:
                 )
                 prediction_in_loss_space = base_prediction.convert(self.loss_space)
                 oc_modifiers = [
-                    modifier for modifier in self.modifiers if isinstance(modifier, OCModifier)
+                    modifier
+                    for modifier in self.modifiers
+                    if isinstance(modifier, ContinuousEndpointTransferModifier)
                 ]
                 if oc_modifiers:
                     context = ContinuousObjectiveContext(
@@ -328,7 +330,7 @@ class FlowMatchingObjective:
                     base_loss_per_sample=per_sample_loss,
                 )
                 for modifier in self.modifiers:
-                    if isinstance(modifier, OCModifier):
+                    if isinstance(modifier, ContinuousEndpointTransferModifier):
                         continue
                     modifier_loss, modifier_metrics = modifier(context)
                     total_loss = total_loss + modifier_loss

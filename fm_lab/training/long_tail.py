@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 import torch
 
@@ -41,6 +41,7 @@ class ContinuousObjectiveContext:
         return self.class_labels
 
 
+@runtime_checkable
 class ContinuousObjectiveModifier(Protocol):
     """A loss term composed with a base continuous objective."""
 
@@ -54,6 +55,27 @@ class ContinuousObjectiveModifier(Protocol):
 
     def metadata(self) -> dict[str, Any]:
         """Return a serializable modifier description."""
+
+
+@runtime_checkable
+class ContinuousEndpointTransferModifier(Protocol):
+    """A modifier that replaces endpoint supervision without adding a loss."""
+
+    name: str
+
+    def transfer_targets(
+        self,
+        context: ContinuousObjectiveContext,
+    ) -> TransferredTargets:
+        """Return transferred source/target supervision and diagnostics."""
+
+    def metadata(self) -> dict[str, Any]:
+        """Return a serializable modifier description."""
+
+
+ContinuousModifier: TypeAlias = (
+    ContinuousObjectiveModifier | ContinuousEndpointTransferModifier
+)
 
 
 @dataclass
@@ -216,14 +238,19 @@ class OCModifier:
     ) -> torch.Tensor:
         """Return stabilized reference probabilities under linear path geometry."""
 
-        noisy_flat = noisy_target.flatten(1)
-        target_flat = target.flatten(1)
+        compute_dtype = (
+            torch.float64
+            if torch.float64 in {noisy_target.dtype, target.dtype, t.dtype}
+            else torch.float32
+        )
+        noisy_flat = noisy_target.to(dtype=compute_dtype).flatten(1)
+        target_flat = target.to(dtype=compute_dtype).flatten(1)
         squared_distance = (
             noisy_flat.square().sum(dim=1, keepdim=True)
             + target_flat.square().sum(dim=1).unsqueeze(0)
             - 2.0 * noisy_flat @ target_flat.T
         ).clamp_min_(0.0)
-        t_safe = t.clamp_min(self.min_denom)
+        t_safe = t.to(dtype=compute_dtype).clamp_min(self.min_denom)
         noise_to_signal_sq = ((1.0 - t) / t_safe).square()
         logits = -squared_distance / (2.0 * noise_to_signal_sq[:, None].clamp_min(self.min_denom))
         logits = logits - logits.amax(dim=1, keepdim=True)
@@ -328,7 +355,7 @@ class OCModifier:
 def build_continuous_modifiers(
     configs: Sequence[Mapping[str, Any]] | None,
     class_counts: Sequence[int] | None,
-) -> tuple[ContinuousObjectiveModifier, ...]:
+) -> tuple[ContinuousModifier, ...]:
     """Build continuous modifiers in declared order."""
 
     configs = () if configs is None else configs
@@ -359,7 +386,7 @@ def build_continuous_modifiers(
     else:
         normalized_counts = ()
 
-    modifiers: list[ContinuousObjectiveModifier] = []
+    modifiers: list[ContinuousModifier] = []
     for name, config in normalized_configs:
         if name == "cbdm":
             modifiers.append(
