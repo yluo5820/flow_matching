@@ -25,6 +25,65 @@ def extract_inception_features(
     image_shape: Sequence[int] = (3, 32, 32),
     provenance: dict[str, Any],
 ) -> FeatureCache:
+    return _extract_features(
+        images,
+        labels=labels,
+        sample_ids=sample_ids,
+        model=model,
+        batch_size=batch_size,
+        device=device,
+        input_range=input_range,
+        image_shape=image_shape,
+        provenance=provenance,
+        rescale_to_zero_one=True,
+        preprocessing="scale_to_0_1_then_tf_fid_inception",
+    )
+
+
+@torch.no_grad()
+def extract_classifier_features(
+    images: np.ndarray | torch.Tensor,
+    *,
+    labels: np.ndarray,
+    sample_ids: np.ndarray,
+    model: nn.Module,
+    batch_size: int,
+    device: torch.device,
+    input_range: tuple[float, float],
+    image_shape: Sequence[int] = (1, 28, 28),
+    provenance: dict[str, Any],
+) -> FeatureCache:
+    """Extract domain-classifier features without changing normalization."""
+
+    return _extract_features(
+        images,
+        labels=labels,
+        sample_ids=sample_ids,
+        model=model,
+        batch_size=batch_size,
+        device=device,
+        input_range=input_range,
+        image_shape=image_shape,
+        provenance=provenance,
+        rescale_to_zero_one=False,
+        preprocessing="clamp_to_classifier_input_range",
+    )
+
+
+def _extract_features(
+    images: np.ndarray | torch.Tensor,
+    *,
+    labels: np.ndarray,
+    sample_ids: np.ndarray,
+    model: nn.Module,
+    batch_size: int,
+    device: torch.device,
+    input_range: tuple[float, float],
+    image_shape: Sequence[int],
+    provenance: dict[str, Any],
+    rescale_to_zero_one: bool,
+    preprocessing: str,
+) -> FeatureCache:
     if batch_size < 1:
         raise ValueError("Feature extraction batch_size must be positive.")
     tensor = torch.as_tensor(images, dtype=torch.float32)
@@ -38,7 +97,9 @@ def extract_inception_features(
     low, high = (float(value) for value in input_range)
     if not low < high:
         raise ValueError("input_range must be increasing.")
-    tensor = ((tensor - low) / (high - low)).clamp(0.0, 1.0)
+    tensor = tensor.clamp(low, high)
+    if rescale_to_zero_one:
+        tensor = (tensor - low) / (high - low)
 
     features = []
     probabilities = []
@@ -58,7 +119,7 @@ def extract_inception_features(
         {
             "input_range": [low, high],
             "image_shape": list(shape),
-            "preprocessing": "scale_to_0_1_then_tf_fid_inception",
+            "preprocessing": preprocessing,
         }
     )
     return FeatureCache(

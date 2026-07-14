@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import math
 import os
 from dataclasses import dataclass
@@ -159,7 +160,57 @@ class MNISTClassifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x.reshape(x.shape[0], 1, *self.image_shape))
+        return self.net[-1](self.forward_features(x))
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the 128-dimensional penultimate representation."""
+
+        return self.net[:-1](x.reshape(x.shape[0], 1, *self.image_shape))
+
+
+class FashionMNISTFeatureEvaluator(nn.Module):
+    """Frozen Fashion-MNIST classifier exposed as a feature evaluator."""
+
+    def __init__(
+        self,
+        classifier: MNISTClassifier,
+        *,
+        metadata: dict[str, Any],
+        normalize: str,
+        minimum_accuracy: float = 0.9,
+    ) -> None:
+        super().__init__()
+        if metadata.get("dataset") != "fashion_mnist":
+            raise ValueError("Fashion-MNIST evaluator metadata has incompatible dataset.")
+        if _normalization_family(str(metadata.get("normalize", ""))) != _normalization_family(
+            normalize
+        ):
+            raise ValueError("Fashion-MNIST evaluator normalization does not match inputs.")
+        accuracy = float(metadata.get("test_accuracy", -1.0))
+        if accuracy < minimum_accuracy:
+            raise ValueError(
+                f"Fashion-MNIST evaluator accuracy {accuracy:.4f} is below "
+                f"required {minimum_accuracy:.4f}."
+            )
+        self.classifier = classifier.eval()
+        for parameter in self.classifier.parameters():
+            parameter.requires_grad_(False)
+        self.provenance = dict(metadata)
+        self.provenance.update(
+            {
+                "dataset": "fashion_mnist",
+                "extractor": "fashion_mnist_classifier",
+                "feature_layer": "penultimate_128",
+                "feature_dimension": 128,
+                "normalize": normalize,
+                "minimum_accuracy": float(minimum_accuracy),
+            }
+        )
+
+    def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.classifier.forward_features(images)
+        probabilities = torch.softmax(self.classifier.net[-1](features), dim=1)
+        return features, probabilities
 
 
 def load_or_train_mnist_classifier(
@@ -201,6 +252,7 @@ def load_or_train_mnist_classifier(
         eval_samples=eval_samples,
         lr=lr,
         device=device,
+        dataset="mnist",
     )
 
 
@@ -246,6 +298,7 @@ def load_or_train_fashion_mnist_classifier(
         eval_samples=eval_samples,
         lr=lr,
         device=device,
+        dataset="fashion_mnist",
     )
 
 
@@ -261,6 +314,7 @@ def _load_or_train_classifier(
     eval_samples: int,
     lr: float,
     device: torch.device,
+    dataset: str,
 ) -> tuple[MNISTClassifier, dict[str, Any]]:
     trained_now = False
     if checkpoint_path.exists():
@@ -286,6 +340,8 @@ def _load_or_train_classifier(
                     "model_state_dict": classifier.state_dict(),
                     "steps": steps,
                     "normalize": normalize,
+                    "dataset": dataset,
+                    "evaluator_version": 1,
                 },
                 checkpoint_path,
             )
@@ -306,6 +362,8 @@ def _load_or_train_classifier(
                 "model_state_dict": classifier.state_dict(),
                 "steps": steps,
                 "normalize": normalize,
+                "dataset": dataset,
+                "evaluator_version": 1,
             },
             checkpoint_path,
         )
@@ -320,13 +378,33 @@ def _load_or_train_classifier(
         device=device,
     )
     metadata = {
+        "dataset": dataset,
         "checkpoint_path": str(checkpoint_path),
         "trained_now": trained_now,
         "classifier_steps": classifier_steps,
         "test_accuracy": accuracy,
         "normalize": normalize,
+        "weights_sha256": _sha256_file(checkpoint_path),
+        "evaluator_version": 1,
     }
     return classifier, metadata
+
+
+def _normalization_family(value: str) -> str:
+    normalized = value.lower()
+    if normalized in {"minus_one_one", "-1_1", "centered"}:
+        return "minus_one_one"
+    if normalized in {"zero_one", "01", "unit"}:
+        return "zero_one"
+    raise ValueError(f"Unsupported classifier normalization: {value}")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @torch.no_grad()
