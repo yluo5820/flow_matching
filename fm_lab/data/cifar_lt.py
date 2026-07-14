@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from fm_lab.data.long_tail import long_tail_indices
+
 _CIFAR_SPECS = {
     "cifar10": {
         "num_classes": 10,
@@ -175,7 +177,7 @@ class ImbalancedCIFARImages:
             _download_and_extract(Path(self.root), self.dataset)
         images, labels = _read_binary_batches(paths, spec)
         if self.train:
-            selected = _long_tail_indices(
+            selected = long_tail_indices(
                 labels,
                 num_classes=self.num_classes,
                 imbalance_type=self.imbalance_type,
@@ -192,32 +194,6 @@ class ImbalancedCIFARImages:
             int(np.sum(selected_labels == class_id))
             for class_id in range(self.num_classes)
         )
-
-
-def _long_tail_indices(
-    labels: np.ndarray,
-    *,
-    num_classes: int,
-    imbalance_type: str,
-    imbalance_factor: float,
-    seed: int,
-) -> np.ndarray:
-    counts = np.bincount(labels, minlength=num_classes)
-    if np.any(counts != counts[0]):
-        raise ValueError("CIFAR source split must be class-balanced before LT selection.")
-    n_max = int(counts[0])
-    rng = np.random.RandomState(seed)
-    selected: list[np.ndarray] = []
-    for class_id in range(num_classes):
-        class_indices = np.flatnonzero(labels == class_id)
-        rng.shuffle(class_indices)
-        if imbalance_type == "exp":
-            exponent = class_id / (num_classes - 1.0)
-            keep = int(n_max * imbalance_factor**exponent)
-        else:
-            keep = n_max
-        selected.append(class_indices[:keep])
-    return np.concatenate(selected).astype(np.int64, copy=False)
 
 
 def _read_binary_batches(paths: list[Path], spec: dict) -> tuple[np.ndarray, np.ndarray]:

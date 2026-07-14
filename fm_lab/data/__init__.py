@@ -2,6 +2,7 @@
 
 from fm_lab.data.base import TargetDistribution
 from fm_lab.data.cifar_lt import ImbalancedCIFARImages
+from fm_lab.data.fashion_mnist import LongTailedFashionMNIST
 from fm_lab.data.image_variant import ImageVariantImages
 from fm_lab.data.manifold_toys import (
     GaussianMixture3D,
@@ -31,6 +32,7 @@ __all__ = [
     "ImageVariantImages",
     "ImbalancedCIFARImages",
     "LineSegment3D",
+    "LongTailedFashionMNIST",
     "MoebiusStrip",
     "MultiSwissRoll",
     "MultiTorus",

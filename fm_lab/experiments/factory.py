@@ -22,6 +22,7 @@ from fm_lab.data import (
     ImageVariantImages,
     ImbalancedCIFARImages,
     LineSegment3D,
+    LongTailedFashionMNIST,
     MNISTImages,
     MoebiusStrip,
     MultiSwissRoll,
@@ -76,6 +77,17 @@ def build_target(config: dict[str, Any]):
             subset_seed=int(data_config.get("subset_seed", 0)),
             normalize=str(data_config.get("normalize", "minus_one_one")),
             horizontal_flip=bool(data_config.get("horizontal_flip", True)),
+        )
+    if name in {"fashion_mnist_lt", "fashionmnist_lt", "imbalanced_fashion_mnist"}:
+        return LongTailedFashionMNIST(
+            root=data_config.get("root", "data/fashion_mnist"),
+            train=bool(data_config.get("train", True)),
+            download=bool(data_config.get("download", False)),
+            imbalance_type=str(data_config.get("imbalance_type", "exp")),
+            imbalance_factor=float(data_config.get("imbalance_factor", 0.01)),
+            subset_seed=int(data_config.get("subset_seed", 0)),
+            normalize=str(data_config.get("normalize", "minus_one_one")),
+            dequantize=bool(data_config.get("dequantize", False)),
         )
     if data_config.get("variant_id"):
         return ImageVariantImages(
