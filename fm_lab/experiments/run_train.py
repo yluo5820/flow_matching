@@ -168,12 +168,16 @@ def main() -> None:
         build_target,
         resolve_device,
     )
-    from fm_lab.training.trainer import train_flow_matching
+    from fm_lab.training.trainer import (
+        train_flow_matching,
+        validate_resume_checkpoint_before_model,
+    )
 
     target = build_target(config)
+    path = build_path(config)
+    validate_resume_checkpoint_before_model(config=config, target=target, path=path)
     source = build_source(config)
     coupling = build_coupling(config)
-    path = build_path(config)
     model = build_model(config, dim=source.dim)
     solvers = build_solvers(config)
     device = resolve_device(args.device)

@@ -34,6 +34,11 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
             "model_output": "velocity",
             "loss_space": "velocity",
         },
+        training_contract={
+            "version": 1,
+            "payload": {"objective": {}, "path": {}, "data": {}},
+            "sha256": "digest",
+        },
         history=[{"step": 1, "loss": 2.0}],
         rng_state=capture_rng_state(),
     )
@@ -50,6 +55,11 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
         "objective": "flow_matching",
         "model_output": "velocity",
         "loss_space": "velocity",
+    }
+    assert payload["training_contract"] == {
+        "version": 1,
+        "payload": {"objective": {}, "path": {}, "data": {}},
+        "sha256": "digest",
     }
     assert set(payload["rng_state_dict"]) >= {"python", "numpy", "torch"}
 

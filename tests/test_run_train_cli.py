@@ -106,6 +106,54 @@ def test_training_overrides_from_cli_args() -> None:
     }
 
 
+def test_training_cli_validates_resume_contract_before_model_construction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config = {
+        "experiment": {"seed": 0, "output_dir": str(tmp_path / "run")},
+        "training": {"resume_from": "checkpoint.pt"},
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+        },
+    }
+    monkeypatch.setattr(
+        train_cli,
+        "parse_args",
+        lambda: SimpleNamespace(
+            config="config.yaml",
+            output_dir=None,
+            dry_run=False,
+            device="cpu",
+        ),
+    )
+    monkeypatch.setattr(train_cli, "load_config", lambda path: config)
+    monkeypatch.setattr(train_cli, "_training_overrides", lambda args: {})
+    monkeypatch.setattr(train_cli, "_data_overrides", lambda args: {})
+    monkeypatch.setattr(train_cli, "_sampling_overrides", lambda args: {})
+    monkeypatch.setattr(train_cli, "_objective_overrides", lambda args: {})
+    monkeypatch.setattr(train_cli, "create_run_dir", lambda *args, **kwargs: tmp_path / "run")
+    monkeypatch.setattr("fm_lab.experiments.factory.build_target", lambda config: object())
+    monkeypatch.setattr("fm_lab.experiments.factory.build_path", lambda config: object())
+    monkeypatch.setattr("fm_lab.experiments.factory.resolve_device", lambda value: "cpu")
+    monkeypatch.setattr(
+        "fm_lab.experiments.factory.build_model",
+        lambda *args, **kwargs: pytest.fail("model must not be built"),
+    )
+    monkeypatch.setattr(
+        "fm_lab.training.trainer.validate_resume_checkpoint_before_model",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError("Checkpoint training contract is incompatible")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        train_cli.main()
+
+
 def test_data_overrides_include_dataset_variant_workspace() -> None:
     args = Namespace(
         dataset_variant="mnist/tail_digit1",

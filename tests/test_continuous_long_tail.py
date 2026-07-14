@@ -428,17 +428,22 @@ def test_flow_matching_objective_composes_cbdm_in_declared_comparison_space() ->
         model=model,
         path=LinearPath(),
         x0=torch.zeros(1, 2),
-        x1=torch.ones(1, 2),
+        x1=torch.zeros(1, 2),
         t=torch.tensor([0.5]),
         class_labels=torch.tensor([0]),
         original_class_labels=torch.tensor([0]),
     )
 
     # Target outputs 1 and 3 become velocities 1 and 5 at t=0.5.
-    assert torch.allclose(loss, torch.tensor(1.0))
-    assert metrics["base.loss"] == 0.0
+    assert torch.allclose(loss, torch.tensor(2.0))
+    assert metrics["base.loss"] == pytest.approx(1.0)
     assert metrics["cbdm.regularizer"] == pytest.approx(0.8)
     assert metrics["cbdm.commitment"] == pytest.approx(0.2)
+    assert metrics["loss"] == pytest.approx(
+        metrics["base.loss"]
+        + metrics["cbdm.regularizer"]
+        + metrics["cbdm.commitment"]
+    )
     assert objective.metadata()["modifiers"] == [
         {
             "name": "cbdm",

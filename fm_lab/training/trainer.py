@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 import csv
-from collections.abc import Iterator
+import hashlib
+import json
+import math
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,9 +76,6 @@ def train_flow_matching(
     if source.dim != target.dim:
         raise ValueError(f"Source dim {source.dim} does not match target dim {target.dim}.")
 
-    model.to(device)
-    if isinstance(path, nn.Module):
-        path.to(device)
     training_config = config.get("training", {})
     batch_size = int(training_config.get("batch_size", 1024))
     steps = int(training_config.get("steps", 10_000))
@@ -99,9 +99,31 @@ def train_flow_matching(
     _validate_training_compatibility(objective, coupling, path, model)
     checkpoint_config = _checkpoint_config(config, path=path, objective=objective)
     prediction_contract = _prediction_contract(path=path, objective=objective)
+    class_counts = getattr(target, "class_counts", None)
+    training_contract = build_training_contract(
+        checkpoint_config,
+        path=path,
+        objective=objective,
+        class_counts=class_counts,
+    )
+    trainable_path = _is_trainable_path(path)
+    resume_from = training_config.get("resume_from")
+    resume_checkpoint: dict[str, Any] | None = None
+    if resume_from:
+        if trainable_path:
+            raise ValueError("Exact resume is not yet supported for trainable paths.")
+        resume_checkpoint = load_checkpoint(resume_from, map_location=device)
+        validate_checkpoint_compatibility(
+            resume_checkpoint,
+            active_config=checkpoint_config,
+            active_training_contract=training_contract,
+        )
+
+    model.to(device)
+    if isinstance(path, nn.Module):
+        path.to(device)
     condition_dropout = _condition_dropout_probability(config, model)
 
-    trainable_path = _is_trainable_path(path)
     theta_optimizer = build_optimizer(model, training_config)
     theta_scheduler = build_warmup_scheduler(theta_optimizer, warmup_steps=warmup_steps)
     ema_model = create_ema_model(model) if ema_decay is not None else None
@@ -119,15 +141,9 @@ def train_flow_matching(
         )
     history: list[dict[str, float | int]] = []
     start_step = 1
-    resume_from = training_config.get("resume_from")
     if resume_from:
-        if trainable_path:
-            raise ValueError("Exact resume is not yet supported for trainable paths.")
-        checkpoint = load_checkpoint(resume_from, map_location=device)
-        validate_checkpoint_compatibility(
-            checkpoint,
-            active_config=checkpoint_config,
-        )
+        assert resume_checkpoint is not None
+        checkpoint = resume_checkpoint
         model.load_state_dict(checkpoint["model_state_dict"])
         theta_optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if ema_model is not None:
@@ -277,6 +293,7 @@ def train_flow_matching(
                 step=step,
                 config=checkpoint_config,
                 prediction_contract=prediction_contract,
+                training_contract=training_contract,
                 metrics={"latest_loss": float(loss_metrics.get("loss", float("nan")))},
                 history=history,
                 rng_state=capture_rng_state(),
@@ -331,6 +348,7 @@ def train_flow_matching(
         step=selected_step,
         config=checkpoint_config,
         prediction_contract=prediction_contract,
+        training_contract=training_contract,
         metrics=metrics,
         history=history,
         scheduler=theta_scheduler,
@@ -898,10 +916,42 @@ _DIFFUSION_OBJECTIVE_NAMES = frozenset(
 )
 
 
+def validate_resume_checkpoint_before_model(
+    *,
+    config: dict[str, Any],
+    target: TargetDistribution,
+    path: FlowPath,
+) -> None:
+    """Validate exact-resume metadata before the CLI constructs a model."""
+
+    resume_from = (config.get("training", {}) or {}).get("resume_from")
+    if not resume_from:
+        return
+    objective = build_objective(
+        config.get("objective", {}),
+        diffusion_config=config.get("diffusion", {}),
+        class_counts=getattr(target, "class_counts", None),
+    )
+    checkpoint_config = _checkpoint_config(config, path=path, objective=objective)
+    active_training_contract = build_training_contract(
+        checkpoint_config,
+        path=path,
+        objective=objective,
+        class_counts=getattr(target, "class_counts", None),
+    )
+    checkpoint = load_checkpoint(resume_from, map_location="cpu")
+    validate_checkpoint_compatibility(
+        checkpoint,
+        active_config=checkpoint_config,
+        active_training_contract=active_training_contract,
+    )
+
+
 def validate_checkpoint_compatibility(
     checkpoint: dict[str, Any],
     *,
     active_config: dict[str, Any],
+    active_training_contract: dict[str, Any] | None = None,
 ) -> None:
     """Reject incompatible or ambiguous checkpoints before loading model state."""
 
@@ -931,6 +981,143 @@ def validate_checkpoint_compatibility(
         left_label="prediction contract",
         right_label="active config",
     )
+    if active_training_contract is not None:
+        validate_training_contract(
+            checkpoint.get("training_contract"),
+            active_training_contract,
+        )
+
+
+_TRAINING_CONTRACT_VERSION = 1
+_RUNTIME_DATA_FIELDS = frozenset({"root", "download", "workspace"})
+
+
+def build_training_contract(
+    config: dict[str, Any],
+    *,
+    path: FlowPath,
+    objective: Any,
+    class_counts: Sequence[int] | None,
+) -> dict[str, Any]:
+    """Serialize the semantics that must remain fixed across exact resume."""
+
+    path_config = config.get("path", {}) or {}
+    if not isinstance(path_config, Mapping):
+        raise ValueError("path config must be a mapping for the training contract.")
+    data_config = config.get("data", {}) or {}
+    if not isinstance(data_config, Mapping):
+        raise ValueError("data config must be a mapping for the training contract.")
+    if not hasattr(objective, "metadata"):
+        raise ValueError("Training objective must expose metadata for exact resume.")
+    path_metadata = (
+        path.metadata()
+        if hasattr(path, "metadata")
+        else {"name": getattr(path, "name", path.__class__.__name__)}
+    )
+    semantic_data = {
+        key: value for key, value in data_config.items() if key not in _RUNTIME_DATA_FIELDS
+    }
+    semantic_data["class_counts"] = (
+        None if class_counts is None else [int(value) for value in class_counts]
+    )
+    payload = _canonical_plain_value(
+        {
+            "objective": objective.metadata(),
+            "path": {"config": path_config, "metadata": path_metadata},
+            "data": semantic_data,
+        },
+        label="training contract payload",
+    )
+    assert isinstance(payload, dict)
+    return {
+        "version": _TRAINING_CONTRACT_VERSION,
+        "payload": payload,
+        "sha256": _training_contract_digest(payload),
+    }
+
+
+def validate_training_contract(saved: object, active: object) -> None:
+    """Reject missing, corrupted, or semantically incompatible resume metadata."""
+
+    saved_contract = _validated_training_contract(saved, label="Checkpoint training contract")
+    active_contract = _validated_training_contract(active, label="Active training contract")
+    if saved_contract["payload"] != active_contract["payload"]:
+        changed = [
+            field
+            for field in ("objective", "path", "data")
+            if saved_contract["payload"].get(field)
+            != active_contract["payload"].get(field)
+        ]
+        details = ", ".join(changed) or "payload"
+        raise ValueError(
+            "Checkpoint training contract is incompatible with the active run: "
+            f"changed {details}."
+        )
+
+
+def _validated_training_contract(contract: object, *, label: str) -> dict[str, Any]:
+    if not isinstance(contract, Mapping):
+        raise ValueError(f"{label} is missing or malformed.")
+    if contract.get("version") != _TRAINING_CONTRACT_VERSION:
+        raise ValueError(
+            f"{label} version must be {_TRAINING_CONTRACT_VERSION}."
+        )
+    payload = contract.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} payload must be a mapping.")
+    canonical_payload = _canonical_plain_value(payload, label=f"{label} payload")
+    assert isinstance(canonical_payload, dict)
+    required = {"objective", "path", "data"}
+    if set(canonical_payload) != required:
+        raise ValueError(
+            f"{label} payload must contain exactly objective, path, and data."
+        )
+    digest = contract.get("sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ValueError(f"{label} sha256 is missing or malformed.")
+    expected = _training_contract_digest(canonical_payload)
+    if digest != expected:
+        raise ValueError(f"{label} sha256 does not match its payload; metadata was tampered.")
+    return {
+        "version": _TRAINING_CONTRACT_VERSION,
+        "payload": canonical_payload,
+        "sha256": digest,
+    }
+
+
+def _canonical_plain_value(value: object, *, label: str) -> object:
+    if isinstance(value, Mapping):
+        canonical: dict[str, object] = {}
+        keys = list(value)
+        if any(not isinstance(key, str) for key in keys):
+            raise ValueError(f"{label} mapping keys must be strings.")
+        for key in sorted(keys):
+            assert isinstance(key, str)
+            canonical[key] = _canonical_plain_value(value[key], label=f"{label}.{key}")
+        return canonical
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _canonical_plain_value(item, label=f"{label}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{label} floats must be finite.")
+        return value
+    raise ValueError(f"{label} contains unsupported value {type(value).__name__}.")
+
+
+def _training_contract_digest(payload: dict[str, Any]) -> str:
+    serialized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def _raise_contract_mismatch(

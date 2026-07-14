@@ -3,6 +3,7 @@ import pytest
 import torch
 from torch import nn
 
+import fm_lab.training.trainer as trainer_module
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling
 from fm_lab.data import GaussianMixture3D, TwoMoons
 from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearPath, SphericalPath
@@ -104,6 +105,11 @@ class TinyVelocity(nn.Module):
         return self.linear(torch.cat((x, t[:, None]), dim=1))
 
 
+class RejectingStateLoadVelocity(TinyVelocity):
+    def load_state_dict(self, *args, **kwargs):
+        pytest.fail("model state must not be loaded before resume validation")
+
+
 class CapacityAwareTarget(nn.Module):
     is_class_conditional = True
 
@@ -155,6 +161,258 @@ class AuditingEulerSolver(EulerSolver):
 class RejectingSolver(EulerSolver):
     def solve(self, *args, **kwargs):
         pytest.fail("solver must not be evaluated")
+
+
+def _resume_contract_config(
+    *,
+    modifiers: list[dict[str, object]] | None = None,
+    min_denom: float = 0.001,
+    path_tag: str = "a",
+    imbalance_factor: float = 0.01,
+) -> dict[str, object]:
+    return {
+        "path": {"name": "linear", "contract_tag": path_tag},
+        "objective": {
+            "name": "flow_matching",
+            "loss": "mse",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "min_denom": min_denom,
+            "modifiers": modifiers or [],
+        },
+        "data": {
+            "name": "fashion_mnist_lt",
+            "root": "data/fashion_mnist",
+            "download": True,
+            "imbalance_type": "exp",
+            "imbalance_factor": imbalance_factor,
+            "subset_seed": 0,
+        },
+        "training": {"steps": 10, "batch_size": 4},
+        "sampling": {"n_samples": 20, "nfe": 2},
+        "experiment": {"output_dir": "runs/a"},
+    }
+
+
+def _build_resume_contract(
+    config: dict[str, object],
+    *,
+    class_counts: list[int] | None = None,
+) -> dict[str, object]:
+    resolved_class_counts = class_counts or [100, 10]
+    return trainer_module.build_training_contract(
+        config,
+        path=LinearPath(),
+        objective=build_objective(
+            config["objective"], class_counts=resolved_class_counts
+        ),
+        class_counts=resolved_class_counts,
+    )
+
+
+def test_training_contract_serializes_resolved_objective_path_and_data_semantics() -> None:
+    contract = _build_resume_contract(_resume_contract_config())
+
+    assert contract["payload"]["objective"]["loss"] == "mse"
+    assert contract["payload"]["objective"]["min_denom"] == 0.001
+    assert contract["payload"]["objective"]["modifiers"] == []
+    assert contract["payload"]["path"] == {
+        "config": {"contract_tag": "a", "name": "linear"},
+        "metadata": {"name": "linear"},
+    }
+    assert contract["payload"]["data"]["class_counts"] == [100, 10]
+    assert "root" not in contract["payload"]["data"]
+    assert "download" not in contract["payload"]["data"]
+
+
+def test_training_contract_rejects_resolved_class_count_change() -> None:
+    config = _resume_contract_config()
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        trainer_module.validate_training_contract(
+            _build_resume_contract(config, class_counts=[100, 10]),
+            _build_resume_contract(config, class_counts=[100, 9]),
+        )
+
+
+@pytest.mark.parametrize(
+    "active_config",
+    [
+        _resume_contract_config(
+            modifiers=[
+                {
+                    "name": "cbdm",
+                    "target_distribution": "train",
+                    "tau": 0.1,
+                    "gamma": 0.25,
+                    "comparison_space": "velocity",
+                }
+            ]
+        ),
+        _resume_contract_config(modifiers=[{"name": "oc", "transfer_mode": "t2h"}]),
+        _resume_contract_config(
+            modifiers=[
+                {"name": "oc", "transfer_mode": "t2h"},
+                {"name": "cm", "consistency_weight": 1.0, "diversity_weight": 0.2},
+            ]
+        ),
+        _resume_contract_config(min_denom=0.01),
+        _resume_contract_config(path_tag="b"),
+        _resume_contract_config(imbalance_factor=0.02),
+    ],
+    ids=["cbdm", "oc", "cm", "min-denom", "path", "data"],
+)
+def test_training_contract_rejects_semantic_resume_changes(
+    active_config: dict[str, object],
+) -> None:
+    saved_config = _resume_contract_config()
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        trainer_module.validate_training_contract(
+            _build_resume_contract(saved_config),
+            _build_resume_contract(active_config),
+        )
+
+
+@pytest.mark.parametrize(
+    "active_modifiers",
+    [
+        [
+            {"name": "oc", "transfer_mode": "t2h"},
+            {
+                "name": "cbdm",
+                "target_distribution": "train",
+                "tau": 0.1,
+                "gamma": 0.25,
+            },
+        ],
+        [
+            {
+                "name": "cbdm",
+                "target_distribution": "train",
+                "tau": 0.2,
+                "gamma": 0.25,
+            },
+            {"name": "oc", "transfer_mode": "t2h"},
+        ],
+    ],
+    ids=["modifier-order", "modifier-parameter"],
+)
+def test_training_contract_rejects_modifier_order_and_parameters(
+    active_modifiers: list[dict[str, object]],
+) -> None:
+    saved_modifiers = [
+        {
+            "name": "cbdm",
+            "target_distribution": "train",
+            "tau": 0.1,
+            "gamma": 0.25,
+        },
+        {"name": "oc", "transfer_mode": "t2h"},
+    ]
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        trainer_module.validate_training_contract(
+            _build_resume_contract(_resume_contract_config(modifiers=saved_modifiers)),
+            _build_resume_contract(_resume_contract_config(modifiers=active_modifiers)),
+        )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "malformed", "tampered"])
+def test_training_contract_rejects_missing_malformed_or_tampered_metadata(
+    mutation: str,
+) -> None:
+    active = _build_resume_contract(_resume_contract_config())
+    saved: object
+    if mutation == "missing":
+        saved = None
+    elif mutation == "malformed":
+        saved = {"version": 1, "payload": []}
+    else:
+        saved = {**active, "payload": {**active["payload"], "data": {"name": "tampered"}}}
+
+    with pytest.raises(ValueError, match="training contract"):
+        trainer_module.validate_training_contract(saved, active)
+
+
+def test_training_contract_allows_runtime_only_resume_overrides() -> None:
+    saved_config = _resume_contract_config()
+    active_config = _resume_contract_config()
+    active_config["training"] = {
+        "steps": 100,
+        "batch_size": 4,
+        "resume_from": "checkpoint.pt",
+    }
+    active_config["sampling"] = {"n_samples": 10_000, "nfe": 64, "plot_max_points": 100}
+    active_config["experiment"] = {"output_dir": "runs/resumed"}
+
+    trainer_module.validate_training_contract(
+        _build_resume_contract(saved_config),
+        _build_resume_contract(active_config),
+    )
+
+
+def test_train_rejects_training_contract_mismatch_before_loading_model_state(
+    tmp_path,
+) -> None:
+    saved_config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "loss": "mse",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+            "min_denom": 0.001,
+            "modifiers": [],
+        },
+        "data": {"name": "constant"},
+    }
+    objective = build_objective(saved_config["objective"])
+    checkpoint_model = TinyVelocity()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model=checkpoint_model,
+        optimizer=torch.optim.Adam(checkpoint_model.parameters(), lr=1.0e-3),
+        step=0,
+        config=saved_config,
+        prediction_contract={
+            "path": "linear",
+            "objective": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+        training_contract=trainer_module.build_training_contract(
+            saved_config,
+            path=LinearPath(),
+            objective=objective,
+            class_counts=None,
+        ),
+        metrics={},
+    )
+    active_config = {
+        **saved_config,
+        "objective": {**saved_config["objective"], "min_denom": 0.01},
+        "training": {
+            "steps": 1,
+            "batch_size": 2,
+            "resume_from": str(checkpoint_path),
+        },
+        "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
+    }
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        train_flow_matching(
+            config=active_config,
+            run_dir=tmp_path / "run",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=RejectingStateLoadVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
 
 
 def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> None:
