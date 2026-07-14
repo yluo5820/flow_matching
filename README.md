@@ -99,16 +99,62 @@ Evaluate a completed local MNIST image run:
 .conda/fm_lab/bin/fm-lab-mnist-eval --run-dir runs/mnist_image_unet_ot --solver auto --nfe 64 --device auto
 ```
 
-Run the faster Fashion-MNIST IR100 conditional benchmark:
+Run the four controlled continuous Fashion-MNIST IR100 experiments. Refresh the
+editable install first so the current console scripts are available:
 
 ```bash
-.conda/fm_lab/bin/fm-lab-train --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100.yaml --device auto
+.conda/fm_lab/bin/python -m pip install -e .
+
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cbdm.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_oc.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
+  --device auto
+```
+
+Each explicit output directory must be empty (or absent) before starting its
+fresh controlled run. Evaluate the resulting Euler/NFE-64 artifacts with:
+
+```bash
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
-  --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
-  --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
-  --generative-checkpoint runs/fashion_mnist_lt_ir100/checkpoint.pt \
-  --generation-method flow_matching --sampler euler --nfe 64 \
-  --download --output-dir runs/fashion_mnist_lt_ir100/evaluation
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss/checkpoint.pt \
+  --generation-method x_vloss --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cbdm/checkpoint.pt \
+  --generation-method x_vloss_cbdm --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_oc/checkpoint.pt \
+  --generation-method x_vloss_oc --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
+  --generation-method x_vloss_cm --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 ```
 
 The canonical evaluator uses a balanced set of 1,000 generated samples per

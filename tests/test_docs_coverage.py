@@ -32,3 +32,40 @@ def test_fashion_mnist_long_tail_docs_define_balanced_reference_protocol() -> No
     assert "fm-lab-fashion-mnist-lt-eval" in docs
     assert "1,000 generated samples per class" in docs
     assert "official Fashion-MNIST test split" in docs
+
+
+def test_continuous_fashion_mnist_suite_is_documented_in_readme_and_cli() -> None:
+    config_stems = [
+        "fashion_mnist_lt_ir100_x_vloss",
+        "fashion_mnist_lt_ir100_x_vloss_cbdm",
+        "fashion_mnist_lt_ir100_x_vloss_oc",
+        "fashion_mnist_lt_ir100_x_vloss_cm",
+    ]
+    generation_methods = ["x_vloss", "x_vloss_cbdm", "x_vloss_oc", "x_vloss_cm"]
+
+    for path in (Path("README.md"), Path("docs/cli.md")):
+        docs = path.read_text(encoding="utf-8")
+        for stem in config_stems:
+            assert f"configs/fashion_mnist_lt/{stem}.yaml" in docs
+            method = stem.removeprefix("fashion_mnist_lt_ir100_")
+            assert f"runs/fashion_mnist_lt_ir100/{method}" in docs
+        for method in generation_methods:
+            assert f"--generation-method {method}" in docs
+        assert "samples/euler_nfe64.npy" in docs
+        assert "samples/generated_labels.npy" in docs
+        assert "checkpoint.pt" in docs
+        assert "--sampler euler" in docs
+        assert "--nfe 64" in docs
+        assert "--guidance-scale 2.0" in docs
+        assert "--generation-seed 0" in docs
+
+
+def test_continuous_fashion_mnist_docs_do_not_recommend_discrete_training() -> None:
+    docs = "\n".join(
+        path.read_text(encoding="utf-8") for path in (Path("README.md"), Path("docs/cli.md"))
+    )
+
+    assert "fm-lab-train" in docs
+    assert "--diffusion-prediction-type" not in docs
+    assert "--ddpm" not in docs.lower()
+    assert "--ddim" not in docs.lower()

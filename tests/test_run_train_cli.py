@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import fm_lab.experiments.run_train as train_cli
 import fm_lab.experiments.run_sample_checkpoint as sample_checkpoint_cli
+import fm_lab.experiments.run_train as train_cli
 from fm_lab.experiments.run_sample_checkpoint import (
     _sampling_overrides as _checkpoint_sampling_overrides,
 )

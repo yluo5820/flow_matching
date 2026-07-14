@@ -56,28 +56,69 @@ but evaluates against the untouched official Fashion-MNIST test split. Its
 canonical protocol requests 1,000 generated samples per class, so all ten
 conditional distributions contribute equally to the global metrics.
 
-Train and sample the supplied IR100 configuration:
+Refresh the editable install, then train and sample the four controlled
+continuous IR100 variants. All four predict the clean target while optimizing
+velocity loss; the last three add CBDM, OC, or OC+CM respectively.
 
 ```bash
-fm-lab-train \
-  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100.yaml \
+.conda/fm_lab/bin/python -m pip install -e .
+
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cbdm.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_oc.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
   --device auto
 ```
 
-Then extract frozen Fashion-MNIST classifier features and report FID, KID,
-Inception Score, generative recall, per-class scores, and frequency-group
-scores:
+An explicit output directory is never auto-suffixed: each directory above must
+be empty (or absent) before a fresh controlled run. Then extract frozen
+Fashion-MNIST classifier features and report FID, KID, Inception Score,
+generative recall, per-class scores, and frequency-group scores for each run:
 
 ```bash
-fm-lab-fashion-mnist-lt-eval \
-  --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
-  --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
-  --generative-checkpoint runs/fashion_mnist_lt_ir100/checkpoint.pt \
-  --generation-method flow_matching --sampler euler --nfe 64 \
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss/checkpoint.pt \
+  --generation-method x_vloss --sampler euler --nfe 64 \
   --guidance-scale 2.0 --generation-seed 0 \
-  --data-root data/fashion_mnist \
-  --download \
-  --output-dir runs/fashion_mnist_lt_ir100/evaluation
+  --data-root data/fashion_mnist --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cbdm/checkpoint.pt \
+  --generation-method x_vloss_cbdm --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 \
+  --data-root data/fashion_mnist --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_oc/checkpoint.pt \
+  --generation-method x_vloss_oc --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 \
+  --data-root data/fashion_mnist --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
+  --generation-method x_vloss_cm --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 \
+  --data-root data/fashion_mnist --download \
+  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 ```
 
 If the evaluator checkpoint is absent, the command trains it once on the
@@ -159,6 +200,9 @@ Key options:
 | `--trajectory-target-max-points` | Override `sampling.trajectory_target_max_points`. |
 | `--objective` | Override `objective.name`, e.g. `flow_matching`. |
 | `--objective-loss` | Override `objective.loss`, currently `mse`. |
+| `--model-output` | Override `objective.model_output`: `source`, `target`, or `velocity`. |
+| `--loss-space` | Override `objective.loss_space`: `source`, `target`, or `velocity`. |
+| `--prediction-min-denom` | Override `objective.min_denom` for prediction-space conversions. |
 | `--straightness-weight` | Override `objective.straightness.weight`; `0` disables it. |
 | `--straightness-sample-size` | Override `objective.straightness.sample_size`. |
 | `--direction-weight` | Override `objective.direction_weight` for `direction_only_straight`. |
@@ -175,6 +219,9 @@ conditional flow matching MSE:
 objective:
   name: flow_matching
   loss: mse
+  model_output: velocity
+  loss_space: velocity
+  min_denom: 0.001
 ```
 
 To test direction-only straight flow, use the dedicated YAML config:
