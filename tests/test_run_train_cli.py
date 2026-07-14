@@ -285,6 +285,12 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
         sample_checkpoint_cli,
         "load_checkpoint",
         lambda path, map_location: {
+            "prediction_contract": {
+                "path": "linear",
+                "objective": "flow_matching",
+                "model_output": "velocity",
+                "loss_space": "velocity",
+            },
             "config": {
                 "path": {"name": "linear"},
                 "objective": {
@@ -351,6 +357,12 @@ def test_sample_checkpoint_rejects_discrete_metadata_before_building_model(
         sample_checkpoint_cli,
         "load_checkpoint",
         lambda path, map_location: {
+            "prediction_contract": {
+                "path": "linear",
+                "objective": "discrete_diffusion",
+                "model_output": "target",
+                "loss_space": "velocity",
+            },
             "config": {
                 "path": {"name": "linear"},
                 "objective": {
@@ -376,6 +388,132 @@ def test_sample_checkpoint_rejects_discrete_metadata_before_building_model(
     monkeypatch.setattr(sample_checkpoint_cli, "build_path", lambda config: object())
 
     with pytest.raises(ValueError, match="discrete checkpoints are incompatible"):
+        sample_checkpoint_cli.main()
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["path", "objective", "model_output", "loss_space"],
+)
+def test_sample_checkpoint_rejects_missing_prediction_contract_field_before_model_build(
+    tmp_path,
+    monkeypatch,
+    missing_field: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "checkpoint.pt"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_bytes(b"checkpoint")
+    config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+    }
+    prediction_contract = {
+        "path": "linear",
+        "objective": "flow_matching",
+        "model_output": "velocity",
+        "loss_space": "velocity",
+    }
+    prediction_contract.pop(missing_field)
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "parse_args",
+        lambda: Namespace(
+            run_dir=str(run_dir),
+            checkpoint=None,
+            output_dir=None,
+            device="cpu",
+            register_only=False,
+        ),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "resolve_device", lambda value: value)
+    monkeypatch.setattr(sample_checkpoint_cli, "_sampling_overrides", lambda args: {})
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "load_checkpoint",
+        lambda path, map_location: {
+            "prediction_contract": prediction_contract,
+            "config": config,
+            "model_state_dict": {},
+        },
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_model",
+        lambda *args, **kwargs: pytest.fail("model must not be built"),
+    )
+
+    with pytest.raises(ValueError, match=rf"prediction_contract.{missing_field}"):
+        sample_checkpoint_cli.main()
+
+
+@pytest.mark.parametrize(
+    ("field", "checkpoint_value"),
+    [
+        ("path", "spherical"),
+        ("objective", "diffusion"),
+        ("model_output", "target"),
+        ("loss_space", "target"),
+    ],
+)
+def test_sample_checkpoint_rejects_prediction_contract_mismatch_before_model_build(
+    tmp_path,
+    monkeypatch,
+    field: str,
+    checkpoint_value: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    checkpoint_path = run_dir / "checkpoint.pt"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_bytes(b"checkpoint")
+    config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+    }
+    prediction_contract = {
+        "path": "linear",
+        "objective": "flow_matching",
+        "model_output": "velocity",
+        "loss_space": "velocity",
+    }
+    prediction_contract[field] = checkpoint_value
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "parse_args",
+        lambda: Namespace(
+            run_dir=str(run_dir),
+            checkpoint=None,
+            output_dir=None,
+            device="cpu",
+            register_only=False,
+        ),
+    )
+    monkeypatch.setattr(sample_checkpoint_cli, "resolve_device", lambda value: value)
+    monkeypatch.setattr(sample_checkpoint_cli, "_sampling_overrides", lambda args: {})
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "load_checkpoint",
+        lambda path, map_location: {
+            "prediction_contract": prediction_contract,
+            "config": config,
+            "model_state_dict": {},
+        },
+    )
+    monkeypatch.setattr(
+        sample_checkpoint_cli,
+        "build_model",
+        lambda *args, **kwargs: pytest.fail("model must not be built"),
+    )
+
+    with pytest.raises(ValueError, match=rf"{field}=.*prediction contract"):
         sample_checkpoint_cli.main()
 
 

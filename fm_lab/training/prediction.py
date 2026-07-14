@@ -113,6 +113,12 @@ def velocity_model_for_objective(
     output = output_kind_for_objective(objective)
     if output is PredictionKind.VELOCITY:
         return model
+    if not isinstance(path, ConvertibleFlowPath):
+        raise ValueError(
+            "Sampling source/target output requires a ConvertibleFlowPath; "
+            f"path {getattr(path, 'name', path.__class__.__name__)!r} does not "
+            "support prediction conversion."
+        )
     min_denom = float(getattr(objective, "min_denom", 1e-3))
     return VelocityFromPrediction(
         model,

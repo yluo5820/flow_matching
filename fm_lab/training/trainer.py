@@ -18,6 +18,7 @@ from tqdm.auto import trange
 from fm_lab.couplings.base import Coupling, pair_with_condition
 from fm_lab.data.base import TargetDistribution
 from fm_lab.paths.base import FlowPath
+from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.plotting.diagnostics import plot_training_history
 from fm_lab.plotting.trajectories import (
     plot_generated_samples,
@@ -97,6 +98,7 @@ def train_flow_matching(
     )
     _validate_training_compatibility(objective, coupling, path, model)
     checkpoint_config = _checkpoint_config(config, path=path, objective=objective)
+    prediction_contract = _prediction_contract(path=path, objective=objective)
     condition_dropout = _condition_dropout_probability(config, model)
 
     trainable_path = _is_trainable_path(path)
@@ -274,6 +276,7 @@ def train_flow_matching(
                 scheduler=theta_scheduler,
                 step=step,
                 config=checkpoint_config,
+                prediction_contract=prediction_contract,
                 metrics={"latest_loss": float(loss_metrics.get("loss", float("nan")))},
                 history=history,
                 rng_state=capture_rng_state(),
@@ -327,6 +330,7 @@ def train_flow_matching(
         path_module=path if isinstance(path, nn.Module) else None,
         step=selected_step,
         config=checkpoint_config,
+        prediction_contract=prediction_contract,
         metrics=metrics,
         history=history,
         scheduler=theta_scheduler,
@@ -597,6 +601,8 @@ def sample_and_plot(
         diffusion_config=config.get("diffusion", {}),
         class_counts=getattr(target, "class_counts", None),
     )
+    if getattr(objective, "prediction_type", None) == "score":
+        raise ValueError("ODE sampling does not support score output.")
     if path is None:
         if guidance.density is not None and guidance.density.enabled:
             raise ValueError("Density guidance requires a sampling path.")
@@ -874,6 +880,22 @@ def _validate_training_compatibility(
 
 
 _DISCRETE_OBJECTIVE_NAMES = frozenset({"discrete_diffusion", "ddpm", "cbdm", "oc", "cm"})
+_DIFFUSION_OBJECTIVE_NAMES = frozenset(
+    {
+        "diffusion",
+        "gaussian_diffusion",
+        "diffusion_objective",
+        "diffusion_epsilon",
+        "epsilon_prediction",
+        "noise_prediction",
+        "diffusion_score",
+        "score_matching",
+        "diffusion_velocity",
+        "diffusion_x",
+        "x_prediction",
+        "clean_prediction",
+    }
+)
 
 
 def validate_checkpoint_compatibility(
@@ -883,22 +905,52 @@ def validate_checkpoint_compatibility(
 ) -> None:
     """Reject incompatible or ambiguous checkpoints before loading model state."""
 
+    prediction_contract = checkpoint.get("prediction_contract")
+    if not isinstance(prediction_contract, dict):
+        raise ValueError(
+            "Checkpoint is missing continuous prediction metadata: prediction_contract."
+        )
+    serialized = _validate_contract_values(
+        prediction_contract,
+        label="Checkpoint prediction_contract",
+    )
     serialized_config = checkpoint.get("config")
     if not isinstance(serialized_config, dict):
         raise ValueError("Checkpoint is missing continuous prediction metadata: config.")
-    serialized = _continuous_checkpoint_contract(serialized_config, label="Checkpoint")
+    embedded = _continuous_checkpoint_contract(serialized_config, label="Checkpoint config")
     active = _continuous_checkpoint_contract(active_config, label="Active config")
+    _raise_contract_mismatch(
+        serialized,
+        embedded,
+        left_label="prediction contract",
+        right_label="embedded config",
+    )
+    _raise_contract_mismatch(
+        serialized,
+        active,
+        left_label="prediction contract",
+        right_label="active config",
+    )
+
+
+def _raise_contract_mismatch(
+    left: dict[str, str],
+    right: dict[str, str],
+    *,
+    left_label: str,
+    right_label: str,
+) -> None:
     mismatches = [
         name
         for name in ("path", "objective", "model_output", "loss_space")
-        if serialized[name] != active[name]
+        if left[name] != right[name]
     ]
     if mismatches:
         details = ", ".join(
-            f"{name}={serialized[name]!r} (checkpoint) != {active[name]!r} (active)"
+            f"{name}={left[name]!r} ({left_label}) != {right[name]!r} ({right_label})"
             for name in mismatches
         )
-        raise ValueError(f"Checkpoint metadata is incompatible with the active config: {details}.")
+        raise ValueError(f"Checkpoint prediction metadata is incompatible: {details}.")
 
 
 def _continuous_checkpoint_contract(
@@ -909,11 +961,11 @@ def _continuous_checkpoint_contract(
     objective_config = config.get("objective")
     if not isinstance(objective_config, dict):
         raise ValueError(f"{label} is missing continuous prediction metadata: objective.")
-    objective_name = str(objective_config.get("name", "")).lower()
+    objective_name = objective_config.get("name")
     if objective_name in _DISCRETE_OBJECTIVE_NAMES:
         raise ValueError("discrete checkpoints are incompatible with continuous ODE sampling.")
     path_config = config.get("path")
-    if not isinstance(path_config, dict) or not path_config.get("name"):
+    if not isinstance(path_config, dict):
         raise ValueError(f"{label} is missing continuous prediction metadata: path.name.")
     missing = [
         key for key in ("name", "model_output", "loss_space") if key not in objective_config
@@ -921,12 +973,51 @@ def _continuous_checkpoint_contract(
     if missing:
         fields = ", ".join(f"objective.{key}" for key in missing)
         raise ValueError(f"{label} is missing continuous prediction metadata: {fields}.")
-    return {
-        "path": str(path_config["name"]).lower(),
-        "objective": objective_name,
-        "model_output": str(objective_config["model_output"]).lower(),
-        "loss_space": str(objective_config["loss_space"]).lower(),
-    }
+    return _validate_contract_values(
+        {
+            "path": path_config.get("name"),
+            "objective": objective_name,
+            "model_output": objective_config.get("model_output"),
+            "loss_space": objective_config.get("loss_space"),
+        },
+        label=label,
+    )
+
+
+def _validate_contract_values(
+    contract: dict[str, Any],
+    *,
+    label: str,
+) -> dict[str, str]:
+    fields = ("path", "objective", "model_output", "loss_space")
+    missing = [field for field in fields if field not in contract]
+    if missing:
+        names = ", ".join(f"prediction_contract.{field}" for field in missing)
+        raise ValueError(f"{label} is missing continuous prediction metadata: {names}.")
+    canonical: dict[str, str] = {}
+    for field in fields:
+        raw = contract[field]
+        value = raw if isinstance(raw, str) else ""
+        if not value or value != value.strip().lower():
+            raise ValueError(
+                f"{label} {field} must be a non-empty canonical lowercase value."
+            )
+        canonical[field] = value
+    for field in ("model_output", "loss_space"):
+        if canonical[field] not in {*(kind.value for kind in PredictionKind), "score"}:
+            raise ValueError(
+                f"{label} {field} must be source, target, velocity, or score."
+            )
+    if (
+        "score" in {canonical["model_output"], canonical["loss_space"]}
+        and canonical["objective"] not in _DIFFUSION_OBJECTIVE_NAMES
+    ):
+        raise ValueError(
+            f"{label} score output is valid only for a Gaussian DiffusionObjective."
+        )
+    if canonical["objective"] in _DISCRETE_OBJECTIVE_NAMES:
+        raise ValueError("discrete checkpoints are incompatible with continuous ODE sampling.")
+    return canonical
 
 
 def _checkpoint_config(
@@ -946,14 +1037,37 @@ def _checkpoint_config(
         model_output = getattr(objective, "prediction_type", None)
     if model_output is None:
         raise ValueError("Continuous objective is missing model output metadata.")
-    objective_config["model_output"] = str(model_output).lower()
-    objective_config["loss_space"] = str(
+    objective_config["model_output"] = _checkpoint_prediction_value(model_output)
+    objective_config["loss_space"] = _checkpoint_prediction_value(
         getattr(objective, "loss_space", model_output)
-    ).lower()
+    )
     if hasattr(objective, "min_denom"):
         objective_config["min_denom"] = float(objective.min_denom)
     checkpoint_config["objective"] = objective_config
     return checkpoint_config
+
+
+def _prediction_contract(*, path: FlowPath, objective: Any) -> dict[str, str]:
+    raw_model_output = getattr(objective, "model_output", None)
+    if raw_model_output is None:
+        raw_model_output = getattr(objective, "prediction_type", None)
+    if raw_model_output is None:
+        raise ValueError("Continuous objective is missing model output metadata.")
+    model_output = _checkpoint_prediction_value(raw_model_output)
+    return {
+        "path": str(getattr(path, "name", path.__class__.__name__)).lower(),
+        "objective": str(getattr(objective, "name", "")).lower(),
+        "model_output": model_output,
+        "loss_space": _checkpoint_prediction_value(
+            getattr(objective, "loss_space", raw_model_output)
+        ),
+    }
+
+
+def _checkpoint_prediction_value(value: str | PredictionKind) -> str:
+    if str(value).lower() == "score":
+        return "score"
+    return normalize_prediction_kind(value).value
 
 
 def _velocity_sampling_skip_reason(objective: Any) -> str | None:

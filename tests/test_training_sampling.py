@@ -19,6 +19,7 @@ from fm_lab.training.trainer import (
     _validate_training_compatibility,
     sample_and_plot,
     train_flow_matching,
+    validate_checkpoint_compatibility,
 )
 from fm_lab.utils.checkpoints import load_checkpoint, save_checkpoint
 
@@ -149,6 +150,11 @@ class AuditingEulerSolver(EulerSolver):
             return_trajectory=return_trajectory,
             **kwargs,
         )
+
+
+class RejectingSolver(EulerSolver):
+    def solve(self, *args, **kwargs):
+        pytest.fail("solver must not be evaluated")
 
 
 def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> None:
@@ -406,6 +412,12 @@ def test_resume_rejects_discrete_checkpoint_metadata_before_loading_weights(tmp_
                 "loss_space": "velocity",
             },
         },
+        prediction_contract={
+            "path": "linear",
+            "objective": "discrete_diffusion",
+            "model_output": "target",
+            "loss_space": "velocity",
+        },
         metrics={},
         history=[],
     )
@@ -459,6 +471,121 @@ def test_sample_and_plot_rejects_non_velocity_predictions_without_path(
             source=ConstantSource(),
             model=TrainableConstantVelocity(dim=2, value=1.0),
             solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
+
+def test_sample_and_plot_rejects_gaussian_x_prediction_before_solver(tmp_path) -> None:
+    config = _sampling_config(seed=111)
+    config["objective"] = {"name": "diffusion", "prediction_type": "x"}
+
+    with pytest.raises(
+        ValueError,
+        match="source/target output requires a ConvertibleFlowPath",
+    ):
+        sample_and_plot(
+            config=config,
+            run_dir=tmp_path,
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            path=GaussianDiffusionPath(schedule="linear"),
+            model=TrainableConstantVelocity(dim=2, value=1.0),
+            solvers=[RejectingSolver()],
+            device=torch.device("cpu"),
+        )
+
+
+def test_sample_and_plot_preserves_gaussian_velocity_sampling(tmp_path) -> None:
+    config = _sampling_config(seed=111)
+    config["objective"] = {"name": "diffusion", "prediction_type": "velocity"}
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        path=GaussianDiffusionPath(schedule="linear"),
+        model=ZeroVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert summary["output_kind"] == "velocity"
+    assert np.allclose(np.load(tmp_path / "samples" / "euler_nfe3.npy"), 0.0)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("path", ""),
+        ("objective", "Flow_Matching"),
+        ("model_output", "x"),
+        ("loss_space", "v"),
+    ],
+)
+def test_checkpoint_contract_rejects_noncanonical_values(
+    field: str,
+    invalid_value: str,
+) -> None:
+    config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+    }
+    prediction_contract = {
+        "path": "linear",
+        "objective": "flow_matching",
+        "model_output": "velocity",
+        "loss_space": "velocity",
+    }
+    prediction_contract[field] = invalid_value
+
+    with pytest.raises(ValueError, match=field):
+        validate_checkpoint_compatibility(
+            {"prediction_contract": prediction_contract, "config": config},
+            active_config=config,
+        )
+
+
+def test_checkpoint_contract_rejects_score_for_flow_matching() -> None:
+    config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "model_output": "score",
+            "loss_space": "score",
+        },
+    }
+    contract = {
+        "path": "linear",
+        "objective": "flow_matching",
+        "model_output": "score",
+        "loss_space": "score",
+    }
+
+    with pytest.raises(ValueError, match="score.*DiffusionObjective"):
+        validate_checkpoint_compatibility(
+            {"prediction_contract": contract, "config": config},
+            active_config=config,
+        )
+
+
+def test_sample_and_plot_rejects_diffusion_score_before_solver(tmp_path) -> None:
+    config = _sampling_config(seed=111)
+    config["objective"] = {"name": "diffusion", "prediction_type": "score"}
+
+    with pytest.raises(ValueError, match="ODE sampling does not support score output"):
+        sample_and_plot(
+            config=config,
+            run_dir=tmp_path,
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            path=GaussianDiffusionPath(schedule="linear"),
+            model=ZeroVelocity(),
+            solvers=[RejectingSolver()],
             device=torch.device("cpu"),
         )
 
@@ -872,6 +999,35 @@ def test_train_diffusion_epsilon_skips_velocity_sampling(tmp_path) -> None:
     assert (tmp_path / "checkpoint.pt").exists()
     assert not (tmp_path / "samples").exists()
     assert not (tmp_path / "trajectories").exists()
+
+
+def test_train_diffusion_score_preserves_training_and_skips_sampling(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "path": {"name": "gaussian_diffusion"},
+        "objective": {"name": "diffusion", "prediction_type": "score"},
+        "training": {"batch_size": 8, "steps": 1, "log_every": 1, "lr": 1.0e-3},
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=GaussianDiffusionPath(schedule="linear"),
+        model=TrainableConstantVelocity(dim=2, value=0.5),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    checkpoint = load_checkpoint(tmp_path / "checkpoint.pt")
+
+    assert metrics["sampling"]["skipped"] is True
+    assert "score" in metrics["sampling"]["reason"]
+    assert checkpoint["prediction_contract"]["model_output"] == "score"
+    assert checkpoint["prediction_contract"]["loss_space"] == "score"
 
 
 class TrainableTimeScaledVelocity(nn.Module):

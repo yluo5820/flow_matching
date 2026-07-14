@@ -28,6 +28,12 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
         step=7,
         config={"training": {"steps": 10}},
         metrics={"loss": 1.0},
+        prediction_contract={
+            "path": "linear",
+            "objective": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
         history=[{"step": 1, "loss": 2.0}],
         rng_state=capture_rng_state(),
     )
@@ -39,6 +45,12 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
     assert "optimizer_state_dict" in payload
     assert "scheduler_state_dict" in payload
     assert payload["history"] == [{"step": 1, "loss": 2.0}]
+    assert payload["prediction_contract"] == {
+        "path": "linear",
+        "objective": "flow_matching",
+        "model_output": "velocity",
+        "loss_space": "velocity",
+    }
     assert set(payload["rng_state_dict"]) >= {"python", "numpy", "torch"}
 
 

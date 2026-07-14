@@ -61,6 +61,7 @@ def save_checkpoint(
     step: int,
     config: dict[str, Any],
     metrics: dict[str, Any],
+    prediction_contract: dict[str, str] | None = None,
     history: list[dict[str, Any]] | None = None,
     rng_state: dict[str, Any] | None = None,
 ) -> None:
@@ -74,6 +75,8 @@ def save_checkpoint(
         "config": config,
         "metrics": metrics,
     }
+    if prediction_contract is not None:
+        payload["prediction_contract"] = dict(prediction_contract)
     if optimizer is not None:
         if isinstance(optimizer, dict):
             payload["optimizer_state_dict"] = {
