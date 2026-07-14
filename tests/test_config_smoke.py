@@ -3,7 +3,13 @@ from pathlib import Path
 import torch
 
 from fm_lab.data import LongTailedFashionMNIST
-from fm_lab.experiments.factory import build_model, build_path, build_source, build_target
+from fm_lab.experiments.factory import (
+    build_model,
+    build_path,
+    build_solvers,
+    build_source,
+    build_target,
+)
 from fm_lab.paths import GaussianDiffusionPath
 from fm_lab.training.losses import DiffusionObjective, FlowMatchingObjective, build_objective
 from fm_lab.utils.config import deep_update, load_config
@@ -201,232 +207,123 @@ def test_diffusion_config_builds_path_and_objective() -> None:
     assert model(x0, t).shape == (2, 3)
 
 
-def test_imbdiff_round3_configs_encode_paper_protocol() -> None:
-    paths = (
-        "configs/imbdiff/cifar10_lt_ddpm_epsilon.yaml",
-        "configs/imbdiff/cifar100_lt_ddpm_epsilon.yaml",
+FASHION_MNIST_CONTINUOUS_CONFIGS = (
+    "fashion_mnist_lt_ir100_x_vloss.yaml",
+    "fashion_mnist_lt_ir100_x_vloss_cbdm.yaml",
+    "fashion_mnist_lt_ir100_x_vloss_oc.yaml",
+    "fashion_mnist_lt_ir100_x_vloss_cm.yaml",
+)
+
+
+def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
+    configs = [
+        load_config(Path("configs/fashion_mnist_lt") / name)
+        for name in FASHION_MNIST_CONTINUOUS_CONFIGS
+    ]
+    controlled_fields = (
+        "data",
+        "source",
+        "coupling",
+        "path",
+        "conditioning",
+        "training",
+        "solvers",
+        "sampling",
     )
 
-    for path in paths:
-        config = load_config(path)
-        expected_classes = 100 if "cifar100" in path else 10
-        assert config["data"]["imbalance_factor"] == 0.01
-        assert config["source"]["dim"] == 3072
-        assert config["conditioning"]["num_classes"] == expected_classes
-        assert config["model"]["channel_multipliers"] == [1, 2, 2, 2]
-        assert config["model"]["attention_levels"] == [1]
-        assert config["diffusion"] == {
-            "timesteps": 1000,
-            "beta_start": 0.0001,
-            "beta_end": 0.02,
-            "variance": "fixed_large",
-        }
-        assert config["objective"] == {
-            "name": "discrete_diffusion",
-            "prediction_type": "epsilon",
-        }
-        assert config["training"]["optimizer"] == "adam"
-        assert config["training"]["warmup_steps"] == 5000
-        assert config["training"]["ema_decay"] == 0.9999
-        assert config["sampling"]["classifier_free_guidance"] == {
-            "enabled": True,
-            "convention": "fm_lab",
-            "scale": 2.5,
-            "paper_omega": 1.5,
-        }
-
-
-def test_imbdiff_x_vloss_config_changes_only_objective_track() -> None:
-    config = load_config("configs/imbdiff/cifar10_lt_x_vloss.yaml")
-
-    assert config["objective"]["prediction_type"] == "x_vloss"
-    assert config["experiment"]["track"] == "ddpm_x_vloss"
-
-
-def test_imbdiff_cbdm_configs_encode_paper_regularizer() -> None:
-    paths = (
-        "configs/imbdiff/cifar10_lt_cbdm.yaml",
-        "configs/imbdiff/cifar100_lt_cbdm.yaml",
-    )
-
-    for path in paths:
-        config = load_config(path)
-        expected_classes = 100 if "cifar100" in path else 10
-        objective = build_objective(
-            config["objective"],
-            diffusion_config=config["diffusion"],
-            class_counts=[1] * expected_classes,
-        )
-
-        assert objective.method == "cbdm"
-        assert config["objective"]["cbdm"] == {
+    for field in controlled_fields:
+        assert all(config[field] == configs[0][field] for config in configs[1:])
+    baseline_model = configs[0]["model"]
+    for config in configs[1:]:
+        assert {
+            key: value for key, value in config["model"].items() if key != "capacity"
+        } == baseline_model
+    assert configs[0]["data"]["imbalance_factor"] == 0.01
+    assert configs[0]["source"] == {"name": "gaussian", "dim": 784}
+    assert configs[0]["coupling"]["name"] == "independent"
+    assert configs[0]["path"]["name"] == "linear"
+    assert configs[0]["model"]["image_shape"] == [1, 28, 28]
+    assert configs[0]["sampling"]["n_samples"] == 10_000
+    assert configs[0]["sampling"]["classes"] == list(range(10))
+    assert configs[0]["sampling"]["nfe"] == 64
+    assert configs[0]["experiment"]["seed"] == 0
+    assert configs[0]["objective"] == {
+        "name": "flow_matching",
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.001,
+        "modifiers": [],
+    }
+    assert configs[1]["objective"]["modifiers"] == [
+        {
+            "name": "cbdm",
             "target_distribution": "train",
             "tau": 0.001,
             "gamma": 0.25,
+            "comparison_space": "velocity",
         }
-        assert config["experiment"]["track"] == "cbdm"
-
-
-def test_imbdiff_oc_configs_encode_reference_transfer() -> None:
-    paths = (
-        "configs/imbdiff/cifar10_lt_oc.yaml",
-        "configs/imbdiff/cifar100_lt_oc.yaml",
-    )
-
-    for path in paths:
-        config = load_config(path)
-        expected_classes = 100 if "cifar100" in path else 10
-        objective = build_objective(
-            config["objective"],
-            diffusion_config=config["diffusion"],
-            class_counts=[1] * expected_classes,
-        )
-
-        assert objective.method == "oc"
-        assert config["objective"]["oc"] == {
-            "transfer_mode": "t2h",
-            "cut_time": -1,
-        }
-        assert config["experiment"]["track"] == "oc"
-
-
-def test_imbdiff_cm_configs_encode_reference_capacity_objective() -> None:
-    paths = (
-        "configs/imbdiff/cifar10_lt_cm.yaml",
-        "configs/imbdiff/cifar100_lt_cm.yaml",
-    )
-
-    for path in paths:
-        config = load_config(path)
-        expected_classes = 100 if "cifar100" in path else 10
-        objective = build_objective(
-            config["objective"],
-            diffusion_config=config["diffusion"],
-            class_counts=[1] * expected_classes,
-        )
-
-        assert objective.method == "cm"
-        assert config["model"]["capacity"] == {
-            "enabled": True,
-            "rank_ratio": 0.1,
-            "adapter_scale": 1.0,
-            "reference_declared_scale": 0.5,
-            "parts": ["up"],
-        }
-        assert config["objective"]["oc"] == {
-            "transfer_mode": "t2h",
-            "cut_time": -1,
-        }
-        assert config["objective"]["cm"] == {
+    ]
+    assert configs[2]["objective"]["modifiers"] == [
+        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.001}
+    ]
+    assert configs[3]["objective"]["modifiers"] == [
+        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.001},
+        {
+            "name": "cm",
             "consistency_weight": 1.0,
             "diversity_weight": 0.2,
-        }
-        assert config["experiment"]["track"] == "cm"
+            "comparison_space": "velocity",
+        },
+    ]
+    assert configs[3]["model"]["capacity"]["parts"] == ["up"]
 
 
-def test_all_imbdiff_configs_enable_shared_early_stopping() -> None:
-    paths = sorted(Path("configs/imbdiff").glob("*.yaml"))
-    expected = {
-        "enabled": True,
-        "patience_steps": 10000,
-        "warmup_steps": 20000,
-        "min_delta": 0.0001,
-        "ema_alpha": 0.01,
-    }
+def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> None:
+    monkeypatch.setattr(LongTailedFashionMNIST, "_load", lambda self: None)
 
-    assert len(paths) == 9
-    for path in paths:
-        assert load_config(path)["training"]["early_stopping"] == expected
-
-
-def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
-    expected_files = {
-        "cifar10_lt_ddpm_epsilon_local.yaml": (
-            "discrete_diffusion",
-            "epsilon",
-            False,
-            8000,
-            4000,
-            2000,
-        ),
-        "cifar10_lt_x_vloss_local.yaml": (
-            "discrete_diffusion",
-            "x_vloss",
-            False,
-            12000,
-            6000,
-            4000,
-        ),
-        "cifar10_lt_cbdm_local.yaml": ("cbdm", "epsilon", False, 8000, 4000, 2000),
-        "cifar10_lt_oc_local.yaml": ("oc", "epsilon", False, 8000, 4000, 2000),
-        "cifar10_lt_cm_local.yaml": ("cm", "x_vloss", True, 12000, 6000, 4000),
-    }
-    paths = sorted(Path("configs/imbdiff/local").glob("*.yaml"))
-
-    assert {path.name for path in paths} == set(expected_files)
-    for path in paths:
-        (
-            objective_name,
-            prediction_type,
-            capacity_enabled,
-            steps,
-            early_warmup_steps,
-            patience_steps,
-        ) = expected_files[path.name]
-        config = load_config(path)
-        assert config["model"]["name"] == "image_unet"
-        assert config["model"]["image_shape"] == [3, 32, 32]
-        assert config["model"]["base_channels"] == 32
-        assert config["model"]["time_embedding_dim"] == 128
-        assert config["model"]["activation"] == "silu"
-        assert config["model"]["zero_init_head"] is True
-        assert config["objective"]["name"] == objective_name
-        assert config["objective"]["prediction_type"] == prediction_type
-        assert config["training"]["batch_size"] == 32
-        assert config["training"]["steps"] == steps
-        assert config["training"]["warmup_steps"] == 500
-        assert config["training"]["checkpoint_every"] == 2000
-        assert config["training"]["ema_decay"] == 0.999
-        assert config["training"]["early_stopping"] == {
-            "enabled": True,
-            "patience_steps": patience_steps,
-            "warmup_steps": early_warmup_steps,
-            "min_delta": 0.0001,
-            "ema_alpha": 0.3,
-        }
-        assert config["sampling"]["n_samples"] == 256
-        assert config["sampling"]["sample_batch_size"] == 32
-        assert config["sampling"]["plot_max_points"] == 64
-        assert config["sampling"]["ddim_skip"] == 16
-        assert config["sampling"]["classifier_free_guidance"]["scale"] == 1.0
-        assert config["sampling"]["classifier_free_guidance"]["paper_omega"] == 0.0
-        assert config["sampling"]["live_ema_comparison"] == {
-            "enabled": True,
-            "n_samples": 64,
-        }
-        assert config["experiment"]["output_dir"].startswith("runs/imbdiff/local/")
-
+    for name in FASHION_MNIST_CONTINUOUS_CONFIGS:
+        config = load_config(Path("configs/fashion_mnist_lt") / name)
         source = build_source(config)
-        model = build_model(config, dim=source.dim)
-        parameter_count = sum(parameter.numel() for parameter in model.parameters())
-        assert model.is_class_conditional
-        if capacity_enabled:
-            assert parameter_count > 1_078_569
-        else:
-            assert parameter_count == 1_078_569
-        assert model.capacity_metadata()["enabled"] is capacity_enabled
-        if path.name == "cifar10_lt_cm_local.yaml":
-            assert config["model"]["capacity"] == {
-                "enabled": True,
-                "rank_ratio": 0.1,
-                "adapter_scale": 1.0,
-                "reference_declared_scale": 0.5,
-                "parts": ["up"],
-            }
-            assert config["objective"]["cm"] == {
-                "consistency_weight": 1.0,
-                "diversity_weight": 0.2,
-            }
+
+        assert isinstance(build_target(config), LongTailedFashionMNIST)
+        assert build_path(config).name == "linear"
+        assert build_model(config, dim=source.dim).is_class_conditional
+        assert build_solvers(config)[0].name == "euler"
+        assert isinstance(
+            build_objective(config["objective"], class_counts=[1] * 10),
+            FlowMatchingObjective,
+        )
+
+
+def test_discrete_imbdiff_training_configs_are_removed() -> None:
+    assert not list(Path("configs/imbdiff").rglob("*.yaml"))
+
+
+def test_shipped_training_configs_use_canonical_objective_schema() -> None:
+    forbidden_keys = {"diffusion", "prediction_type", "ddim_skip", "eta", "cut_time"}
+
+    for config_path in Path("configs").rglob("*.yaml"):
+        config = load_config(config_path)
+        data = config.get("data", {})
+        is_active_long_tail = (
+            "configs/fashion_mnist_lt" in str(config_path)
+            or "imbalance_factor" in data
+            or "tail" in str(data.get("variant_id", ""))
+        )
+        if is_active_long_tail:
+            assert not (forbidden_keys & _nested_keys(config)), config_path
+        objective = config.get("objective", {})
+        assert "x_prediction" not in objective, config_path
+
+
+def _nested_keys(value) -> set[str]:
+    if isinstance(value, dict):
+        return set(value) | {
+            key for nested in value.values() for key in _nested_keys(nested)
+        }
+    if isinstance(value, list):
+        return {key for nested in value for key in _nested_keys(nested)}
+    return set()
 
 
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:

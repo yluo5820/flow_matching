@@ -32,10 +32,9 @@ model:
 
 objective:
   name: flow_matching
-  model_output: x
-  x_prediction:
-    loss_space: clean
-    min_denom: 0.05
+  model_output: target
+  loss_space: target
+  min_denom: 0.05
 
 training:
   batch_size: 64

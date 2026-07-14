@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import fm_lab.experiments.run_train as train_cli
 import fm_lab.experiments.run_sample_checkpoint as sample_checkpoint_cli
 from fm_lab.experiments.run_sample_checkpoint import (
     _sampling_overrides as _checkpoint_sampling_overrides,
@@ -20,12 +21,11 @@ def test_objective_overrides_from_cli_args() -> None:
     args = Namespace(
         objective="flow_matching",
         objective_loss="mse",
-        model_output=None,
-        x_prediction_loss_space=None,
-        x_prediction_min_denom=None,
-        diffusion_prediction_type=None,
-        straightness_weight=0.01,
-        straightness_sample_size=128,
+        model_output="target",
+        loss_space="velocity",
+        prediction_min_denom=0.01,
+        straightness_weight=None,
+        straightness_sample_size=None,
         direction_weight=None,
         speed_weight=None,
     )
@@ -33,7 +33,9 @@ def test_objective_overrides_from_cli_args() -> None:
     assert _objective_overrides(args) == {
         "name": "flow_matching",
         "loss": "mse",
-        "straightness": {"weight": 0.01, "sample_size": 128},
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.01,
     }
 
 
@@ -42,9 +44,8 @@ def test_objective_overrides_allows_disabling_straightness() -> None:
         objective=None,
         objective_loss=None,
         model_output=None,
-        x_prediction_loss_space=None,
-        x_prediction_min_denom=None,
-        diffusion_prediction_type=None,
+        loss_space=None,
+        prediction_min_denom=None,
         straightness_weight=0.0,
         straightness_sample_size=None,
         direction_weight=None,
@@ -59,9 +60,8 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
         objective="direction_only_straight",
         objective_loss=None,
         model_output=None,
-        x_prediction_loss_space=None,
-        x_prediction_min_denom=None,
-        diffusion_prediction_type=None,
+        loss_space=None,
+        prediction_min_denom=None,
         straightness_weight=None,
         straightness_sample_size=None,
         direction_weight=10.0,
@@ -75,45 +75,21 @@ def test_direction_only_weight_overrides_from_cli_args() -> None:
     }
 
 
-def test_diffusion_prediction_type_override_from_cli_args() -> None:
-    args = Namespace(
-        objective="diffusion",
-        objective_loss=None,
-        model_output=None,
-        x_prediction_loss_space=None,
-        x_prediction_min_denom=None,
-        diffusion_prediction_type="score",
-        straightness_weight=None,
-        straightness_sample_size=None,
-        direction_weight=None,
-        speed_weight=None,
-    )
+def test_training_parser_help_uses_only_canonical_prediction_flags(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("sys.argv", ["run_train", "--help"])
 
-    assert _objective_overrides(args) == {
-        "name": "diffusion",
-        "prediction_type": "score",
-    }
+    with pytest.raises(SystemExit, match="0"):
+        train_cli.parse_args()
 
-
-def test_x_prediction_overrides_from_cli_args() -> None:
-    args = Namespace(
-        objective="flow_matching",
-        objective_loss=None,
-        model_output="x",
-        x_prediction_loss_space="clean",
-        x_prediction_min_denom=0.05,
-        diffusion_prediction_type=None,
-        straightness_weight=None,
-        straightness_sample_size=None,
-        direction_weight=None,
-        speed_weight=None,
-    )
-
-    assert _objective_overrides(args) == {
-        "name": "flow_matching",
-        "model_output": "x",
-        "x_prediction": {"loss_space": "clean", "min_denom": 0.05},
-    }
+    help_text = capsys.readouterr().out
+    assert "--model-output" in help_text
+    assert "--loss-space" in help_text
+    assert "--prediction-min-denom" in help_text
+    assert "--diffusion-prediction-type" not in help_text
+    assert "--x-prediction-loss-space" not in help_text
+    assert "--x-prediction-min-denom" not in help_text
 
 
 def test_training_overrides_from_cli_args() -> None:
