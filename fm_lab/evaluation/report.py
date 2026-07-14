@@ -21,6 +21,53 @@ from fm_lab.evaluation.metrics import (
 )
 
 
+def evaluate_reference_calibration(
+    real: FeatureCache,
+    *,
+    seed: int = 0,
+    kid_subsets: int = 100,
+    kid_subset_size: int = 1000,
+    recall_k: int = 5,
+    inception_splits: int = 10,
+) -> dict[str, Any]:
+    """Compare two fixed stratified halves of a real reference cache."""
+
+    rng = np.random.default_rng(seed)
+    left_parts: list[np.ndarray] = []
+    right_parts: list[np.ndarray] = []
+    for class_id in sorted(np.unique(real.labels).tolist()):
+        indices = np.flatnonzero(real.labels == class_id)
+        if len(indices) < 2:
+            raise ValueError("Reference calibration requires two samples per class.")
+        indices = rng.permutation(indices)
+        half = len(indices) // 2
+        left_parts.append(indices[:half])
+        right_parts.append(indices[half : 2 * half])
+    left = np.concatenate(left_parts)
+    right = np.concatenate(right_parts)
+    score = inception_score(real.probabilities[left], splits=inception_splits)
+    return {
+        "seed": seed,
+        "samples_per_half": int(len(left)),
+        "metrics": {
+            "fid": fid_score(real.features[left], real.features[right]),
+            "kid": kid_score(
+                real.features[left],
+                real.features[right],
+                num_subsets=kid_subsets,
+                max_subset_size=kid_subset_size,
+                seed=seed,
+            ),
+            "recall": generative_recall(
+                real.features[left],
+                real.features[right],
+                nearest_k=recall_k,
+            ),
+            "inception_score": score,
+        },
+    }
+
+
 def evaluate_feature_caches(
     generated: FeatureCache,
     real: FeatureCache,

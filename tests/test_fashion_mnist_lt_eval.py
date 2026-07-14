@@ -107,4 +107,6 @@ def test_cached_fashion_cli_writes_balanced_report(tmp_path) -> None:
     assert exit_code == 0
     assert (output_dir / "metrics.json").exists()
     assert (output_dir / "metrics.csv").exists()
-    assert "macro_classwise_fid" in (output_dir / "metrics.json").read_text()
+    report_text = (output_dir / "metrics.json").read_text()
+    assert "macro_classwise_fid" in report_text
+    assert "reference_calibration" in report_text

@@ -16,7 +16,11 @@ from fm_lab.diagnostics.mnist_eval import (
 )
 from fm_lab.evaluation.cache import FeatureCache, load_feature_cache, save_feature_cache
 from fm_lab.evaluation.features import extract_classifier_features
-from fm_lab.evaluation.report import evaluate_feature_caches, write_evaluation_report
+from fm_lab.evaluation.report import (
+    evaluate_feature_caches,
+    evaluate_reference_calibration,
+    write_evaluation_report,
+)
 from fm_lab.experiments.factory import resolve_device
 
 _NUM_CLASSES = 10
@@ -84,6 +88,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "imbalance_factor": args.imbalance_factor,
             "reference_split": "official_test",
         }
+    )
+    report["reference_calibration"] = evaluate_reference_calibration(
+        real,
+        seed=args.seed,
+        kid_subsets=args.kid_subsets,
+        kid_subset_size=args.kid_subset_size,
+        recall_k=args.recall_k,
+        inception_splits=args.inception_splits,
     )
     paths = write_evaluation_report(report, args.output_dir)
     print(f"Wrote Fashion-MNIST long-tail metrics: {paths['json']}")
