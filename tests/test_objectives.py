@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch import nn
 
@@ -10,6 +11,7 @@ from fm_lab.training.losses import (
     kernel_vstar_estimate,
     learned_flow_straightness_loss,
 )
+from fm_lab.training.prediction import VelocityFromPrediction
 
 
 class ConstantVelocity(nn.Module):
@@ -161,6 +163,23 @@ def test_flow_matching_prediction_aliases_and_metadata_are_canonical() -> None:
     assert objective.metadata()["loss_space"] == "velocity"
     assert objective.metadata()["min_denom"] == 0.05
     assert "x_prediction" not in objective.metadata()
+
+
+@pytest.mark.parametrize("min_denom", [float("nan"), float("inf")])
+def test_flow_matching_objective_rejects_non_finite_min_denom(min_denom: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        build_objective({"name": "flow_matching", "min_denom": min_denom})
+
+
+@pytest.mark.parametrize("min_denom", [float("nan"), float("inf")])
+def test_velocity_from_prediction_rejects_non_finite_min_denom(min_denom: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        VelocityFromPrediction(
+            FixedPrediction(torch.ones(1, 2)),
+            LinearPath(),
+            model_output="target",
+            min_denom=min_denom,
+        )
 
 
 def test_flow_matching_conversion_requires_convertible_path() -> None:

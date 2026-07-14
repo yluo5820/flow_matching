@@ -768,9 +768,10 @@ def sample_and_plot(
     if path is None:
         if guidance.density is not None and guidance.density.enabled:
             raise ValueError("Density guidance requires a sampling path.")
-        if getattr(objective, "model_output", None) == "x" or getattr(
-            objective, "prediction_type", None
-        ) == "x":
+        model_output = getattr(objective, "model_output", None)
+        if model_output is not None and model_output != "velocity":
+            raise ValueError("Non-velocity model output requires a sampling path.")
+        if getattr(objective, "prediction_type", None) == "x":
             raise ValueError("sample_and_plot requires path for x-prediction checkpoints.")
     else:
         model = velocity_model_for_objective(base_model, path, objective)

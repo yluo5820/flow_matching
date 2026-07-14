@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -74,8 +76,8 @@ class VelocityFromPrediction(nn.Module):
         self.path = path
         self.model_output = normalize_prediction_kind(model_output)
         self.min_denom = float(min_denom)
-        if self.min_denom <= 0:
-            raise ValueError("objective.min_denom must be positive")
+        if not math.isfinite(self.min_denom) or self.min_denom <= 0:
+            raise ValueError("objective.min_denom must be finite and positive")
         self.requires_source_label = bool(getattr(model, "requires_source_label", False))
         self.is_class_conditional = bool(getattr(model, "is_class_conditional", False))
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -96,8 +97,8 @@ class FlowMatchingObjective:
         self.model_output = normalize_prediction_kind(self.model_output).value
         self.loss_space = normalize_prediction_kind(self.loss_space).value
         self.loss = self.loss.lower()
-        if self.min_denom <= 0:
-            raise ValueError("objective.min_denom must be positive")
+        if not math.isfinite(self.min_denom) or self.min_denom <= 0:
+            raise ValueError("objective.min_denom must be finite and positive")
 
     def __call__(
         self,

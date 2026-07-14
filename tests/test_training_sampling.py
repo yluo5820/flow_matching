@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 from torch import nn
 
@@ -312,6 +313,30 @@ def test_sample_and_plot_converts_target_predictions_to_velocity(tmp_path) -> No
 
     generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
     assert np.allclose(generated, 1.0)
+
+
+@pytest.mark.parametrize("model_output", ["target", "source"])
+def test_sample_and_plot_rejects_non_velocity_predictions_without_path(
+    tmp_path,
+    model_output: str,
+) -> None:
+    config = _sampling_config(seed=111)
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": model_output,
+        "loss_space": "velocity",
+    }
+
+    with pytest.raises(ValueError, match="requires a sampling path"):
+        sample_and_plot(
+            config=config,
+            run_dir=tmp_path,
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            model=TrainableConstantVelocity(dim=2, value=1.0),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
 
 
 def test_velocity_model_converts_source_predictions() -> None:
