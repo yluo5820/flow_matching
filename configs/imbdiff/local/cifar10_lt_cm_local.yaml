@@ -53,7 +53,7 @@ diffusion:
 
 objective:
   name: cm
-  prediction_type: epsilon
+  prediction_type: x_vloss
   oc:
     transfer_mode: t2h
     cut_time: -1
@@ -65,12 +65,12 @@ training:
   optimizer: adam
   lr: 0.0002
   batch_size: 32
-  steps: 8000
+  steps: 12000
   warmup_steps: 500
   early_stopping:
     enabled: true
-    patience_steps: 2000
-    warmup_steps: 4000
+    patience_steps: 4000
+    warmup_steps: 6000
     min_delta: 0.0001
     ema_alpha: 0.3
   gradient_clip: 1.0

@@ -336,7 +336,7 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
         ),
         "cifar10_lt_cbdm_local.yaml": ("cbdm", "epsilon", False, 8000, 4000, 2000),
         "cifar10_lt_oc_local.yaml": ("oc", "epsilon", False, 8000, 4000, 2000),
-        "cifar10_lt_cm_local.yaml": ("cm", "epsilon", True, 8000, 4000, 2000),
+        "cifar10_lt_cm_local.yaml": ("cm", "x_vloss", True, 12000, 6000, 4000),
     }
     paths = sorted(Path("configs/imbdiff/local").glob("*.yaml"))
 
@@ -392,6 +392,18 @@ def test_imbdiff_local_cifar10_configs_encode_compact_cpu_profile() -> None:
         else:
             assert parameter_count == 1_078_569
         assert model.capacity_metadata()["enabled"] is capacity_enabled
+        if path.name == "cifar10_lt_cm_local.yaml":
+            assert config["model"]["capacity"] == {
+                "enabled": True,
+                "rank_ratio": 0.1,
+                "adapter_scale": 1.0,
+                "reference_declared_scale": 0.5,
+                "parts": ["up"],
+            }
+            assert config["objective"]["cm"] == {
+                "consistency_weight": 1.0,
+                "diversity_weight": 0.2,
+            }
 
 
 def test_mnist_image_unet_configs_build_matching_components_without_loading_data() -> None:
