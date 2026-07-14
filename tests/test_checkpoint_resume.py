@@ -35,7 +35,7 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
             "loss_space": "velocity",
         },
         training_contract={
-            "version": 1,
+            "version": 2,
             "payload": {"objective": {}, "path": {}, "data": {}},
             "sha256": "digest",
         },
@@ -57,7 +57,7 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
         "loss_space": "velocity",
     }
     assert payload["training_contract"] == {
-        "version": 1,
+        "version": 2,
         "payload": {"objective": {}, "path": {}, "data": {}},
         "sha256": "digest",
     }

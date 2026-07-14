@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import pytest
 import torch
@@ -171,7 +173,21 @@ def _resume_contract_config(
     imbalance_factor: float = 0.01,
 ) -> dict[str, object]:
     return {
+        "experiment": {"name": "resume-contract", "seed": 7, "output_dir": "runs/a"},
+        "source": {"name": "gaussian", "dim": 2, "scale": 1.0},
+        "coupling": {"name": "independent"},
         "path": {"name": "linear", "contract_tag": path_tag},
+        "model": {
+            "name": "mlp",
+            "hidden_dims": [32, 32],
+            "activation": "silu",
+        },
+        "conditioning": {
+            "enabled": True,
+            "num_classes": 2,
+            "embedding_dim": 8,
+            "dropout_probability": 0.15,
+        },
         "objective": {
             "name": "flow_matching",
             "loss": "mse",
@@ -188,9 +204,23 @@ def _resume_contract_config(
             "imbalance_factor": imbalance_factor,
             "subset_seed": 0,
         },
-        "training": {"steps": 10, "batch_size": 4},
+        "training": {
+            "steps": 10,
+            "batch_size": 4,
+            "optimizer": "adamw",
+            "lr": 0.001,
+            "weight_decay": 0.01,
+            "warmup_steps": 5,
+            "ema_decay": 0.9,
+            "gradient_clip": 1.0,
+            "accumulation_steps": 1,
+            "log_every": 2,
+            "checkpoint_every": 2,
+        },
         "sampling": {"n_samples": 20, "nfe": 2},
-        "experiment": {"output_dir": "runs/a"},
+        "evaluation": {"samples_per_class": 2},
+        "plotting": {"max_points": 20},
+        "solvers": {"names": ["euler"], "nfes": [2]},
     }
 
 
@@ -213,9 +243,10 @@ def _build_resume_contract(
 def test_training_contract_serializes_resolved_objective_path_and_data_semantics() -> None:
     contract = _build_resume_contract(_resume_contract_config())
 
-    assert contract["payload"]["objective"]["loss"] == "mse"
-    assert contract["payload"]["objective"]["min_denom"] == 0.001
-    assert contract["payload"]["objective"]["modifiers"] == []
+    assert contract["version"] == 2
+    assert contract["payload"]["objective"]["metadata"]["loss"] == "mse"
+    assert contract["payload"]["objective"]["metadata"]["min_denom"] == 0.001
+    assert contract["payload"]["objective"]["metadata"]["modifiers"] == []
     assert contract["payload"]["path"] == {
         "config": {"contract_tag": "a", "name": "linear"},
         "metadata": {"name": "linear"},
@@ -223,6 +254,53 @@ def test_training_contract_serializes_resolved_objective_path_and_data_semantics
     assert contract["payload"]["data"]["class_counts"] == [100, 10]
     assert "root" not in contract["payload"]["data"]
     assert "download" not in contract["payload"]["data"]
+    assert contract["payload"]["source"]["name"] == "gaussian"
+    assert contract["payload"]["coupling"]["name"] == "independent"
+    assert contract["payload"]["model"]["hidden_dims"] == [32, 32]
+    assert contract["payload"]["conditioning"]["dropout_probability"] == 0.15
+    assert contract["payload"]["training"]["batch_size"] == 4
+    assert "steps" not in contract["payload"]["training"]
+    assert "log_every" not in contract["payload"]["training"]
+    assert "checkpoint_every" not in contract["payload"]["training"]
+    assert "sampling" not in contract["payload"]
+    assert "evaluation" not in contract["payload"]
+    assert "plotting" not in contract["payload"]
+    assert "solvers" not in contract["payload"]
+
+
+_RESUME_CRITICAL_MUTATIONS = [
+    pytest.param("source", "scale", 2.0, id="source"),
+    pytest.param("coupling", "name", "minibatch_ot", id="coupling"),
+    pytest.param("model", "hidden_dims", [64, 64], id="model"),
+    pytest.param("conditioning", "embedding_dim", 16, id="conditioning"),
+    pytest.param("conditioning", "dropout_probability", 0.25, id="cfg-dropout"),
+    pytest.param("training", "batch_size", 8, id="batch-size"),
+    pytest.param("training", "optimizer", "adam", id="optimizer"),
+    pytest.param("training", "lr", 0.002, id="learning-rate"),
+    pytest.param("training", "weight_decay", 0.02, id="weight-decay"),
+    pytest.param("training", "warmup_steps", 10, id="warmup-scheduler"),
+    pytest.param("training", "ema_decay", 0.95, id="ema"),
+    pytest.param("training", "gradient_clip", 0.5, id="gradient-clipping"),
+    pytest.param("training", "accumulation_steps", 2, id="gradient-accumulation"),
+    pytest.param("experiment", "seed", 8, id="seed"),
+]
+
+
+@pytest.mark.parametrize(("section", "field", "value"), _RESUME_CRITICAL_MUTATIONS)
+def test_training_contract_rejects_resume_critical_config_changes(
+    section: str,
+    field: str,
+    value: object,
+) -> None:
+    saved_config = _resume_contract_config()
+    active_config = copy.deepcopy(saved_config)
+    active_config[section][field] = value
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        trainer_module.validate_training_contract(
+            _build_resume_contract(saved_config),
+            _build_resume_contract(active_config),
+        )
 
 
 def test_training_contract_rejects_resolved_class_count_change() -> None:
@@ -339,12 +417,26 @@ def test_training_contract_allows_runtime_only_resume_overrides() -> None:
     saved_config = _resume_contract_config()
     active_config = _resume_contract_config()
     active_config["training"] = {
+        **active_config["training"],
         "steps": 100,
-        "batch_size": 4,
         "resume_from": "checkpoint.pt",
+        "log_every": 50,
+        "checkpoint_every": 25,
     }
     active_config["sampling"] = {"n_samples": 10_000, "nfe": 64, "plot_max_points": 100}
-    active_config["experiment"] = {"output_dir": "runs/resumed"}
+    active_config["evaluation"] = {"samples_per_class": 1_000, "nfe": 64}
+    active_config["plotting"] = {"max_points": 100, "save_every": 50}
+    active_config["solvers"] = {"names": ["rk4"], "nfes": [64]}
+    active_config["experiment"] = {
+        **active_config["experiment"],
+        "output_dir": "runs/resumed",
+    }
+    active_config["data"] = {
+        **active_config["data"],
+        "root": "/local/fashion_mnist",
+        "download": False,
+        "workspace": "/local/workspace",
+    }
 
     trainer_module.validate_training_contract(
         _build_resume_contract(saved_config),
@@ -400,6 +492,58 @@ def test_train_rejects_training_contract_mismatch_before_loading_model_state(
         },
         "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
     }
+
+    with pytest.raises(ValueError, match="training contract.*incompatible"):
+        train_flow_matching(
+            config=active_config,
+            run_dir=tmp_path / "run",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=RejectingStateLoadVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
+
+@pytest.mark.parametrize(("section", "field", "value"), _RESUME_CRITICAL_MUTATIONS)
+def test_resume_critical_mismatches_reject_before_loading_model_state(
+    tmp_path,
+    section: str,
+    field: str,
+    value: object,
+) -> None:
+    saved_config = _resume_contract_config()
+    saved_config["conditioning"]["enabled"] = False
+    saved_config["training"]["steps"] = 1
+    objective = build_objective(saved_config["objective"], class_counts=None)
+    checkpoint_model = TinyVelocity()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model=checkpoint_model,
+        optimizer=torch.optim.AdamW(checkpoint_model.parameters(), lr=0.001),
+        step=0,
+        config=saved_config,
+        prediction_contract={
+            "path": "linear",
+            "objective": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+        },
+        training_contract=trainer_module.build_training_contract(
+            saved_config,
+            path=LinearPath(),
+            objective=objective,
+            class_counts=None,
+        ),
+        metrics={},
+    )
+    active_config = copy.deepcopy(saved_config)
+    active_config[section][field] = value
+    active_config["training"]["resume_from"] = str(checkpoint_path)
+    active_config["training"]["steps"] = 2
 
     with pytest.raises(ValueError, match="training contract.*incompatible"):
         train_flow_matching(
@@ -484,6 +628,10 @@ def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> 
 
     full = load_checkpoint(tmp_path / "full" / "checkpoint.pt")
     resumed = load_checkpoint(tmp_path / "resumed" / "checkpoint.pt")
+    periodic = load_checkpoint(resume_path)
+    assert full["training_contract"]["version"] == 2
+    assert periodic["training_contract"]["version"] == 2
+    assert resumed["training_contract"]["version"] == 2
     for name, tensor in full["model_state_dict"].items():
         assert torch.equal(tensor, resumed["model_state_dict"][name])
     for name, tensor in full["ema_model_state_dict"].items():

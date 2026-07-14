@@ -988,8 +988,28 @@ def validate_checkpoint_compatibility(
         )
 
 
-_TRAINING_CONTRACT_VERSION = 1
+_TRAINING_CONTRACT_VERSION = 2
 _RUNTIME_DATA_FIELDS = frozenset({"root", "download", "workspace"})
+_RUNTIME_TRAINING_FIELDS = frozenset(
+    {"steps", "resume_from", "log_every", "checkpoint_every"}
+)
+_RUNTIME_EXPERIMENT_FIELDS = frozenset({"output_dir"})
+_RUNTIME_TOP_LEVEL_SECTIONS = frozenset(
+    {"sampling", "solvers", "evaluation", "diagnostics", "plotting"}
+)
+_SPECIAL_TRAINING_CONTRACT_SECTIONS = frozenset(
+    {
+        "objective",
+        "path",
+        "data",
+        "source",
+        "coupling",
+        "model",
+        "conditioning",
+        "training",
+        "experiment",
+    }
+)
 
 
 def build_training_contract(
@@ -1001,12 +1021,15 @@ def build_training_contract(
 ) -> dict[str, Any]:
     """Serialize the semantics that must remain fixed across exact resume."""
 
-    path_config = config.get("path", {}) or {}
-    if not isinstance(path_config, Mapping):
-        raise ValueError("path config must be a mapping for the training contract.")
-    data_config = config.get("data", {}) or {}
-    if not isinstance(data_config, Mapping):
-        raise ValueError("data config must be a mapping for the training contract.")
+    path_config = _training_config_mapping(config, "path")
+    objective_config = _training_config_mapping(config, "objective")
+    data_config = _training_config_mapping(config, "data")
+    source_config = _training_config_mapping(config, "source")
+    coupling_config = _training_config_mapping(config, "coupling")
+    model_config = _training_config_mapping(config, "model")
+    conditioning_config = _training_config_mapping(config, "conditioning")
+    training_config = _training_config_mapping(config, "training")
+    experiment_config = _training_config_mapping(config, "experiment")
     if not hasattr(objective, "metadata"):
         raise ValueError("Training objective must expose metadata for exact resume.")
     path_metadata = (
@@ -1020,12 +1043,40 @@ def build_training_contract(
     semantic_data["class_counts"] = (
         None if class_counts is None else [int(value) for value in class_counts]
     )
-    payload = _canonical_plain_value(
+    semantic_training = {
+        key: value
+        for key, value in training_config.items()
+        if key not in _RUNTIME_TRAINING_FIELDS
+    }
+    semantic_experiment = {
+        key: value
+        for key, value in experiment_config.items()
+        if key not in _RUNTIME_EXPERIMENT_FIELDS
+    }
+    semantic_config = {
+        key: value
+        for key, value in config.items()
+        if key not in _RUNTIME_TOP_LEVEL_SECTIONS
+        and key not in _SPECIAL_TRAINING_CONTRACT_SECTIONS
+    }
+    semantic_config.update(
         {
-            "objective": objective.metadata(),
+            "objective": {
+                "config": objective_config,
+                "metadata": objective.metadata(),
+            },
             "path": {"config": path_config, "metadata": path_metadata},
             "data": semantic_data,
-        },
+            "source": source_config,
+            "coupling": coupling_config,
+            "model": model_config,
+            "conditioning": conditioning_config,
+            "training": semantic_training,
+            "experiment": semantic_experiment,
+        }
+    )
+    payload = _canonical_plain_value(
+        semantic_config,
         label="training contract payload",
     )
     assert isinstance(payload, dict)
@@ -1044,7 +1095,9 @@ def validate_training_contract(saved: object, active: object) -> None:
     if saved_contract["payload"] != active_contract["payload"]:
         changed = [
             field
-            for field in ("objective", "path", "data")
+            for field in sorted(
+                set(saved_contract["payload"]) | set(active_contract["payload"])
+            )
             if saved_contract["payload"].get(field)
             != active_contract["payload"].get(field)
         ]
@@ -1067,10 +1120,11 @@ def _validated_training_contract(contract: object, *, label: str) -> dict[str, A
         raise ValueError(f"{label} payload must be a mapping.")
     canonical_payload = _canonical_plain_value(payload, label=f"{label} payload")
     assert isinstance(canonical_payload, dict)
-    required = {"objective", "path", "data"}
-    if set(canonical_payload) != required:
+    required = _SPECIAL_TRAINING_CONTRACT_SECTIONS
+    missing = required - set(canonical_payload)
+    if missing:
         raise ValueError(
-            f"{label} payload must contain exactly objective, path, and data."
+            f"{label} payload is missing required sections: {', '.join(sorted(missing))}."
         )
     digest = contract.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64:
@@ -1107,6 +1161,18 @@ def _canonical_plain_value(value: object, *, label: str) -> object:
             raise ValueError(f"{label} floats must be finite.")
         return value
     raise ValueError(f"{label} contains unsupported value {type(value).__name__}.")
+
+
+def _training_config_mapping(
+    config: Mapping[str, Any],
+    section: str,
+) -> dict[str, Any]:
+    value = config.get(section, {}) or {}
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"{section} config must be a mapping for the training contract."
+        )
+    return dict(value)
 
 
 def _training_contract_digest(payload: dict[str, Any]) -> str:
