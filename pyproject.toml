@@ -50,6 +50,7 @@ image-embeddings = [
 [project.scripts]
 fm-lab-diagnostics = "fm_lab.experiments.run_diagnostics:main"
 fm-lab-field-diagnostics = "fm_lab.experiments.run_field_diagnostics:main"
+fm-lab-fashion-mnist-lt-eval = "fm_lab.experiments.run_fashion_mnist_lt_eval:main"
 fm-lab-explorer = "fm_lab.experiments.run_explorer:main"
 fm-lab-geometry = "fm_lab.experiments.run_geometry:main"
 fm-lab-compare-runs = "fm_lab.experiments.run_compare_runs:main"
