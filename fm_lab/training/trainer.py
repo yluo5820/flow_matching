@@ -140,10 +140,15 @@ def train_flow_matching(
             lr=learned_acceleration_schedule.psi_lr,
         )
     history: list[dict[str, float | int]] = []
+    best_state: _TrainingState | None = None
     start_step = 1
     if resume_from:
         assert resume_checkpoint is not None
         checkpoint = resume_checkpoint
+        best_state = _restore_checkpoint_resume_state(
+            checkpoint,
+            early_stopping=early_stopping,
+        )
         model.load_state_dict(checkpoint["model_state_dict"])
         theta_optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if ema_model is not None:
@@ -162,12 +167,13 @@ def train_flow_matching(
             )
 
     final_step = 0
-    best_state: _TrainingState | None = None
     progress = trange(start_step, steps + 1, desc="training", dynamic_ncols=True)
     for step in progress:
         final_step = step
         should_log = step == 1 or step % log_every == 0 or step == steps
-        candidate_state: _TrainingState | None = None
+        should_record = should_log or early_stopping.enabled
+        record: dict[str, float | int] | None = None
+        should_stop = False
 
         if trainable_path:
             assert psi_optimizer is not None
@@ -187,7 +193,7 @@ def train_flow_matching(
                 schedule=learned_acceleration_schedule,
             )
             loss_metrics = {}
-            if should_log:
+            if should_record:
                 x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
                     source=source,
                     target=target,
@@ -203,19 +209,29 @@ def train_flow_matching(
                     x0=x0,
                     x1=x1,
                     t=t,
-                    compute_diagnostics=True,
+                    compute_diagnostics=should_log,
                     class_labels=class_labels,
                     original_class_labels=original_class_labels,
                 )
-                if early_stopping.enabled:
-                    candidate_state = _capture_training_state(
+                record = {"step": step, **loss_metrics}
+                previous_best_step = early_stopping.best_step
+                should_stop = early_stopping.update(record)
+                improved = (
+                    early_stopping.enabled
+                    and early_stopping.best_step == step
+                    and previous_best_step != step
+                )
+                if improved:
+                    best_state = _capture_training_state(
                         model=model,
                         ema_model=ema_model,
                         path=path,
                         theta_optimizer=theta_optimizer,
+                        theta_scheduler=theta_scheduler,
                         psi_optimizer=psi_optimizer,
                         step=step,
                     )
+                    best_state.record = dict(record)
         else:
             x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
                 source=source,
@@ -236,15 +252,26 @@ def train_flow_matching(
                 class_labels=class_labels,
                 original_class_labels=original_class_labels,
             )
-            if should_log and early_stopping.enabled:
-                candidate_state = _capture_training_state(
-                    model=model,
-                    ema_model=ema_model,
-                    path=path,
-                    theta_optimizer=theta_optimizer,
-                    psi_optimizer=psi_optimizer,
-                    step=step,
+            if should_record:
+                record = {"step": step, **loss_metrics}
+                previous_best_step = early_stopping.best_step
+                should_stop = early_stopping.update(record)
+                improved = (
+                    early_stopping.enabled
+                    and early_stopping.best_step == step
+                    and previous_best_step != step
                 )
+                if improved:
+                    best_state = _capture_training_state(
+                        model=model,
+                        ema_model=ema_model,
+                        path=path,
+                        theta_optimizer=theta_optimizer,
+                        theta_scheduler=theta_scheduler,
+                        psi_optimizer=psi_optimizer,
+                        step=step,
+                    )
+                    best_state.record = dict(record)
 
             theta_optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -256,29 +283,10 @@ def train_flow_matching(
             if ema_model is not None and ema_decay is not None:
                 update_ema_model(ema_model, model, decay=ema_decay)
 
-        if should_log:
-            record = {"step": step, **loss_metrics}
+        if record is not None:
             history.append(record)
-            progress.set_postfix(loss=f"{record['loss']:.4f}")
-            previous_best_step = early_stopping.best_step
-            should_stop = early_stopping.update(record)
-            improved = (
-                early_stopping.enabled
-                and early_stopping.best_step == step
-                and previous_best_step != step
-            )
-            if improved:
-                if candidate_state is None:
-                    candidate_state = _capture_training_state(
-                        model=model,
-                        ema_model=ema_model,
-                        path=path,
-                        theta_optimizer=theta_optimizer,
-                        psi_optimizer=psi_optimizer,
-                        step=step,
-                    )
-                candidate_state.record = dict(record)
-                best_state = candidate_state
+            if should_log:
+                progress.set_postfix(loss=f"{record['loss']:.4f}")
             if should_stop:
                 progress.set_postfix(loss=f"{record['loss']:.4f}", stopped="early")
                 break
@@ -294,6 +302,7 @@ def train_flow_matching(
                 config=checkpoint_config,
                 prediction_contract=prediction_contract,
                 training_contract=training_contract,
+                resume_state=_checkpoint_resume_state(early_stopping, best_state),
                 metrics={"latest_loss": float(loss_metrics.get("loss", float("nan")))},
                 history=history,
                 rng_state=capture_rng_state(),
@@ -309,6 +318,7 @@ def train_flow_matching(
             ema_model=ema_model,
             path=path,
             theta_optimizer=theta_optimizer,
+            theta_scheduler=theta_scheduler,
             psi_optimizer=psi_optimizer,
         )
         selected_step = best_state.step
@@ -349,6 +359,7 @@ def train_flow_matching(
         config=checkpoint_config,
         prediction_contract=prediction_contract,
         training_contract=training_contract,
+        resume_state=_checkpoint_resume_state(early_stopping, best_state),
         metrics=metrics,
         history=history,
         scheduler=theta_scheduler,
@@ -392,6 +403,7 @@ class _TrainingState:
     step: int
     model_state: dict[str, Any]
     theta_optimizer_state: dict[str, Any]
+    theta_scheduler_state: dict[str, Any] | None = None
     ema_model_state: dict[str, Any] | None = None
     path_state: dict[str, Any] | None = None
     psi_optimizer_state: dict[str, Any] | None = None
@@ -454,6 +466,7 @@ def _capture_training_state(
     ema_model: nn.Module | None,
     path: FlowPath,
     theta_optimizer: torch.optim.Optimizer,
+    theta_scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     psi_optimizer: torch.optim.Optimizer | None,
     step: int,
 ) -> _TrainingState:
@@ -466,6 +479,11 @@ def _capture_training_state(
         ),
         path_state=_clone_state(path_state) if path_state is not None else None,
         theta_optimizer_state=_clone_state(theta_optimizer.state_dict()),
+        theta_scheduler_state=(
+            _clone_state(theta_scheduler.state_dict())
+            if theta_scheduler is not None
+            else None
+        ),
         psi_optimizer_state=(
             _clone_state(psi_optimizer.state_dict()) if psi_optimizer is not None else None
         ),
@@ -479,6 +497,7 @@ def _restore_training_state(
     ema_model: nn.Module | None,
     path: FlowPath,
     theta_optimizer: torch.optim.Optimizer,
+    theta_scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     psi_optimizer: torch.optim.Optimizer | None,
 ) -> None:
     model.load_state_dict(state.model_state)
@@ -489,6 +508,12 @@ def _restore_training_state(
             )
         ema_model.load_state_dict(state.ema_model_state)
     theta_optimizer.load_state_dict(state.theta_optimizer_state)
+    if state.theta_scheduler_state is not None:
+        if theta_scheduler is None:
+            raise ValueError(
+                "Best checkpoint state includes a scheduler, but no scheduler exists."
+            )
+        theta_scheduler.load_state_dict(state.theta_scheduler_state)
     if state.path_state is not None:
         if not isinstance(path, nn.Module):
             raise ValueError(
@@ -513,6 +538,81 @@ def _clone_state(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_clone_state(item) for item in value)
     return copy.deepcopy(value)
+
+
+def _checkpoint_resume_state(
+    early_stopping: _EarlyStopping,
+    best_state: _TrainingState | None,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "early_stopping": early_stopping.state_dict(),
+        "best_training_state": (
+            None if best_state is None else _serialize_training_state(best_state)
+        ),
+    }
+
+
+def _restore_checkpoint_resume_state(
+    checkpoint: Mapping[str, Any],
+    *,
+    early_stopping: _EarlyStopping,
+) -> _TrainingState | None:
+    raw = checkpoint.get("resume_state")
+    if not isinstance(raw, Mapping) or raw.get("version") != 1:
+        raise ValueError(
+            "Checkpoint is missing exact resume metadata: resume_state version 1."
+        )
+    early_state = raw.get("early_stopping")
+    if not isinstance(early_state, Mapping):
+        raise ValueError("Checkpoint resume_state is missing early_stopping state.")
+    early_stopping.load_state_dict(early_state)
+    best = raw.get("best_training_state")
+    if best is None:
+        return None
+    if not isinstance(best, Mapping):
+        raise ValueError("Checkpoint resume_state best_training_state is malformed.")
+    return _deserialize_training_state(best)
+
+
+def _serialize_training_state(state: _TrainingState) -> dict[str, Any]:
+    return {
+        "step": state.step,
+        "model_state": _clone_state(state.model_state),
+        "theta_optimizer_state": _clone_state(state.theta_optimizer_state),
+        "theta_scheduler_state": _clone_state(state.theta_scheduler_state),
+        "ema_model_state": _clone_state(state.ema_model_state),
+        "path_state": _clone_state(state.path_state),
+        "psi_optimizer_state": _clone_state(state.psi_optimizer_state),
+        "record": _clone_state(state.record),
+    }
+
+
+def _deserialize_training_state(raw: Mapping[str, Any]) -> _TrainingState:
+    required = {"step", "model_state", "theta_optimizer_state", "record"}
+    missing = required - set(raw)
+    if missing:
+        raise ValueError(
+            "Checkpoint resume_state best_training_state is missing: "
+            f"{', '.join(sorted(missing))}."
+        )
+    if not isinstance(raw["model_state"], Mapping) or not isinstance(
+        raw["theta_optimizer_state"], Mapping
+    ):
+        raise ValueError("Checkpoint resume_state best_training_state is malformed.")
+    record = raw.get("record")
+    if record is not None and not isinstance(record, Mapping):
+        raise ValueError("Checkpoint resume_state best record is malformed.")
+    return _TrainingState(
+        step=int(raw["step"]),
+        model_state=_clone_state(dict(raw["model_state"])),
+        theta_optimizer_state=_clone_state(dict(raw["theta_optimizer_state"])),
+        theta_scheduler_state=_clone_state(raw.get("theta_scheduler_state")),
+        ema_model_state=_clone_state(raw.get("ema_model_state")),
+        path_state=_clone_state(raw.get("path_state")),
+        psi_optimizer_state=_clone_state(raw.get("psi_optimizer_state")),
+        record=None if record is None else dict(record),
+    )
 
 
 def _sample_training_batch(
@@ -1501,6 +1601,58 @@ class _EarlyStopping:
     current_score: float | None = None
     stopped: bool = False
     stop_step: int | None = None
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "patience_steps": self.patience_steps,
+            "min_delta": self.min_delta,
+            "warmup_steps": self.warmup_steps,
+            "ema_alpha": self.ema_alpha,
+            "best_score": self.best_score,
+            "best_loss": self.best_loss,
+            "best_step": self.best_step,
+            "current_score": self.current_score,
+            "stopped": self.stopped,
+            "stop_step": self.stop_step,
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        expected_config = {
+            "enabled": self.enabled,
+            "patience_steps": self.patience_steps,
+            "min_delta": self.min_delta,
+            "warmup_steps": self.warmup_steps,
+            "ema_alpha": self.ema_alpha,
+        }
+        for field, expected in expected_config.items():
+            if state.get(field) != expected:
+                raise ValueError(
+                    "Checkpoint early-stopping state is incompatible: "
+                    f"{field}={state.get(field)!r} != {expected!r}."
+                )
+        for field in (
+            "best_score",
+            "best_loss",
+            "best_step",
+            "current_score",
+            "stopped",
+            "stop_step",
+        ):
+            if field not in state:
+                raise ValueError(
+                    f"Checkpoint early-stopping state is missing {field}."
+                )
+        self.best_score = (
+            None if state["best_score"] is None else float(state["best_score"])
+        )
+        self.best_loss = None if state["best_loss"] is None else float(state["best_loss"])
+        self.best_step = None if state["best_step"] is None else int(state["best_step"])
+        self.current_score = (
+            None if state["current_score"] is None else float(state["current_score"])
+        )
+        self.stopped = bool(state["stopped"])
+        self.stop_step = None if state["stop_step"] is None else int(state["stop_step"])
 
     def update(self, record: dict[str, float | int]) -> bool:
         if not self.enabled:

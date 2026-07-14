@@ -507,6 +507,59 @@ def test_train_rejects_training_contract_mismatch_before_loading_model_state(
         )
 
 
+def test_train_rejects_missing_resume_state_before_loading_model_state(tmp_path) -> None:
+    saved_config = {
+        "path": {"name": "linear"},
+        "objective": {
+            "name": "flow_matching",
+            "loss": "mse",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+            "min_denom": 0.001,
+        },
+        "training": {"steps": 1, "batch_size": 2, "optimizer": "adam"},
+    }
+    objective = build_objective(saved_config["objective"])
+    checkpoint_model = TinyVelocity()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model=checkpoint_model,
+        optimizer=torch.optim.Adam(checkpoint_model.parameters(), lr=1.0e-4),
+        step=0,
+        config=saved_config,
+        prediction_contract={
+            "path": "linear",
+            "objective": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+        },
+        training_contract=trainer_module.build_training_contract(
+            saved_config,
+            path=LinearPath(),
+            objective=objective,
+            class_counts=None,
+        ),
+        metrics={},
+    )
+    active_config = copy.deepcopy(saved_config)
+    active_config["training"]["steps"] = 2
+    active_config["training"]["resume_from"] = str(checkpoint_path)
+
+    with pytest.raises(ValueError, match="resume_state version 1"):
+        train_flow_matching(
+            config=active_config,
+            run_dir=tmp_path / "run",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=RejectingStateLoadVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
+
 @pytest.mark.parametrize(("section", "field", "value"), _RESUME_CRITICAL_MUTATIONS)
 def test_resume_critical_mismatches_reject_before_loading_model_state(
     tmp_path,
@@ -1324,6 +1377,123 @@ def test_train_flow_matching_restores_best_early_stopping_checkpoint(tmp_path) -
     ema_velocity = checkpoint["ema_model_state_dict"]["velocity"]
     assert torch.equal(model_velocity, torch.zeros_like(model_velocity))
     assert torch.equal(ema_velocity, model_velocity)
+
+
+def test_early_stopping_resume_preserves_best_state_and_ignores_log_cadence(
+    tmp_path,
+) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 8,
+            "steps": 8,
+            "log_every": 1,
+            "checkpoint_every": 2,
+            "optimizer": "adam",
+            "lr": 0.1,
+            "ema_decay": 0.5,
+            "early_stopping": {
+                "enabled": True,
+                "warmup_steps": 0,
+                "patience_steps": 3,
+                "min_delta": 1.0e9,
+                "ema_alpha": 1.0,
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+    initial_model = TrainableConstantVelocity(dim=2, value=0.0)
+    initial_state = copy.deepcopy(initial_model.state_dict())
+
+    full_model = TrainableConstantVelocity(dim=2, value=0.0)
+    full_model.load_state_dict(initial_state)
+    torch.manual_seed(31)
+    full_metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path / "full",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=full_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    split_model = TrainableConstantVelocity(dim=2, value=0.0)
+    split_model.load_state_dict(initial_state)
+    first_config = {
+        **config,
+        "training": {**config["training"], "steps": 2, "log_every": 2},
+    }
+    torch.manual_seed(31)
+    train_flow_matching(
+        config=first_config,
+        run_dir=tmp_path / "split",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=split_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+    resume_path = tmp_path / "split" / "checkpoints" / "step_000002.pt"
+    periodic = load_checkpoint(resume_path)
+    assert periodic["resume_state"]["version"] == 1
+    assert periodic["resume_state"]["early_stopping"]["best_step"] == 1
+    assert periodic["resume_state"]["best_training_state"]["step"] == 1
+    assert "resume_state" not in periodic["resume_state"]["best_training_state"]
+
+    resumed_model = TrainableConstantVelocity(dim=2, value=99.0)
+    resumed_config = {
+        **config,
+        "training": {
+            **config["training"],
+            "resume_from": str(resume_path),
+            "log_every": 99,
+        },
+    }
+    resumed_metrics = train_flow_matching(
+        config=resumed_config,
+        run_dir=tmp_path / "resumed",
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=resumed_model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    full_checkpoint = load_checkpoint(tmp_path / "full" / "checkpoint.pt")
+    resumed_checkpoint = load_checkpoint(tmp_path / "resumed" / "checkpoint.pt")
+    assert full_checkpoint["resume_state"]["version"] == 1
+    assert resumed_checkpoint["resume_state"]["version"] == 1
+    assert (
+        resumed_checkpoint["resume_state"]["best_training_state"]["step"] == 1
+    )
+    assert (
+        "resume_state"
+        not in resumed_checkpoint["resume_state"]["best_training_state"]
+    )
+    assert full_metrics["trained_steps"] == resumed_metrics["trained_steps"] == 4
+    assert full_metrics["checkpoint_step"] == resumed_metrics["checkpoint_step"] == 1
+    assert full_metrics["early_stopping"] == resumed_metrics["early_stopping"]
+    assert [row["step"] for row in full_checkpoint["history"]] == [1, 2, 3, 4]
+    assert resumed_checkpoint["history"] == full_checkpoint["history"]
+    for name, tensor in full_checkpoint["model_state_dict"].items():
+        assert torch.equal(tensor, resumed_checkpoint["model_state_dict"][name])
+    for name, tensor in full_checkpoint["ema_model_state_dict"].items():
+        assert torch.equal(tensor, resumed_checkpoint["ema_model_state_dict"][name])
+    torch.testing.assert_close(
+        resumed_checkpoint["optimizer_state_dict"],
+        full_checkpoint["optimizer_state_dict"],
+        rtol=0,
+        atol=0,
+    )
 
 
 def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:

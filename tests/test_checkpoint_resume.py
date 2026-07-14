@@ -39,6 +39,11 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
             "payload": {"objective": {}, "path": {}, "data": {}},
             "sha256": "digest",
         },
+        resume_state={
+            "version": 1,
+            "early_stopping": {"enabled": False},
+            "best_training_state": None,
+        },
         history=[{"step": 1, "loss": 2.0}],
         rng_state=capture_rng_state(),
     )
@@ -60,6 +65,11 @@ def test_checkpoint_round_trips_extended_training_state(tmp_path) -> None:
         "version": 2,
         "payload": {"objective": {}, "path": {}, "data": {}},
         "sha256": "digest",
+    }
+    assert payload["resume_state"] == {
+        "version": 1,
+        "early_stopping": {"enabled": False},
+        "best_training_state": None,
     }
     assert set(payload["rng_state_dict"]) >= {"python", "numpy", "torch"}
 
