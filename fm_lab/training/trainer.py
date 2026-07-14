@@ -321,23 +321,23 @@ def train_flow_matching(
                 rng_state=capture_rng_state(),
             )
 
-    terminal_state = _capture_training_state(
-        model=model,
-        ema_model=ema_model,
-        path=path,
-        theta_optimizer=theta_optimizer,
-        theta_scheduler=theta_scheduler,
-        psi_optimizer=psi_optimizer,
-        step=final_step,
-    )
-    terminal_state.record = dict(history[-1])
-    continuation_state = _checkpoint_continuation_state(
-        early_stopping=early_stopping,
-        best_state=best_state,
-        terminal_state=terminal_state,
-        history=history,
-        rng_state=capture_rng_state(),
-    )
+    continuation_state: dict[str, Any] | None = None
+    if best_state is not None:
+        terminal_state = _capture_training_state(
+            model=model,
+            ema_model=ema_model,
+            path=path,
+            theta_optimizer=theta_optimizer,
+            theta_scheduler=theta_scheduler,
+            psi_optimizer=psi_optimizer,
+            step=final_step,
+        )
+        terminal_state.record = dict(history[-1])
+        continuation_state = _checkpoint_continuation_state(
+            terminal_state=terminal_state,
+            history=history,
+            rng_state=capture_rng_state(),
+        )
 
     selected_step = final_step
     selected_record = history[-1]
@@ -596,22 +596,16 @@ def _checkpoint_resume_state(
 
 def _checkpoint_continuation_state(
     *,
-    early_stopping: _EarlyStopping,
-    best_state: _TrainingState | None,
     terminal_state: _TrainingState,
     history: list[dict[str, float | int]],
     rng_state: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "step": terminal_state.step,
         "history": _clone_state(history),
         "rng_state_dict": _clone_state(rng_state),
         "training_state": _serialize_training_state(terminal_state),
-        "early_stopping": early_stopping.state_dict(),
-        "best_training_state": (
-            None if best_state is None else _serialize_training_state(best_state)
-        ),
     }
 
 
@@ -624,8 +618,39 @@ def _restore_checkpoint_resume_state(
     expects_path: bool,
     expects_path_optimizer: bool,
 ) -> _ExactResumeSnapshot:
+    raw = checkpoint.get("resume_state")
+    if not isinstance(raw, Mapping) or raw.get("version") != 1:
+        raise ValueError(
+            "Checkpoint is missing exact resume metadata: resume_state version 1."
+        )
+    if set(raw) != {"version", "early_stopping", "best_training_state"}:
+        raise ValueError("Checkpoint resume_state version 1 schema is malformed.")
+    early_state = raw.get("early_stopping")
+    if not isinstance(early_state, Mapping):
+        raise ValueError("Checkpoint resume_state is missing early_stopping state.")
+    best_state = _deserialize_optional_training_state(
+        raw.get("best_training_state"),
+        label="Checkpoint resume_state best_training_state",
+        expects_scheduler=expects_scheduler,
+        expects_ema=expects_ema,
+        expects_path=expects_path,
+        expects_path_optimizer=expects_path_optimizer,
+    )
+    _validate_best_training_state_consistency(early_state, best_state)
+
     continuation = checkpoint.get("continuation_state")
     if continuation is not None:
+        if best_state is None:
+            raise ValueError(
+                "Checkpoint continuation_state requires a resume_state "
+                "best_training_state for the selected-best top-level state."
+            )
+        selected_step = _validated_resume_step(checkpoint.get("step"), label="checkpoint")
+        if selected_step != best_state.step:
+            raise ValueError(
+                "Checkpoint resume_state best_training_state step does not match "
+                "the continuation checkpoint's top-level selected step."
+            )
         if not isinstance(continuation, Mapping):
             raise ValueError("Checkpoint continuation_state must be a mapping.")
         expected_keys = {
@@ -634,28 +659,15 @@ def _restore_checkpoint_resume_state(
             "history",
             "rng_state_dict",
             "training_state",
-            "early_stopping",
-            "best_training_state",
         }
-        if set(continuation) != expected_keys or continuation.get("version") != 1:
-            raise ValueError("Checkpoint continuation_state version 1 schema is malformed.")
-        early_state = continuation["early_stopping"]
-        if not isinstance(early_state, Mapping):
-            raise ValueError("Checkpoint continuation_state early_stopping is malformed.")
+        if set(continuation) != expected_keys or continuation.get("version") != 2:
+            raise ValueError("Checkpoint continuation_state version 2 schema is malformed.")
         terminal_raw = continuation["training_state"]
         if not isinstance(terminal_raw, Mapping):
             raise ValueError("Checkpoint continuation_state training_state is malformed.")
         terminal_state = _deserialize_training_state(
             terminal_raw,
             label="Checkpoint continuation_state training_state",
-            expects_scheduler=expects_scheduler,
-            expects_ema=expects_ema,
-            expects_path=expects_path,
-            expects_path_optimizer=expects_path_optimizer,
-        )
-        best_state = _deserialize_optional_training_state(
-            continuation["best_training_state"],
-            label="Checkpoint continuation_state best_training_state",
             expects_scheduler=expects_scheduler,
             expects_ema=expects_ema,
             expects_path=expects_path,
@@ -682,25 +694,6 @@ def _restore_checkpoint_resume_state(
             best_state=best_state,
             continuation_state=terminal_state,
         )
-
-    raw = checkpoint.get("resume_state")
-    if not isinstance(raw, Mapping) or raw.get("version") != 1:
-        raise ValueError(
-            "Checkpoint is missing exact resume metadata: resume_state version 1."
-        )
-    if set(raw) != {"version", "early_stopping", "best_training_state"}:
-        raise ValueError("Checkpoint resume_state version 1 schema is malformed.")
-    early_state = raw.get("early_stopping")
-    if not isinstance(early_state, Mapping):
-        raise ValueError("Checkpoint resume_state is missing early_stopping state.")
-    best_state = _deserialize_optional_training_state(
-        raw.get("best_training_state"),
-        label="Checkpoint resume_state best_training_state",
-        expects_scheduler=expects_scheduler,
-        expects_ema=expects_ema,
-        expects_path=expects_path,
-        expects_path_optimizer=expects_path_optimizer,
-    )
     _validate_periodic_top_level_state(
         checkpoint,
         expects_scheduler=expects_scheduler,
@@ -708,17 +701,60 @@ def _restore_checkpoint_resume_state(
         expects_path=expects_path,
         expects_path_optimizer=expects_path_optimizer,
     )
+    step = _validated_resume_step(checkpoint.get("step"), label="checkpoint")
+    history = _validated_resume_history(
+        checkpoint.get("history"), label="Checkpoint history"
+    )
+    rng_state = _validated_resume_rng_state(
+        checkpoint.get("rng_state_dict"), label="Checkpoint rng_state_dict"
+    )
     early_stopping.load_state_dict(early_state)
     return _ExactResumeSnapshot(
-        step=_validated_resume_step(checkpoint.get("step"), label="checkpoint"),
-        history=_validated_resume_history(
-            checkpoint.get("history"), label="Checkpoint history"
-        ),
-        rng_state=_validated_resume_rng_state(
-            checkpoint.get("rng_state_dict"), label="Checkpoint rng_state_dict"
-        ),
+        step=step,
+        history=history,
+        rng_state=rng_state,
         best_state=best_state,
     )
+
+
+def _validate_best_training_state_consistency(
+    early_state: Mapping[str, Any],
+    best_state: _TrainingState | None,
+) -> None:
+    observation = (
+        early_state.get("best_step"),
+        early_state.get("best_score"),
+        early_state.get("best_loss"),
+    )
+    observed = tuple(value is not None for value in observation)
+    if any(observed) and not all(observed):
+        raise ValueError(
+            "Checkpoint resume_state best_training_state is inconsistent with a "
+            "partial early-stopping best observation."
+        )
+    best_step = observation[0]
+    if best_step is None:
+        if best_state is not None:
+            raise ValueError(
+                "Checkpoint resume_state best_training_state must be null when "
+                "early stopping has no best observation."
+            )
+        return
+    if isinstance(best_step, bool) or not isinstance(best_step, int) or best_step < 0:
+        raise ValueError(
+            "Checkpoint resume_state best_training_state has an invalid "
+            "early-stopping best_step."
+        )
+    if best_state is None:
+        raise ValueError(
+            "Checkpoint resume_state best_training_state is required when "
+            "early stopping has a best observation."
+        )
+    if best_state.step != best_step:
+        raise ValueError(
+            "Checkpoint resume_state best_training_state step does not match "
+            "early-stopping best_step."
+        )
 
 
 def _serialize_training_state(state: _TrainingState) -> dict[str, Any]:

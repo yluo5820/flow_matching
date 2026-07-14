@@ -1447,6 +1447,30 @@ def test_early_stopping_resume_preserves_best_state_and_ignores_log_cadence(
     assert periodic["resume_state"]["best_training_state"]["step"] == 1
     assert "resume_state" not in periodic["resume_state"]["best_training_state"]
 
+    inconsistent_periodic = copy.deepcopy(periodic)
+    inconsistent_periodic["resume_state"]["best_training_state"] = None
+    inconsistent_periodic_path = tmp_path / "inconsistent_periodic.pt"
+    torch.save(inconsistent_periodic, inconsistent_periodic_path)
+    inconsistent_config = {
+        **config,
+        "training": {
+            **config["training"],
+            "resume_from": str(inconsistent_periodic_path),
+        },
+    }
+    with pytest.raises(ValueError, match="resume_state.*best_training_state"):
+        train_flow_matching(
+            config=inconsistent_config,
+            run_dir=tmp_path / "inconsistent_periodic",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=RejectingStateLoadVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
     resumed_model = TrainableConstantVelocity(dim=2, value=99.0)
     resumed_config = {
         **config,
@@ -1558,6 +1582,15 @@ def test_final_best_checkpoint_resumes_from_terminal_continuation_without_duplic
     assert first_checkpoint["step"] == 1
     assert first_checkpoint["metrics"]["trained_steps"] == 2
     assert first_checkpoint["continuation_state"]["step"] == 2
+    assert first_checkpoint["continuation_state"]["version"] == 2
+    assert set(first_checkpoint["continuation_state"]) == {
+        "version",
+        "step",
+        "history",
+        "rng_state_dict",
+        "training_state",
+    }
+    assert first_checkpoint["resume_state"]["best_training_state"]["step"] == 1
 
     resumed_model = TrainableConstantVelocity(dim=2, value=99.0)
     resumed_config = {
@@ -1618,6 +1651,107 @@ def test_final_best_checkpoint_resumes_from_terminal_continuation_without_duplic
                 solvers=[EulerSolver()],
                 device=torch.device("cpu"),
             )
+
+    inconsistent_trackers = {}
+    missing_best = copy.deepcopy(first_checkpoint)
+    missing_best["resume_state"]["best_training_state"] = None
+    inconsistent_trackers["missing_best"] = missing_best
+    mismatched_best = copy.deepcopy(first_checkpoint)
+    mismatched_best_state = mismatched_best["resume_state"]["best_training_state"]
+    mismatched_best_state["step"] = 2
+    mismatched_best_state["record"]["step"] = 2
+    inconsistent_trackers["mismatched_best"] = mismatched_best
+    unexpected_best = copy.deepcopy(first_checkpoint)
+    unexpected_best["resume_state"]["early_stopping"]["best_step"] = None
+    unexpected_best["resume_state"]["early_stopping"]["best_score"] = None
+    unexpected_best["resume_state"]["early_stopping"]["best_loss"] = None
+    inconsistent_trackers["unexpected_best"] = unexpected_best
+    mismatched_top_level = copy.deepcopy(first_checkpoint)
+    mismatched_top_level["step"] = 2
+    inconsistent_trackers["mismatched_top_level"] = mismatched_top_level
+
+    for name, malformed_checkpoint in inconsistent_trackers.items():
+        malformed_path = tmp_path / f"inconsistent_{name}.pt"
+        torch.save(malformed_checkpoint, malformed_path)
+        malformed_config = copy.deepcopy(resumed_config)
+        malformed_config["training"]["resume_from"] = str(malformed_path)
+
+        with pytest.raises(ValueError, match="resume_state.*best_training_state"):
+            train_flow_matching(
+                config=malformed_config,
+                run_dir=tmp_path / f"inconsistent_{name}",
+                target=ConstantTarget(),
+                source=ConstantSource(),
+                coupling=IndependentCoupling(),
+                path=LinearPath(),
+                model=RejectingStateLoadVelocity(),
+                solvers=[EulerSolver()],
+                device=torch.device("cpu"),
+            )
+
+    orphaned_continuation = copy.deepcopy(first_checkpoint)
+    orphaned_continuation["resume_state"]["best_training_state"] = None
+    orphaned_early_state = orphaned_continuation["resume_state"]["early_stopping"]
+    orphaned_early_state["best_step"] = None
+    orphaned_early_state["best_score"] = None
+    orphaned_early_state["best_loss"] = None
+    orphaned_path = tmp_path / "orphaned_continuation.pt"
+    torch.save(orphaned_continuation, orphaned_path)
+    orphaned_config = copy.deepcopy(resumed_config)
+    orphaned_config["training"]["resume_from"] = str(orphaned_path)
+    with pytest.raises(ValueError, match="continuation_state.*best_training_state"):
+        train_flow_matching(
+            config=orphaned_config,
+            run_dir=tmp_path / "orphaned_continuation",
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=RejectingStateLoadVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
+
+def test_final_checkpoint_without_best_rollback_has_no_continuation_copy(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 4,
+            "steps": 2,
+            "log_every": 1,
+            "checkpoint_every": 2,
+            "optimizer": "adam",
+            "lr": 1.0e-3,
+            "early_stopping": {"enabled": False},
+        },
+        "sampling": {"n_samples": 4, "n_trajectories": 2, "nfe": 2},
+        "solvers": {"schedule": "uniform"},
+    }
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TrainableConstantVelocity(dim=2, value=0.0),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    periodic = load_checkpoint(tmp_path / "checkpoints" / "step_000002.pt")
+    final = load_checkpoint(tmp_path / "checkpoint.pt")
+    assert "continuation_state" not in periodic
+    assert "continuation_state" not in final
+    assert periodic["resume_state"]["best_training_state"] is None
+    assert final["resume_state"]["best_training_state"] is None
+    assert final["step"] == periodic["step"] == 2
+    assert final["history"] == periodic["history"]
+    assert final["resume_state"] == periodic["resume_state"]
+    for key in ("model_state_dict", "optimizer_state_dict"):
+        torch.testing.assert_close(final[key], periodic[key], rtol=0, atol=0)
 
 
 def test_train_flow_matching_kernel_vstar_learned_acceleration_smoke(tmp_path) -> None:
