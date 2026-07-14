@@ -2,6 +2,7 @@ from pathlib import Path
 
 import torch
 
+from fm_lab.data import LongTailedFashionMNIST
 from fm_lab.experiments.factory import build_model, build_path, build_source, build_target
 from fm_lab.paths import GaussianDiffusionPath
 from fm_lab.training.losses import DiffusionObjective, FlowMatchingObjective, build_objective
@@ -153,6 +154,28 @@ def test_mnist_config_builds_matching_components_without_loading_data() -> None:
     x = torch.zeros(2, 784)
     t = torch.zeros(2)
     assert model(x, t).shape == (2, 784)
+
+
+def test_fashion_mnist_lt_ir100_config_builds_conditional_components(monkeypatch) -> None:
+    monkeypatch.setattr(LongTailedFashionMNIST, "_load", lambda self: None)
+    config = load_config("configs/fashion_mnist_lt/fashion_mnist_lt_ir100.yaml")
+
+    source = build_source(config)
+    target = build_target(config)
+    model = build_model(config, dim=source.dim)
+    output = model(
+        torch.zeros(2, 784),
+        torch.zeros(2),
+        {"class_labels": torch.tensor([0, 9])},
+    )
+
+    assert isinstance(target, LongTailedFashionMNIST)
+    assert source.dim == target.dim == 784
+    assert target.image_shape == (1, 28, 28)
+    assert config["data"]["imbalance_factor"] == 0.01
+    assert config["conditioning"]["num_classes"] == 10
+    assert config["sampling"]["n_samples"] == 10_000
+    assert output.shape == (2, 784)
 
 
 def test_diffusion_config_builds_path_and_objective() -> None:

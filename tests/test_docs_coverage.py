@@ -24,3 +24,11 @@ def test_diagnostics_docs_cover_core_outputs() -> None:
 
     for term in required_terms:
         assert term in docs
+
+
+def test_fashion_mnist_long_tail_docs_define_balanced_reference_protocol() -> None:
+    docs = Path("docs/cli.md").read_text(encoding="utf-8")
+
+    assert "fm-lab-fashion-mnist-lt-eval" in docs
+    assert "1,000 generated samples per class" in docs
+    assert "official Fashion-MNIST test split" in docs

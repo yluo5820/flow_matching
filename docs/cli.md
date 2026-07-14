@@ -47,6 +47,40 @@ When adding or changing a CLI:
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
+| `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
+
+## `fm-lab-fashion-mnist-lt-eval`
+
+The fast long-tail benchmark trains on exponentially subsampled Fashion-MNIST
+but evaluates against the untouched official Fashion-MNIST test split. Its
+canonical protocol requests 1,000 generated samples per class, so all ten
+conditional distributions contribute equally to the global metrics.
+
+Train and sample the supplied IR100 configuration:
+
+```bash
+fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100.yaml \
+  --device auto
+```
+
+Then extract frozen Fashion-MNIST classifier features and report FID, KID,
+Inception Score, generative recall, per-class scores, and frequency-group
+scores:
+
+```bash
+fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
+  --data-root data/fashion_mnist \
+  --download \
+  --output-dir runs/fashion_mnist_lt_ir100/evaluation
+```
+
+If the evaluator checkpoint is absent, the command trains it once on the
+balanced training split and validates its held-out accuracy before use. Supply
+`--generated-cache` and `--real-cache` together to recompute reports without
+feature extraction. Cache provenance must match exactly.
 
 ## `fm-lab-imbdiff-eval`
 

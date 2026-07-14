@@ -99,6 +99,20 @@ Evaluate a completed local MNIST image run:
 .conda/fm_lab/bin/fm-lab-mnist-eval --run-dir runs/mnist_image_unet_ot --solver auto --nfe 64 --device auto
 ```
 
+Run the faster Fashion-MNIST IR100 conditional benchmark:
+
+```bash
+.conda/fm_lab/bin/fm-lab-train --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100.yaml --device auto
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
+  --download --output-dir runs/fashion_mnist_lt_ir100/evaluation
+```
+
+The canonical evaluator uses a balanced set of 1,000 generated samples per
+class and the untouched official Fashion-MNIST test split. See
+`docs/cli.md` for cache and evaluator options.
+
 Useful toy configs:
 
 ```text
