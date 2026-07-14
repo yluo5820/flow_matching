@@ -19,6 +19,7 @@ runs/
 outputs/
 artifacts/
 checkpoints/
+features/
 *.pt
 *.pth
 .ipynb_checkpoints/
