@@ -8,6 +8,7 @@ from fm_lab.models.capacity import (
     apply_capacity_conv,
     use_capacity_from_context,
 )
+from fm_lab.paths import LinearPath
 from fm_lab.training.losses import build_objective
 
 
@@ -29,7 +30,6 @@ def _cm_model_config() -> dict:
             },
         },
         "conditioning": {"enabled": True, "num_classes": 10},
-        "diffusion": {"timesteps": 1000},
     }
 
 
@@ -50,7 +50,6 @@ def _cm_image_model_config() -> dict:
             },
         },
         "conditioning": {"enabled": True, "num_classes": 10},
-        "diffusion": {"timesteps": 1000},
     }
 
 
@@ -117,7 +116,7 @@ def test_image_unet_capacity_switch_preserves_base_branch() -> None:
         model.output_block[-1].weight.normal_(std=0.02)
         model.output_block[-1].bias.zero_()
     inputs = torch.randn(2, 3 * 8 * 8)
-    timesteps = torch.tensor([10, 20])
+    timesteps = torch.tensor([0.1, 0.2])
     labels = torch.tensor([1, 2])
     full_context = {"class_labels": labels, "use_capacity": True}
     base_context = {"class_labels": labels, "use_capacity": False}
@@ -140,28 +139,35 @@ def test_cm_objective_accepts_capacity_enabled_image_unet() -> None:
     model = build_model(_cm_image_model_config(), dim=3 * 8 * 8)
     objective = build_objective(
         {
-            "name": "cm",
-            "prediction_type": "epsilon",
-            "oc": {"transfer_mode": "t2h", "cut_time": -1},
-            "cm": {"consistency_weight": 1.0, "diversity_weight": 0.2},
+            "name": "flow_matching",
+            "model_output": "velocity",
+            "loss_space": "velocity",
+            "modifiers": [
+                {"name": "oc", "transfer_mode": "t2h", "cut_t": None},
+                {
+                    "name": "cm",
+                    "consistency_weight": 1.0,
+                    "diversity_weight": 0.2,
+                    "comparison_space": "velocity",
+                },
+            ],
         },
-        diffusion_config={"timesteps": 1000},
         class_counts=[100, 50, 25, 12, 6, 3, 2, 1, 1, 1],
     )
     labels = torch.tensor([0, 9])
 
     loss, metrics = objective(
         model=model,
-        path=None,
+        path=LinearPath(),
         x0=torch.randn(2, 3 * 8 * 8),
         x1=torch.randn(2, 3 * 8 * 8),
-        t=torch.tensor([100, 900]),
+        t=torch.tensor([0.1, 0.9]),
         class_labels=labels,
         original_class_labels=labels,
     )
 
     assert torch.isfinite(loss)
-    assert "cm_loss" in metrics
+    assert "cm.loss" in metrics
 
 
 def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:
@@ -242,7 +248,7 @@ def test_cm_unet_context_switches_reserved_capacity_without_changing_base_branch
         model.output_conv.weight.normal_(std=0.02)
         model.output_conv.bias.zero_()
     inputs = torch.randn(2, 3 * 8 * 8)
-    timesteps = torch.tensor([10, 20])
+    timesteps = torch.tensor([0.1, 0.2])
     labels = torch.tensor([1, 2])
     full_context = {"class_labels": labels, "use_capacity": True}
     base_context = {"class_labels": labels, "use_capacity": False}

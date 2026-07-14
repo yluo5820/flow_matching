@@ -183,6 +183,114 @@ class CBDMModifier:
         }
 
 
+@dataclass
+class CMModifier:
+    """Capacity-on/off consistency and diversity at continuous time."""
+
+    class_counts: Sequence[int]
+    consistency_weight: float = 1.0
+    diversity_weight: float = 0.2
+    comparison_space: str = "velocity"
+    name: str = "cm"
+
+    def __post_init__(self) -> None:
+        self.class_counts = tuple(int(value) for value in self.class_counts)
+        if not self.class_counts or any(value <= 0 for value in self.class_counts):
+            raise ValueError("CM class_counts must all be positive.")
+        self.consistency_weight = float(self.consistency_weight)
+        self.diversity_weight = float(self.diversity_weight)
+        if (
+            not math.isfinite(self.consistency_weight)
+            or not math.isfinite(self.diversity_weight)
+            or self.consistency_weight < 0
+            or self.diversity_weight < 0
+        ):
+            raise ValueError(
+                "CM consistency and diversity weights must be finite and non-negative."
+            )
+        self.comparison_space = normalize_prediction_kind(self.comparison_space).value
+        counts = torch.tensor(self.class_counts, dtype=torch.float64)
+        probabilities = counts / counts.sum()
+        inverse_probabilities = probabilities.reciprocal()
+        inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
+        self.class_probabilities = probabilities.to(dtype=torch.float32)
+        self.inverse_class_probabilities = inverse_probabilities.to(dtype=torch.float32)
+
+    @staticmethod
+    def _validate_capacity_model(model: torch.nn.Module) -> None:
+        metadata = getattr(model, "capacity_metadata", None)
+        if not callable(metadata) or not bool(metadata().get("enabled", False)):
+            raise ValueError("CM requires a model with capacity manipulation enabled.")
+
+    def __call__(
+        self,
+        context: ContinuousObjectiveContext,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        self._validate_capacity_model(context.model)
+        if context.class_labels is None:
+            raise ValueError("CM requires class labels for conditional predictions.")
+        if context.original_class_labels is None:
+            raise ValueError("CM requires original class labels before CFG dropout.")
+
+        full_output = model_prediction(
+            context.model,
+            context.xt,
+            context.t,
+            class_labels=context.class_labels,
+            use_capacity=True,
+        )
+        base_output = model_prediction(
+            context.model,
+            context.xt,
+            context.t,
+            class_labels=context.class_labels,
+            use_capacity=False,
+        )
+        full_value = context.state.prediction(
+            full_output,
+            context.base_prediction.kind,
+        ).convert(self.comparison_space)
+        base_value = context.state.prediction(
+            base_output,
+            context.base_prediction.kind,
+        ).convert(self.comparison_space)
+        distance = (full_value - base_value).square().flatten(1).mean(1)
+        probabilities = self.class_probabilities.to(
+            device=distance.device,
+            dtype=distance.dtype,
+        )
+        inverse_probabilities = self.inverse_class_probabilities.to(
+            device=distance.device,
+            dtype=distance.dtype,
+        )
+        labels = context.original_class_labels
+        num_classes = len(self.class_counts)
+        consistency = num_classes * (
+            probabilities[labels] * self.consistency_weight * distance
+        ).mean()
+        diversity = -num_classes * (
+            inverse_probabilities[labels] * self.diversity_weight * distance
+        ).mean()
+        loss = consistency + diversity
+        return loss, {
+            "cm.consistency": float(consistency.detach().cpu()),
+            "cm.diversity": float(diversity.detach().cpu()),
+            "cm.loss": float(loss.detach().cpu()),
+        }
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "consistency_weight": self.consistency_weight,
+            "diversity_weight": self.diversity_weight,
+            "comparison_space": self.comparison_space,
+            "class_probabilities": self.class_probabilities.tolist(),
+            "inverse_class_probabilities": self.inverse_class_probabilities.tolist(),
+            "base_target": "oc",
+            "class_counts": list(self.class_counts),
+        }
+
+
 @dataclass(frozen=True)
 class TransferredTargets:
     """Source/target supervision selected by an endpoint-transfer modifier."""
@@ -409,7 +517,18 @@ def build_continuous_modifiers(
                 )
             )
             continue
-        raise NotImplementedError(
-            f"Continuous {name.upper()} modifier is recognized but not implemented yet."
+        preceding_oc_count = sum(
+            previous_name == "oc"
+            for previous_name, _ in normalized_configs[: len(modifiers)]
+        )
+        if preceding_oc_count != 1:
+            raise ValueError("CM requires OC exactly once before CM.")
+        modifiers.append(
+            CMModifier(
+                class_counts=normalized_counts,
+                consistency_weight=float(config.get("consistency_weight", 1.0)),
+                diversity_weight=float(config.get("diversity_weight", 0.2)),
+                comparison_space=str(config.get("comparison_space", "velocity")),
+            )
         )
     return tuple(modifiers)
