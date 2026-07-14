@@ -192,6 +192,20 @@ class FashionMNISTFeatureEvaluator(nn.Module):
                 f"Fashion-MNIST evaluator accuracy {accuracy:.4f} is below "
                 f"required {minimum_accuracy:.4f}."
             )
+        expected_contract = {
+            "evaluator_version": 1,
+            "architecture": "mnist_classifier_v1",
+            "feature_dimension": 128,
+            "class_order": list(range(10)),
+        }
+        for field, value in expected_contract.items():
+            if metadata.get(field) != value:
+                raise ValueError(
+                    f"Fashion-MNIST evaluator {field} mismatch: expected {value!r}."
+                )
+        for field in ("weights_sha256", "state_dict_sha256"):
+            if not metadata.get(field):
+                raise ValueError(f"Fashion-MNIST evaluator metadata is missing {field}.")
         self.classifier = classifier.eval()
         for parameter in self.classifier.parameters():
             parameter.requires_grad_(False)
@@ -322,30 +336,10 @@ def _load_or_train_classifier(
             classifier=classifier,
             checkpoint_path=checkpoint_path,
             device=device,
+            dataset=dataset,
+            normalize=normalize,
         )
-        if payload is not None:
-            classifier_steps = int(payload.get("steps", 0))
-        else:
-            classifier_steps = steps
-            _train_classifier(
-                classifier=classifier,
-                data=train_data,
-                steps=steps,
-                batch_size=batch_size,
-                lr=lr,
-                device=device,
-            )
-            torch.save(
-                {
-                    "model_state_dict": classifier.state_dict(),
-                    "steps": steps,
-                    "normalize": normalize,
-                    "dataset": dataset,
-                    "evaluator_version": 1,
-                },
-                checkpoint_path,
-            )
-            trained_now = True
+        classifier_steps = int(payload["steps"])
     else:
         classifier_steps = steps
         _train_classifier(
@@ -357,16 +351,6 @@ def _load_or_train_classifier(
             device=device,
         )
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "model_state_dict": classifier.state_dict(),
-                "steps": steps,
-                "normalize": normalize,
-                "dataset": dataset,
-                "evaluator_version": 1,
-            },
-            checkpoint_path,
-        )
         trained_now = True
 
     classifier.eval()
@@ -377,6 +361,23 @@ def _load_or_train_classifier(
         batch_size=batch_size,
         device=device,
     )
+    state_dict_fingerprint = _state_dict_sha256(classifier.state_dict())
+    if trained_now:
+        torch.save(
+            {
+                "model_state_dict": classifier.state_dict(),
+                "steps": steps,
+                "normalize": _normalization_family(normalize),
+                "dataset": dataset,
+                "evaluator_version": 1,
+                "architecture": "mnist_classifier_v1",
+                "feature_dimension": 128,
+                "class_order": list(range(10)),
+                "held_out_accuracy": accuracy,
+                "state_dict_sha256": state_dict_fingerprint,
+            },
+            checkpoint_path,
+        )
     metadata = {
         "dataset": dataset,
         "checkpoint_path": str(checkpoint_path),
@@ -386,6 +387,10 @@ def _load_or_train_classifier(
         "normalize": normalize,
         "weights_sha256": _sha256_file(checkpoint_path),
         "evaluator_version": 1,
+        "architecture": "mnist_classifier_v1",
+        "feature_dimension": 128,
+        "class_order": list(range(10)),
+        "state_dict_sha256": state_dict_fingerprint,
     }
     return classifier, metadata
 
@@ -404,6 +409,17 @@ def _sha256_file(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _state_dict_sha256(state_dict: dict[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(state_dict):
+        tensor = state_dict[name].detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(str(tensor.dtype).encode("ascii"))
+        digest.update(str(tuple(tensor.shape)).encode("ascii"))
+        digest.update(tensor.numpy().tobytes())
     return digest.hexdigest()
 
 
@@ -446,58 +462,19 @@ def _evaluate_with_classifier(
     train_data = _build_mnist_from_config(config, train=True, dequantize=False)
     test_data = _build_mnist_from_config(config, train=False, dequantize=False)
     checkpoint_path = _classifier_checkpoint_path(checkpoint_path, config)
-    classifier = MNISTClassifier().to(device)
-
-    trained_now = False
-    if checkpoint_path.exists():
-        payload = _load_classifier_payload(
-            classifier=classifier,
-            checkpoint_path=checkpoint_path,
-            device=device,
-        )
-        if payload is not None:
-            classifier_steps = int(payload.get("steps", 0))
-        else:
-            classifier_steps = steps
-            _train_classifier(
-                classifier=classifier,
-                data=train_data,
-                steps=steps,
-                batch_size=batch_size,
-                lr=lr,
-                device=device,
-            )
-            torch.save(
-                {
-                    "model_state_dict": classifier.state_dict(),
-                    "steps": steps,
-                    "normalize": config.get("data", {}).get("normalize", "zero_one"),
-                },
-                checkpoint_path,
-            )
-            trained_now = True
-    else:
-        classifier_steps = steps
-        _train_classifier(
-            classifier=classifier,
-            data=train_data,
-            steps=steps,
-            batch_size=batch_size,
-            lr=lr,
-            device=device,
-        )
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "model_state_dict": classifier.state_dict(),
-                "steps": steps,
-                "normalize": config.get("data", {}).get("normalize", "zero_one"),
-            },
-            checkpoint_path,
-        )
-        trained_now = True
-
-    classifier.eval()
+    classifier, metadata = _load_or_train_classifier(
+        classifier=MNISTClassifier().to(device),
+        train_data=train_data,
+        test_data=test_data,
+        checkpoint_path=checkpoint_path,
+        normalize=str(config.get("data", {}).get("normalize", "zero_one")),
+        steps=steps,
+        batch_size=batch_size,
+        eval_samples=eval_samples,
+        lr=lr,
+        device=device,
+        dataset="mnist",
+    )
     test_accuracy = _classifier_accuracy(
         classifier=classifier,
         data=test_data,
@@ -519,8 +496,8 @@ def _evaluate_with_classifier(
     )
     return {
         "checkpoint_path": str(checkpoint_path),
-        "trained_now": trained_now,
-        "classifier_steps": classifier_steps,
+        "trained_now": metadata["trained_now"],
+        "classifier_steps": metadata["classifier_steps"],
         "test_accuracy": test_accuracy,
         "generated": generated_metrics,
         "target_reference": target_metrics,
@@ -533,12 +510,48 @@ def _load_classifier_payload(
     classifier: MNISTClassifier,
     checkpoint_path: Path,
     device: torch.device,
-) -> dict[str, Any] | None:
+    dataset: str,
+    normalize: str,
+) -> dict[str, Any]:
     payload = torch.load(checkpoint_path, map_location=device)
+    required = {
+        "model_state_dict",
+        "steps",
+        "normalize",
+        "dataset",
+        "evaluator_version",
+        "architecture",
+        "feature_dimension",
+        "class_order",
+        "held_out_accuracy",
+        "state_dict_sha256",
+    }
+    if not isinstance(payload, dict) or not required.issubset(payload):
+        missing = required - set(payload) if isinstance(payload, dict) else required
+        raise ValueError(f"Classifier checkpoint is missing evaluator metadata: {sorted(missing)}")
+    expected = {
+        "dataset": dataset,
+        "normalize": _normalization_family(normalize),
+        "evaluator_version": 1,
+        "architecture": "mnist_classifier_v1",
+        "feature_dimension": 128,
+        "class_order": list(range(10)),
+    }
+    for field, value in expected.items():
+        actual = payload[field]
+        if field == "normalize":
+            actual = _normalization_family(str(actual))
+        if actual != value:
+            raise ValueError(
+                f"Classifier checkpoint {field} mismatch: expected {value!r}, got {actual!r}."
+            )
+    fingerprint = _state_dict_sha256(payload["model_state_dict"])
+    if payload["state_dict_sha256"] != fingerprint:
+        raise ValueError("Classifier checkpoint state_dict_sha256 does not match its weights.")
     try:
         classifier.load_state_dict(payload["model_state_dict"])
-    except RuntimeError:
-        return None
+    except RuntimeError as exc:
+        raise ValueError("Classifier checkpoint weights do not match the architecture.") from exc
     return payload
 
 

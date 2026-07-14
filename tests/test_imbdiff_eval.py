@@ -132,6 +132,49 @@ def test_fashion_extensions_report_tail_and_conditional_diagnostics() -> None:
     ]
 
 
+def test_balanced_subsampling_keeps_equal_class_counts() -> None:
+    labels = np.repeat(np.arange(3), 6)
+    features = np.stack((labels, np.tile(np.arange(6), 3)), axis=1).astype(np.float32)
+    cache = FeatureCache(
+        features=features,
+        probabilities=np.eye(3, dtype=np.float32)[labels],
+        labels=labels,
+        sample_ids=np.arange(len(labels)).astype(str),
+        provenance={"dataset": "fake"},
+    )
+
+    report = evaluate_feature_caches(
+        cache,
+        cache,
+        class_counts=[100, 10, 1],
+        repeats=1,
+        overall_samples=12,
+        kid_subsets=1,
+        kid_subset_size=6,
+        recall_k=2,
+        inception_splits=1,
+        require_balanced_generated=True,
+    )
+
+    assert report["repeats"][0]["generated_class_counts"] == [4, 4, 4]
+
+
+def test_balanced_subsampling_requires_divisible_sample_count() -> None:
+    with pytest.raises(ValueError, match="divisible"):
+        evaluate_feature_caches(
+            _feature_cache(),
+            _feature_cache(),
+            class_counts=[100, 10, 1],
+            repeats=1,
+            overall_samples=11,
+            kid_subsets=1,
+            kid_subset_size=6,
+            recall_k=2,
+            inception_splits=1,
+            require_balanced_generated=True,
+        )
+
+
 def test_write_report_creates_json_and_flat_csv(tmp_path) -> None:
     report = evaluate_feature_caches(
         _feature_cache(),

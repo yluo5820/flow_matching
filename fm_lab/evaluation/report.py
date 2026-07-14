@@ -95,6 +95,8 @@ def evaluate_feature_caches(
         ):
             raise ValueError("Balanced evaluation requires equal generated samples per class.")
     sample_size = min(overall_samples, len(generated.features))
+    if require_balanced_generated and sample_size % len(class_counts):
+        raise ValueError("Balanced overall sample count must be divisible by class count.")
     groups = frequency_ranked_groups(class_counts)
     rng = np.random.default_rng(seed)
     overall_values = {name: [] for name in ("fid", "kid", "recall", "inception_score")}
@@ -106,7 +108,15 @@ def evaluate_feature_caches(
     repeat_records = []
 
     for repeat in range(repeats):
-        indices = rng.choice(len(generated.features), sample_size, replace=False)
+        if require_balanced_generated:
+            indices = _balanced_sample_indices(
+                generated.labels,
+                sample_size=sample_size,
+                num_classes=len(class_counts),
+                rng=rng,
+            )
+        else:
+            indices = rng.choice(len(generated.features), sample_size, replace=False)
         features = generated.features[indices]
         probabilities = generated.probabilities[indices]
         labels = generated.labels[indices]
@@ -151,6 +161,9 @@ def evaluate_feature_caches(
                 "selection_seed": seed,
                 "kid_seed": seed + repeat,
                 "sample_count": sample_size,
+                "generated_class_counts": np.bincount(
+                    labels, minlength=len(class_counts)
+                ).astype(int).tolist(),
                 "fid": fid,
                 "kid": kid,
                 "recall": recall,
@@ -210,6 +223,25 @@ def evaluate_feature_caches(
             num_classes=len(class_counts),
         )
     return report
+
+
+def _balanced_sample_indices(
+    labels: np.ndarray,
+    *,
+    sample_size: int,
+    num_classes: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    per_class = sample_size // num_classes
+    parts = []
+    for class_id in range(num_classes):
+        candidates = np.flatnonzero(labels == class_id)
+        if len(candidates) < per_class:
+            raise ValueError(f"Class {class_id} has too few samples for balanced evaluation.")
+        parts.append(rng.choice(candidates, per_class, replace=False))
+    indices = np.concatenate(parts)
+    rng.shuffle(indices)
+    return indices
 
 
 def _classwise_recall(

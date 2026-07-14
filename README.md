@@ -106,6 +106,8 @@ Run the faster Fashion-MNIST IR100 conditional benchmark:
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/checkpoint.pt \
+  --generation-method flow_matching --sampler euler --nfe 64 \
   --download --output-dir runs/fashion_mnist_lt_ir100/evaluation
 ```
 

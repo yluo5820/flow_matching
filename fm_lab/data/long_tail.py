@@ -36,7 +36,7 @@ def long_tail_indices(
         rng.shuffle(class_indices)
         if imbalance_type == "exp":
             exponent = class_id / (num_classes - 1.0)
-            keep = int(n_max * imbalance_factor**exponent)
+            keep = max(1, int(n_max * imbalance_factor**exponent))
         else:
             keep = n_max
         selected.append(class_indices[:keep])

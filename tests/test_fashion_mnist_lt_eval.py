@@ -1,27 +1,71 @@
+import hashlib
+
 import numpy as np
 import pytest
 
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
-from fm_lab.experiments.run_fashion_mnist_lt_eval import main, parse_args
+from fm_lab.experiments.run_fashion_mnist_lt_eval import _sha256_file, main, parse_args
 
 
-def _cache(*, weights: str = "weights-a") -> FeatureCache:
-    labels = np.repeat(np.arange(10), 2)
-    features = np.stack((labels, np.tile(np.arange(2), 10)), axis=1).astype(np.float32)
+def _cache(
+    *,
+    weights: str = "weights-a",
+    samples_per_class: int = 2,
+    split: str = "generated",
+) -> FeatureCache:
+    labels = np.repeat(np.arange(10), samples_per_class)
+    features = np.zeros((len(labels), 128), dtype=np.float32)
+    features[:, :2] = np.stack(
+        (labels, np.tile(np.arange(samples_per_class), 10)), axis=1
+    )
     probabilities = np.eye(10, dtype=np.float32)[labels] * 0.9 + 0.1 / 10
+    sample_ids = np.arange(len(labels)).astype(str)
+    subset_sha256 = hashlib.sha256(
+        np.arange(len(labels), dtype=np.int64).tobytes()
+    ).hexdigest()
+    provenance = {
+        "dataset": "fashion_mnist",
+        "extractor": "fashion_mnist_classifier",
+        "weights_sha256": weights,
+        "preprocessing": "clamp_to_classifier_input_range",
+        "image_shape": [1, 28, 28],
+        "normalize": "minus_one_one",
+        "evaluator_version": 1,
+        "architecture": "mnist_classifier_v1",
+        "feature_layer": "penultimate_128",
+        "feature_dimension": 128,
+        "class_order": list(range(10)),
+        "minimum_accuracy": 0.9,
+        "test_accuracy": 0.93,
+        "split": split,
+    }
+    if split == "official_test":
+        provenance["dataset_metadata"] = {
+            "dataset": "fashion_mnist",
+            "train": False,
+            "n_images": len(labels),
+            "class_counts": [samples_per_class] * 10,
+            "subset_sha256": subset_sha256,
+        }
+    else:
+        provenance.update(
+            {
+                "source_samples_sha256": "samples-hash",
+                "source_labels_sha256": "labels-hash",
+                "generative_checkpoint_sha256": "checkpoint-hash",
+                "generation_method": "flow_matching",
+                "sampler": "euler",
+                "nfe": 64,
+                "guidance_scale": 2.0,
+                "generation_seed": 0,
+            }
+        )
     return FeatureCache(
         features=features,
         probabilities=probabilities,
         labels=labels,
-        sample_ids=np.asarray([f"sample-{index}" for index in range(len(labels))]),
-        provenance={
-            "dataset": "fashion_mnist",
-            "extractor": "fashion_mnist_classifier",
-            "weights_sha256": weights,
-            "preprocessing": "clamp_to_classifier_input_range",
-            "image_shape": [1, 28, 28],
-            "normalize": "minus_one_one",
-        },
+        sample_ids=sample_ids,
+        provenance=provenance,
     )
 
 
@@ -53,9 +97,35 @@ def test_fashion_cli_rejects_mismatched_evaluator_provenance(tmp_path) -> None:
     generated_path = tmp_path / "generated.npz"
     real_path = tmp_path / "real.npz"
     save_feature_cache(generated_path, _cache(weights="generated"))
-    save_feature_cache(real_path, _cache(weights="real"))
+    save_feature_cache(
+        real_path,
+        _cache(weights="real", samples_per_class=1000, split="official_test"),
+    )
 
     with pytest.raises(ValueError, match="weights_sha256"):
+        main(
+            [
+                "--generated-cache",
+                str(generated_path),
+                "--real-cache",
+                str(real_path),
+                "--samples-per-class",
+                "2",
+                "--overall-samples",
+                "20",
+                "--output-dir",
+                str(tmp_path / "report"),
+            ]
+        )
+
+
+def test_fashion_cli_rejects_noncanonical_real_split(tmp_path) -> None:
+    generated_path = tmp_path / "generated.npz"
+    real_path = tmp_path / "real.npz"
+    save_feature_cache(generated_path, _cache())
+    save_feature_cache(real_path, _cache(samples_per_class=1000, split="train"))
+
+    with pytest.raises(ValueError, match="official_test"):
         main(
             [
                 "--generated-cache",
@@ -76,7 +146,10 @@ def test_cached_fashion_cli_writes_balanced_report(tmp_path) -> None:
     generated_path = tmp_path / "generated.npz"
     real_path = tmp_path / "real.npz"
     save_feature_cache(generated_path, _cache())
-    save_feature_cache(real_path, _cache())
+    save_feature_cache(
+        real_path,
+        _cache(samples_per_class=1000, split="official_test"),
+    )
     output_dir = tmp_path / "report"
 
     exit_code = main(
@@ -110,3 +183,12 @@ def test_cached_fashion_cli_writes_balanced_report(tmp_path) -> None:
     report_text = (output_dir / "metrics.json").read_text()
     assert "macro_classwise_fid" in report_text
     assert "reference_calibration" in report_text
+
+
+def test_sha256_file_changes_when_generated_content_changes(tmp_path) -> None:
+    path = tmp_path / "samples.npy"
+    path.write_bytes(b"first")
+    first = _sha256_file(path)
+    path.write_bytes(b"second")
+
+    assert _sha256_file(path) != first

@@ -20,8 +20,8 @@ def test_long_tail_indices_match_cifar_exponential_rule() -> None:
         imbalance_factor=0.1,
         seed=7,
     )
-
     counts = tuple(np.bincount(labels[selected], minlength=10).tolist())
+
     assert counts == (10, 7, 5, 4, 3, 2, 2, 1, 1, 1)
     assert np.array_equal(
         selected,
@@ -34,6 +34,19 @@ def test_long_tail_indices_match_cifar_exponential_rule() -> None:
         ),
     )
 
+
+def test_long_tail_indices_retain_at_least_one_sample_per_class() -> None:
+    labels = np.repeat(np.arange(10), 2)
+
+    selected = long_tail_indices(
+        labels,
+        num_classes=10,
+        imbalance_type="exp",
+        imbalance_factor=0.01,
+        seed=0,
+    )
+
+    assert np.all(np.bincount(labels[selected], minlength=10) >= 1)
 
 def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
     _write_balanced_fashion_mnist(tmp_path, examples_per_class=10)

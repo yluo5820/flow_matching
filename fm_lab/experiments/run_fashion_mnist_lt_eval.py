@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -33,6 +34,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--real-cache")
     parser.add_argument("--generated-samples")
     parser.add_argument("--generated-labels")
+    parser.add_argument("--generative-checkpoint")
+    parser.add_argument("--generation-method")
+    parser.add_argument("--sampler", default="euler")
+    parser.add_argument("--nfe", type=int, default=64)
+    parser.add_argument("--guidance-scale", type=float, default=2.0)
+    parser.add_argument("--generation-seed", type=int, default=0)
     parser.add_argument("--data-root", default="data/fashion_mnist")
     parser.add_argument(
         "--classifier-checkpoint",
@@ -111,6 +118,10 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
         raise ValueError(
             "Provide paired feature caches or both --generated-samples and --generated-labels."
         )
+    if not args.generative_checkpoint or not args.generation_method:
+        raise ValueError(
+            "Array extraction requires --generative-checkpoint and --generation-method."
+        )
 
     device = torch.device(resolve_device(args.device))
     classifier, metadata = load_or_train_fashion_mnist_classifier(
@@ -141,6 +152,16 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
             "split": "generated",
             "source_samples": str(Path(args.generated_samples).resolve()),
             "source_labels": str(Path(args.generated_labels).resolve()),
+            "source_samples_sha256": _sha256_file(Path(args.generated_samples)),
+            "source_labels_sha256": _sha256_file(Path(args.generated_labels)),
+            "generative_checkpoint_sha256": _sha256_file(
+                Path(args.generative_checkpoint)
+            ),
+            "generation_method": args.generation_method,
+            "sampler": args.sampler,
+            "nfe": args.nfe,
+            "guidance_scale": args.guidance_scale,
+            "generation_seed": args.generation_seed,
         }
     )
     generated = extract_classifier_features(
@@ -153,7 +174,10 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
         input_range=input_range,
         provenance=generated_provenance,
     )
-    save_feature_cache(cache_dir / "generated_fashion_mnist_lt.npz", generated)
+    save_feature_cache(
+        cache_dir / f"generated_fashion_mnist_lt_{generated.fingerprint[:16]}.npz",
+        generated,
+    )
 
     real_dataset = LongTailedFashionMNIST(
         root=args.data_root,
@@ -186,6 +210,7 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
 
 
 def _validate_cache_pair(generated: FeatureCache, real: FeatureCache) -> None:
+    _validate_canonical_real_cache(real)
     for field in (
         "dataset",
         "extractor",
@@ -193,11 +218,67 @@ def _validate_cache_pair(generated: FeatureCache, real: FeatureCache) -> None:
         "preprocessing",
         "image_shape",
         "normalize",
+        "evaluator_version",
+        "architecture",
+        "feature_layer",
+        "feature_dimension",
+        "class_order",
+        "minimum_accuracy",
+        "test_accuracy",
     ):
         if generated.provenance.get(field) != real.provenance.get(field):
             raise ValueError(f"Feature cache provenance mismatch for {field}.")
     if generated.features.shape[1] != real.features.shape[1]:
         raise ValueError("Feature cache dimensions do not match.")
+    if generated.features.shape[1] != int(generated.provenance["feature_dimension"]):
+        raise ValueError("Feature cache dimension does not match evaluator provenance.")
+    if float(real.provenance["test_accuracy"]) < float(
+        real.provenance["minimum_accuracy"]
+    ):
+        raise ValueError("Cached evaluator accuracy is below its required threshold.")
+    required_generation = {
+        "source_samples_sha256",
+        "source_labels_sha256",
+        "generative_checkpoint_sha256",
+        "generation_method",
+        "sampler",
+        "nfe",
+        "guidance_scale",
+        "generation_seed",
+    }
+    missing = required_generation - set(generated.provenance)
+    if missing:
+        raise ValueError(f"Generated cache is missing protocol provenance: {sorted(missing)}")
+
+
+def _validate_canonical_real_cache(real: FeatureCache) -> None:
+    if real.provenance.get("split") != "official_test":
+        raise ValueError("Real cache must use split 'official_test'.")
+    counts = np.bincount(real.labels, minlength=_NUM_CLASSES)
+    if len(counts) != _NUM_CLASSES or not np.array_equal(
+        counts, np.full(_NUM_CLASSES, 1000, dtype=np.int64)
+    ):
+        raise ValueError("Real cache must contain the full official test split: 1,000 per class.")
+    expected_ids = np.arange(10_000, dtype=np.int64)
+    try:
+        sample_ids = real.sample_ids.astype(np.int64)
+    except ValueError as exc:
+        raise ValueError("Real cache sample identifiers must be official test indices.") from exc
+    if not np.array_equal(sample_ids, expected_ids):
+        raise ValueError("Real cache sample identifiers must cover official indices 0..9999.")
+    metadata = real.provenance.get("dataset_metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("Real cache is missing official dataset metadata.")
+    expected_metadata = {
+        "dataset": "fashion_mnist",
+        "train": False,
+        "n_images": 10_000,
+        "class_counts": [1000] * _NUM_CLASSES,
+        "subset_sha256": hashlib.sha256(expected_ids.tobytes()).hexdigest(),
+    }
+    for field, value in expected_metadata.items():
+        if metadata.get(field) != value:
+            raise ValueError(f"Real cache dataset metadata mismatch for {field}.")
 
 
 def _validate_balanced_labels(labels: np.ndarray, *, samples_per_class: int) -> None:
@@ -226,6 +307,14 @@ def _image_range(normalize: str) -> tuple[float, float]:
     if normalize.lower() in {"zero_one", "01", "unit"}:
         return (0.0, 1.0)
     raise ValueError(f"Unsupported Fashion-MNIST normalization: {normalize}")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":

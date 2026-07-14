@@ -72,6 +72,9 @@ scores:
 fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_lt_ir100/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_lt_ir100/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_lt_ir100/checkpoint.pt \
+  --generation-method flow_matching --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 \
   --data-root data/fashion_mnist \
   --download \
   --output-dir runs/fashion_mnist_lt_ir100/evaluation
@@ -81,6 +84,9 @@ If the evaluator checkpoint is absent, the command trains it once on the
 balanced training split and validates its held-out accuracy before use. Supply
 `--generated-cache` and `--real-cache` together to recompute reports without
 feature extraction. Cache provenance must match exactly.
+Generated-array evaluation hashes the arrays and generative checkpoint, and
+records the method, sampler, NFE, guidance scale, and seed so modified files or
+incompatible sampling protocols cannot silently reuse a cache.
 
 ## `fm-lab-imbdiff-eval`
 
