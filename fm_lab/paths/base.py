@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import torch
+
+from fm_lab.paths.prediction import PathPredictionState
 
 
 class FlowPath(Protocol):
@@ -29,6 +31,20 @@ class FlowPath(Protocol):
         **kwargs,
     ) -> torch.Tensor:
         """Return target velocity at time `t`."""
+
+
+@runtime_checkable
+class ConvertibleFlowPath(FlowPath, Protocol):
+    """Optional path interface for path-aware prediction conversion."""
+
+    def prediction_state(
+        self,
+        xt: torch.Tensor,
+        t: torch.Tensor,
+        *,
+        min_denom: float = 1e-3,
+    ) -> PathPredictionState:
+        """Create conversion state for an intermediate path sample."""
 
 
 def expand_time(t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
