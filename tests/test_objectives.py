@@ -124,6 +124,40 @@ def test_target_output_velocity_loss_matches_analytical_linear_velocity() -> Non
     assert metrics["loss_space"] == "velocity"
 
 
+@pytest.mark.parametrize(
+    ("model_output", "prediction", "time"),
+    [
+        ("target", torch.tensor([[3.0, 1.0]]), 0.999),
+        ("source", torch.tensor([[1.0, -1.0]]), 0.001),
+    ],
+)
+def test_endpoint_output_velocity_loss_uses_symmetric_denominator_floor(
+    model_output: str,
+    prediction: torch.Tensor,
+    time: float,
+) -> None:
+    source = torch.tensor([[1.0, -1.0]])
+    target = torch.tensor([[3.0, 1.0]])
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": model_output,
+            "loss_space": "velocity",
+            "min_denom": 0.05,
+        }
+    )
+
+    loss, _ = objective(
+        model=FixedPrediction(prediction),
+        path=LinearPath(),
+        x0=source,
+        x1=target,
+        t=torch.tensor([time]),
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
+
+
 def test_source_output_target_loss_matches_analytical_linear_target() -> None:
     source = torch.tensor([[1.0, -1.0]])
     target = torch.tensor([[3.0, 1.0]])

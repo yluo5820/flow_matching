@@ -31,7 +31,7 @@ from fm_lab.plotting.trajectories import (
 from fm_lab.solvers.base import Solver
 from fm_lab.solvers.schedules import make_time_grid
 from fm_lab.sources.base import SourceDistribution
-from fm_lab.training.losses import build_objective, sample_uniform_time
+from fm_lab.training.losses import build_objective
 from fm_lab.training.prediction import (
     classifier_free_guided_prediction,
     model_prediction,
@@ -49,6 +49,10 @@ from fm_lab.training.sampling_guidance import (
     apply_density_prior_rescaling,
     apply_prior_guidance,
     build_sampling_guidance_config,
+)
+from fm_lab.training.time_sampling import (
+    TrainingTimeSampler,
+    build_training_time_sampler,
 )
 from fm_lab.utils.checkpoints import (
     capture_rng_state,
@@ -77,6 +81,7 @@ def train_flow_matching(
         raise ValueError(f"Source dim {source.dim} does not match target dim {target.dim}.")
 
     training_config = config.get("training", {})
+    time_sampler = build_training_time_sampler(training_config.get("time_sampling"))
     batch_size = int(training_config.get("batch_size", 1024))
     steps = int(training_config.get("steps", 10_000))
     lr = float(training_config.get("lr", 1e-4))
@@ -204,6 +209,7 @@ def train_flow_matching(
                 theta_optimizer=theta_optimizer,
                 psi_optimizer=psi_optimizer,
                 schedule=learned_acceleration_schedule,
+                time_sampler=time_sampler,
             )
             loss_metrics = {}
             if should_record:
@@ -215,6 +221,7 @@ def train_flow_matching(
                     device=device,
                     class_conditional=bool(getattr(model, "is_class_conditional", False)),
                     condition_dropout=condition_dropout,
+                    time_sampler=time_sampler,
                 )
                 _, loss_metrics = objective(
                     model=model,
@@ -254,6 +261,7 @@ def train_flow_matching(
                 device=device,
                 class_conditional=bool(getattr(model, "is_class_conditional", False)),
                 condition_dropout=condition_dropout,
+                time_sampler=time_sampler,
             )
             loss, loss_metrics = objective(
                 model=model,
@@ -465,6 +473,7 @@ def _train_learned_acceleration_step(
     theta_optimizer: torch.optim.Optimizer,
     psi_optimizer: torch.optim.Optimizer,
     schedule: _LearnedAccelerationSchedule,
+    time_sampler: TrainingTimeSampler,
 ) -> None:
     model.train()
     if isinstance(path, nn.Module):
@@ -477,6 +486,7 @@ def _train_learned_acceleration_step(
             coupling=coupling,
             batch_size=batch_size,
             device=device,
+            time_sampler=time_sampler,
         )
         loss, _ = objective.theta_update_loss(model=model, path=path, x0=x0, x1=x1, t=t)
         theta_optimizer.zero_grad(set_to_none=True)
@@ -493,6 +503,7 @@ def _train_learned_acceleration_step(
             coupling=coupling,
             batch_size=batch_size,
             device=device,
+            time_sampler=time_sampler,
         )
         psi_optimizer.zero_grad(set_to_none=True)
         with _frozen_parameters(model):
@@ -923,6 +934,7 @@ def _sample_training_batch(
     device: torch.device,
     class_conditional: bool = False,
     condition_dropout: float = 0.0,
+    time_sampler: TrainingTimeSampler | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -944,7 +956,8 @@ def _sample_training_batch(
         drop = torch.rand(batch_size, device=device) < condition_dropout
         class_labels = class_labels.clone()
         class_labels[drop] = -1
-    t = sample_uniform_time(batch_size, device)
+    sampler = time_sampler if time_sampler is not None else TrainingTimeSampler()
+    t = sampler.sample(batch_size, device)
     return x0, x1, t, class_labels, original_class_labels
 
 

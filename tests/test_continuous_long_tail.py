@@ -344,6 +344,39 @@ def test_oc_supervises_transferred_pair_without_reconstructing_xt(
     assert metrics["oc.transfer_rate.clean"] == 0.0
 
 
+def test_oc_endpoint_supervision_uses_same_clamped_conversion_as_prediction() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "min_denom": 0.75,
+            "modifiers": [
+                {
+                    "name": "oc",
+                    "transfer_mode": "t2h",
+                    "cut_t": None,
+                    "min_denom": 1e-3,
+                }
+            ],
+        },
+        class_counts=[100, 10],
+    )
+
+    torch.manual_seed(0)
+    loss, _ = objective(
+        model=RecordingPrediction(10.0),
+        path=LinearPath(),
+        x0=torch.tensor([[20.0], [0.0]]),
+        x1=torch.tensor([[0.0], [10.0]]),
+        t=torch.tensor([0.5, 0.5]),
+        class_labels=torch.tensor([1, 0]),
+        original_class_labels=torch.tensor([1, 0]),
+    )
+
+    assert torch.allclose(loss, torch.zeros_like(loss))
+
+
 def _cbdm_gradients(
     gamma: float,
 ) -> tuple[torch.Tensor, dict[str, object], LabelTablePrediction]:

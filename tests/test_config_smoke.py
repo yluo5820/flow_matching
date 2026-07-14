@@ -247,11 +247,19 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     assert configs[0]["sampling"]["classes"] == list(range(10))
     assert configs[0]["sampling"]["nfe"] == 64
     assert configs[0]["experiment"]["seed"] == 0
+    assert configs[0]["training"]["time_sampling"] == {
+        "name": "logit_normal",
+        "mean": -0.8,
+        "std": 0.8,
+    }
+    assert configs[0]["training"]["warmup_steps"] == 500
+    assert configs[0]["training"]["ema_decay"] == 0.9999
+    assert "gradient_clip" not in configs[0]["training"]
     assert configs[0]["objective"] == {
         "name": "flow_matching",
         "model_output": "target",
         "loss_space": "velocity",
-        "min_denom": 0.001,
+        "min_denom": 0.05,
         "modifiers": [],
     }
     assert configs[1]["objective"]["modifiers"] == [
@@ -264,10 +272,10 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
         }
     ]
     assert configs[2]["objective"]["modifiers"] == [
-        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.001}
+        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.05}
     ]
     assert configs[3]["objective"]["modifiers"] == [
-        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.001},
+        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.05},
         {
             "name": "cm",
             "consistency_weight": 1.0,

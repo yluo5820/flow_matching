@@ -47,12 +47,12 @@ objective:
   name: flow_matching
   model_output: target
   loss_space: velocity
-  min_denom: 0.001
+  min_denom: 0.05
   modifiers:
     - name: oc
       transfer_mode: t2h
       cut_t: null
-      min_denom: 0.001
+      min_denom: 0.05
     - name: cm
       consistency_weight: 1.0
       diversity_weight: 0.2
@@ -62,6 +62,12 @@ training:
   batch_size: 256
   steps: 20000
   lr: 0.0001
+  warmup_steps: 500
+  ema_decay: 0.9999
+  time_sampling:
+    name: logit_normal
+    mean: -0.8
+    std: 0.8
   log_every: 250
   early_stopping:
     enabled: true

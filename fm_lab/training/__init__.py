@@ -17,6 +17,10 @@ from fm_lab.training.losses import (
     learned_flow_straightness_loss,
     sample_uniform_time,
 )
+from fm_lab.training.time_sampling import (
+    TrainingTimeSampler,
+    build_training_time_sampler,
+)
 from fm_lab.training.trainer import train_flow_matching
 
 __all__ = [
@@ -33,5 +37,7 @@ __all__ = [
     "flow_matching_loss",
     "learned_flow_straightness_loss",
     "sample_uniform_time",
+    "TrainingTimeSampler",
+    "build_training_time_sampler",
     "train_flow_matching",
 ]

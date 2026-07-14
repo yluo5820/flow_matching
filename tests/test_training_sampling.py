@@ -11,13 +11,14 @@ from fm_lab.data import GaussianMixture3D, TwoMoons
 from fm_lab.paths import GaussianDiffusionPath, LearnedAccelerationPath, LinearPath, SphericalPath
 from fm_lab.solvers import EulerSolver, HeunSolver
 from fm_lab.sources import GaussianSource
-from fm_lab.training.losses import build_objective
+from fm_lab.training.losses import FlowMatchingObjective, build_objective
 from fm_lab.training.prediction import velocity_model_for_objective
 from fm_lab.training.sampling_guidance import (
     DensityGuidanceConfig,
     DensityGuidedDiffusionVelocity,
     apply_density_prior_rescaling,
 )
+from fm_lab.training.time_sampling import build_training_time_sampler
 from fm_lab.training.trainer import (
     _validate_training_compatibility,
     sample_and_plot,
@@ -25,6 +26,109 @@ from fm_lab.training.trainer import (
     validate_checkpoint_compatibility,
 )
 from fm_lab.utils.checkpoints import load_checkpoint, save_checkpoint
+
+
+def test_logit_normal_time_sampler_matches_seeded_definition() -> None:
+    expected_generator = torch.Generator().manual_seed(17)
+    expected = torch.sigmoid(
+        -0.8 + 0.8 * torch.randn(32, generator=expected_generator)
+    )
+    actual_generator = torch.Generator().manual_seed(17)
+    sampler = build_training_time_sampler(
+        {"name": "logit_normal", "mean": -0.8, "std": 0.8}
+    )
+
+    actual = sampler.sample(32, torch.device("cpu"), generator=actual_generator)
+
+    assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize("config", [None, "uniform", {"name": "uniform"}])
+def test_uniform_time_sampler_preserves_legacy_seeded_sampling(config) -> None:
+    expected_generator = torch.Generator().manual_seed(23)
+    expected = 1e-5 + (1.0 - 2e-5) * torch.rand(
+        32, generator=expected_generator
+    )
+    actual_generator = torch.Generator().manual_seed(23)
+    sampler = build_training_time_sampler(config)
+
+    actual = sampler.sample(32, torch.device("cpu"), generator=actual_generator)
+
+    assert torch.equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    "config, match",
+    [
+        ({"name": "unknown"}, "training.time_sampling.name"),
+        ({"name": "logit_normal", "mean": float("nan")}, "mean"),
+        ({"name": "logit_normal", "std": 0.0}, "std"),
+        ({"name": "logit_normal", "std": float("inf")}, "std"),
+        ({"name": "uniform", "extra": 1}, "unsupported"),
+    ],
+)
+def test_invalid_training_time_sampling_config_fails_early(
+    config: dict[str, object], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        build_training_time_sampler(config)
+
+
+class RecordingFlowMatchingObjective(FlowMatchingObjective):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_times: list[torch.Tensor] = []
+
+    def __call__(self, **kwargs):
+        self.seen_times.append(kwargs["t"].detach().clone())
+        return super().__call__(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("time_sampling", "expect_all_small"),
+    [
+        ({"name": "logit_normal", "mean": -8.0, "std": 0.01}, True),
+        (None, False),
+    ],
+)
+def test_train_uses_configured_time_sampler(
+    tmp_path,
+    monkeypatch,
+    time_sampling: dict[str, object] | None,
+    expect_all_small: bool,
+) -> None:
+    objective = RecordingFlowMatchingObjective()
+    monkeypatch.setattr(
+        trainer_module,
+        "build_objective",
+        lambda *args, **kwargs: objective,
+    )
+    training = {"batch_size": 16, "steps": 1, "lr": 1e-3, "log_every": 1}
+    if time_sampling is not None:
+        training["time_sampling"] = time_sampling
+    torch.manual_seed(0)
+
+    train_flow_matching(
+        config={
+            "experiment": {"seed": 0},
+            "training": training,
+            "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
+        },
+        run_dir=tmp_path / ("logit" if expect_all_small else "uniform"),
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TinyVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert len(objective.seen_times) == 1
+    if expect_all_small:
+        assert bool((objective.seen_times[0] < 0.01).all())
+    else:
+        assert bool((objective.seen_times[0] > 0.01).any())
 
 
 class ZeroVelocity(nn.Module):
@@ -213,6 +317,7 @@ def _resume_contract_config(
             "warmup_steps": 5,
             "ema_decay": 0.9,
             "gradient_clip": 1.0,
+            "time_sampling": "uniform",
             "accumulation_steps": 1,
             "log_every": 2,
             "checkpoint_every": 2,
@@ -259,6 +364,7 @@ def test_training_contract_serializes_resolved_objective_path_and_data_semantics
     assert contract["payload"]["model"]["hidden_dims"] == [32, 32]
     assert contract["payload"]["conditioning"]["dropout_probability"] == 0.15
     assert contract["payload"]["training"]["batch_size"] == 4
+    assert contract["payload"]["training"]["time_sampling"] == "uniform"
     assert "steps" not in contract["payload"]["training"]
     assert "log_every" not in contract["payload"]["training"]
     assert "checkpoint_every" not in contract["payload"]["training"]
@@ -281,6 +387,12 @@ _RESUME_CRITICAL_MUTATIONS = [
     pytest.param("training", "warmup_steps", 10, id="warmup-scheduler"),
     pytest.param("training", "ema_decay", 0.95, id="ema"),
     pytest.param("training", "gradient_clip", 0.5, id="gradient-clipping"),
+    pytest.param(
+        "training",
+        "time_sampling",
+        {"name": "logit_normal", "mean": -0.8, "std": 0.8},
+        id="time-sampling",
+    ),
     pytest.param("training", "accumulation_steps", 2, id="gradient-accumulation"),
     pytest.param("experiment", "seed", 8, id="seed"),
 ]

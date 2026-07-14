@@ -102,6 +102,11 @@ Evaluate a completed local MNIST image run:
 Run the four controlled continuous Fashion-MNIST IR100 experiments. Refresh the
 editable install first so the current console scripts are available:
 
+All four predict the clean target and optimize velocity loss with JiT-style
+logit-normal time sampling `(-0.8, 0.8)`. Prediction and supervision use the
+same `0.05` denominator floor. Generation remains the controlled Euler/NFE-64
+protocol used by the evaluator.
+
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .
 

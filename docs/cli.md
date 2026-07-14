@@ -58,7 +58,10 @@ conditional distributions contribute equally to the global metrics.
 
 Refresh the editable install, then train and sample the four controlled
 continuous IR100 variants. All four predict the clean target while optimizing
-velocity loss; the last three add CBDM, OC, or OC+CM respectively.
+velocity loss; the last three add CBDM, OC, or OC+CM respectively. They use
+JiT-style logit-normal time sampling `(-0.8, 0.8)` and apply the same `0.05`
+denominator floor to prediction and supervision. Evaluation retains the
+controlled Euler/NFE-64 generation protocol.
 
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .

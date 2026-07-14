@@ -58,6 +58,10 @@ def test_continuous_fashion_mnist_suite_is_documented_in_readme_and_cli() -> Non
         assert "--nfe 64" in docs
         assert "--guidance-scale 2.0" in docs
         assert "--generation-seed 0" in docs
+        assert "logit-normal" in docs
+        assert "(-0.8, 0.8)" in docs
+        assert "0.05" in docs
+        assert "Euler/NFE-64" in docs
 
 
 def test_continuous_fashion_mnist_docs_do_not_recommend_discrete_training() -> None:

@@ -22,12 +22,13 @@ from fm_lab.training.prediction import (
     model_prediction,
     velocity_model_for_objective,
 )
+from fm_lab.training.time_sampling import TrainingTimeSampler
 
 
 def sample_uniform_time(batch_size: int, device: torch.device, eps: float = 1e-5) -> torch.Tensor:
     """Sample times from `(eps, 1 - eps)` to avoid endpoint-only batches."""
 
-    return eps + (1.0 - 2.0 * eps) * torch.rand(batch_size, device=device)
+    return TrainingTimeSampler(eps=eps).sample(batch_size, device)
 
 
 def flow_matching_loss(
@@ -291,19 +292,20 @@ class FlowMatchingObjective:
                     supervision_source = transferred.source
                     supervision_target = transferred.target
                     metrics.update(transferred.metrics)
-                    if self.loss_space == PredictionKind.SOURCE.value:
-                        target_in_loss_space = supervision_source
-                    elif self.loss_space == PredictionKind.TARGET.value:
-                        target_in_loss_space = supervision_target
-                    else:
-                        target_in_loss_space = supervision_target - supervision_source
+                    supervision_velocity = supervision_target - supervision_source
                 else:
                     supervision_source = x0
                     supervision_target = x1
-                    target_in_loss_space = state.prediction(
-                        target_velocity,
-                        PredictionKind.VELOCITY,
-                    ).convert(self.loss_space)
+                    supervision_velocity = target_velocity
+                supervision_by_kind = {
+                    PredictionKind.SOURCE.value: supervision_source,
+                    PredictionKind.TARGET.value: supervision_target,
+                    PredictionKind.VELOCITY.value: supervision_velocity,
+                }
+                target_in_loss_space = state.prediction(
+                    supervision_by_kind[self.model_output],
+                    self.model_output,
+                ).convert(self.loss_space)
             per_sample_loss = _prediction_loss_per_sample(
                 prediction_in_loss_space,
                 target_in_loss_space,
