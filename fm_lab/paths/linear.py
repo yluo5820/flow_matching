@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -23,7 +24,7 @@ class LinearPredictionState:
     min_denom: float = 1e-3
 
     def __post_init__(self) -> None:
-        if self.min_denom <= 0:
+        if not math.isfinite(self.min_denom) or self.min_denom <= 0:
             raise ValueError("min_denom must be positive")
         try:
             torch.broadcast_shapes(expand_time(self.t, self.xt).shape, self.xt.shape)

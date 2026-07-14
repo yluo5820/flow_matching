@@ -56,6 +56,20 @@ def test_linear_prediction_converts_target_to_source_and_velocity() -> None:
     assert torch.allclose(prediction.as_velocity(), target - source)
 
 
+def test_linear_prediction_converts_source_to_target_and_velocity() -> None:
+    path = LinearPath()
+    source = torch.tensor([[1.0, -1.0], [0.5, 0.25]])
+    target = torch.tensor([[3.0, 1.0], [-0.5, 1.25]])
+    t = torch.tensor([0.25, 0.75])
+    xt = path.sample_xt(source, target, t)
+    prediction = path.prediction_state(xt, t).prediction(
+        source, PredictionKind.SOURCE
+    )
+
+    assert torch.allclose(prediction.as_velocity(), target - source)
+    assert torch.allclose(prediction.as_target(), target)
+
+
 def test_linear_prediction_broadcasts_time_over_image_tensors() -> None:
     path = LinearPath()
     source = torch.randn(2, 3, 4, 4)
@@ -117,12 +131,19 @@ def test_linear_prediction_conversion_preserves_gradients() -> None:
     assert torch.isfinite(target.grad).all()
 
 
-def test_linear_prediction_state_validates_inputs() -> None:
+@pytest.mark.parametrize("min_denom", [0.0, -1.0, float("nan"), float("inf"), -float("inf")])
+def test_linear_prediction_state_rejects_invalid_min_denom(min_denom: float) -> None:
     path = LinearPath()
     xt = torch.randn(2, 3)
 
     with pytest.raises(ValueError, match="min_denom must be positive"):
-        path.prediction_state(xt, torch.rand(2), min_denom=0)
+        path.prediction_state(xt, torch.rand(2), min_denom=min_denom)
+
+
+def test_linear_prediction_state_validates_shapes() -> None:
+    path = LinearPath()
+    xt = torch.randn(2, 3)
+
     with pytest.raises(ValueError, match="t must broadcast against xt"):
         path.prediction_state(xt, torch.rand(4))
     with pytest.raises(ValueError, match="prediction value must match xt shape"):
