@@ -73,3 +73,15 @@ def test_continuous_fashion_mnist_docs_do_not_recommend_discrete_training() -> N
     assert "--diffusion-prediction-type" not in docs
     assert "--ddpm" not in docs.lower()
     assert "--ddim" not in docs.lower()
+
+
+def test_balanced_fashion_mnist_baseline_and_group_fid_are_documented() -> None:
+    for path in (Path("README.md"), Path("docs/cli.md")):
+        docs = path.read_text(encoding="utf-8")
+        assert (
+            "configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml" in docs
+        )
+        assert "runs/fashion_mnist_balanced/x_vloss" in docs
+        assert "--generation-method balanced_x_vloss" in docs
+        assert "--imbalance-factor 0.01" in docs
+        assert "Many/Medium/Few FID" in docs

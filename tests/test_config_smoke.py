@@ -303,6 +303,39 @@ def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> N
         )
 
 
+def test_balanced_fashion_mnist_x_vloss_changes_only_dataset_and_identity() -> None:
+    long_tail = load_config(
+        "configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml"
+    )
+    balanced = load_config(
+        "configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml"
+    )
+
+    assert balanced["experiment"] == {
+        "name": "fashion_mnist_balanced_x_vloss",
+        "seed": 0,
+        "output_dir": "runs/fashion_mnist_balanced/x_vloss",
+    }
+    assert balanced["data"] == {
+        **long_tail["data"],
+        "imbalance_type": "balanced",
+        "imbalance_factor": 1.0,
+    }
+    controlled_fields = (
+        "source",
+        "coupling",
+        "path",
+        "model",
+        "conditioning",
+        "objective",
+        "training",
+        "solvers",
+        "sampling",
+    )
+    for field in controlled_fields:
+        assert balanced[field] == long_tail[field]
+
+
 def test_discrete_imbdiff_training_configs_are_removed() -> None:
     assert not list(Path("configs/imbdiff").rglob("*.yaml"))
 

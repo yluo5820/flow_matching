@@ -57,8 +57,9 @@ canonical protocol requests 1,000 generated samples per class, so all ten
 conditional distributions contribute equally to the global metrics.
 
 Refresh the editable install, then train and sample the four controlled
-continuous IR100 variants. All four predict the clean target while optimizing
-velocity loss; the last three add CBDM, OC, or OC+CM respectively. They use
+continuous IR100 variants and the full balanced-data baseline. All five predict
+the clean target while optimizing velocity loss; three IR100 variants add CBDM,
+OC, or OC+CM respectively. They use
 JiT-style logit-normal time sampling `(-0.8, 0.8)` and apply the same `0.05`
 denominator floor to prediction and supervision. Evaluation retains the
 controlled Euler/NFE-64 generation protocol.
@@ -81,6 +82,10 @@ controlled Euler/NFE-64 generation protocol.
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml \
+  --output-dir runs/fashion_mnist_balanced/x_vloss \
   --device auto
 ```
 
@@ -122,7 +127,20 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --guidance-scale 2.0 --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_balanced/x_vloss/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_balanced/x_vloss/checkpoint.pt \
+  --generation-method balanced_x_vloss --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --imbalance-factor 0.01 \
+  --data-root data/fashion_mnist --download \
+  --output-dir runs/fashion_mnist_balanced/x_vloss/evaluation
 ```
+
+The report includes Many/Medium/Few FID. The balanced baseline intentionally
+keeps `--imbalance-factor 0.01`, so group membership follows the IR100 training
+frequencies rather than treating the balanced training counts as frequency
+groups.
 
 If the evaluator checkpoint is absent, the command trains it once on the
 balanced training split and validates its held-out accuracy before use. Supply

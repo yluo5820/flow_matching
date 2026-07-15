@@ -99,10 +99,11 @@ Evaluate a completed local MNIST image run:
 .conda/fm_lab/bin/fm-lab-mnist-eval --run-dir runs/mnist_image_unet_ot --solver auto --nfe 64 --device auto
 ```
 
-Run the four controlled continuous Fashion-MNIST IR100 experiments. Refresh the
-editable install first so the current console scripts are available:
+Run the four controlled continuous Fashion-MNIST IR100 experiments plus the
+full balanced-data baseline. Refresh the editable install first so the current
+console scripts are available:
 
-All four predict the clean target and optimize velocity loss with JiT-style
+All five predict the clean target and optimize velocity loss with JiT-style
 logit-normal time sampling `(-0.8, 0.8)`. Prediction and supervision use the
 same `0.05` denominator floor. Generation remains the controlled Euler/NFE-64
 protocol used by the evaluator.
@@ -125,6 +126,10 @@ protocol used by the evaluator.
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
+  --device auto
+.conda/fm_lab/bin/fm-lab-train \
+  --config configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml \
+  --output-dir runs/fashion_mnist_balanced/x_vloss \
   --device auto
 ```
 
@@ -160,10 +165,20 @@ fresh controlled run. Evaluate the resulting Euler/NFE-64 artifacts with:
   --generation-method x_vloss_cm --sampler euler --nfe 64 \
   --guidance-scale 2.0 --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
+.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
+  --generated-samples runs/fashion_mnist_balanced/x_vloss/samples/euler_nfe64.npy \
+  --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \
+  --generative-checkpoint runs/fashion_mnist_balanced/x_vloss/checkpoint.pt \
+  --generation-method balanced_x_vloss --sampler euler --nfe 64 \
+  --guidance-scale 2.0 --generation-seed 0 --imbalance-factor 0.01 --download \
+  --output-dir runs/fashion_mnist_balanced/x_vloss/evaluation
 ```
 
 The canonical evaluator uses a balanced set of 1,000 generated samples per
-class and the untouched official Fashion-MNIST test split. See
+class and the untouched official Fashion-MNIST test split. It reports
+Many/Medium/Few FID using the IR100 training-frequency grouping; keeping
+`--imbalance-factor 0.01` for the balanced baseline makes those groups directly
+comparable. See
 `docs/cli.md` for cache and evaluator options.
 
 Useful toy configs:

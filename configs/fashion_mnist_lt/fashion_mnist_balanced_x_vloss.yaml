@@ -1,0 +1,78 @@
+experiment:
+  name: fashion_mnist_balanced_x_vloss
+  seed: 0
+  output_dir: runs/fashion_mnist_balanced/x_vloss
+
+data:
+  name: fashion_mnist_lt
+  root: data/fashion_mnist
+  train: true
+  download: true
+  normalize: minus_one_one
+  dequantize: true
+  imbalance_type: balanced
+  imbalance_factor: 1.0
+  subset_seed: 0
+
+source:
+  name: gaussian
+  dim: 784
+
+coupling:
+  name: independent
+
+path:
+  name: linear
+
+model:
+  name: image_unet
+  image_shape: [1, 28, 28]
+  base_channels: 32
+  time_embedding_dim: 128
+  activation: silu
+  zero_init_head: true
+
+conditioning:
+  enabled: true
+  num_classes: 10
+  embedding_dim: 128
+  dropout_probability: 0.15
+
+objective:
+  name: flow_matching
+  model_output: target
+  loss_space: velocity
+  min_denom: 0.05
+  modifiers: []
+
+training:
+  batch_size: 256
+  steps: 20000
+  lr: 0.0001
+  warmup_steps: 500
+  ema_decay: 0.9999
+  time_sampling:
+    name: logit_normal
+    mean: -0.8
+    std: 0.8
+  log_every: 250
+  early_stopping:
+    enabled: true
+    warmup_steps: 5000
+    patience_steps: 3000
+    min_delta: 0.0001
+    ema_alpha: 0.03
+
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 10000
+  n_trajectories: 20
+  nfe: 64
+  sample_batch_size: 500
+  classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  classifier_free_guidance:
+    scale: 2.0
