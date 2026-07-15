@@ -52,6 +52,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--nfe", type=int, default=None, help="Override sampling.nfe.")
     parser.add_argument(
+        "--weights",
+        choices=("raw", "ema"),
+        default="raw",
+        help="Checkpoint weights used for sampling. Defaults to raw model weights.",
+    )
+    parser.add_argument(
+        "--classifier-free-guidance-scale",
+        type=float,
+        default=None,
+        help="Override sampling.classifier_free_guidance.scale.",
+    )
+    parser.add_argument(
         "--plot-max-points",
         type=int,
         default=None,
@@ -234,7 +246,14 @@ def main() -> None:
     source = build_source(config)
     path = build_path(config)
     model = build_model(config, dim=source.dim)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    weights = str(getattr(args, "weights", "raw"))
+    state_key = "model_state_dict" if weights == "raw" else "ema_model_state_dict"
+    state_dict = checkpoint.get(state_key)
+    if not isinstance(state_dict, dict):
+        raise ConfigError(
+            f"Checkpoint does not contain requested {weights} weights ({state_key})."
+        )
+    model.load_state_dict(state_dict)
     model.to(device)
     solvers = build_solvers(config)
 
@@ -248,6 +267,7 @@ def main() -> None:
         solvers=solvers,
         device=device,
     )
+    summary["checkpoint_weights"] = weights
     payload = {
         "run_dir": str(run_dir),
         "checkpoint": str(checkpoint_path),
@@ -342,6 +362,11 @@ def _sampling_overrides(args: argparse.Namespace) -> dict:
         sampling["sample_batch_size"] = args.sample_batch_size
     if args.trajectory_target_max_points is not None:
         sampling["trajectory_target_max_points"] = args.trajectory_target_max_points
+    cfg_scale = getattr(args, "classifier_free_guidance_scale", None)
+    if cfg_scale is not None:
+        if cfg_scale < 0:
+            raise ValueError("--classifier-free-guidance-scale must be non-negative.")
+        sampling["classifier_free_guidance"] = {"scale": cfg_scale}
 
     trajectory_umap: dict = {}
     if args.trajectory_umap:

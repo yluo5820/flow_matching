@@ -56,7 +56,11 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             self.adapter_b = nn.Parameter(
                 self.weight.new_zeros(out_channels * height, self.rank * height)
             )
-            nn.init.kaiming_normal_(self.adapter_a, a=math.sqrt(5))
+            # Adapter initialization must not shift the base model's global RNG
+            # stream; otherwise a same-seed capacity model starts from different
+            # downstream base weights than its non-capacity control.
+            with torch.random.fork_rng(devices=[]):
+                nn.init.kaiming_normal_(self.adapter_a, a=math.sqrt(5))
         else:
             self.register_parameter("adapter_a", None)
             self.register_parameter("adapter_b", None)

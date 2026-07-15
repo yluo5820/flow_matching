@@ -59,10 +59,12 @@ conditional distributions contribute equally to the global metrics.
 Refresh the editable install, then train and sample the four controlled
 continuous IR100 variants and the full balanced-data baseline. All five predict
 the clean target while optimizing velocity loss; three IR100 variants add CBDM,
-OC, or OC+CM respectively. They use
+OC, or CM respectively. CM is independent of OC and compares its capacity-on
+and capacity-off branches in clean-target space. They use
 JiT-style logit-normal time sampling `(-0.8, 0.8)` and apply the same `0.05`
 denominator floor to prediction and supervision. Evaluation retains the
-controlled Euler/NFE-64 generation protocol.
+controlled Euler/NFE-64 generation protocol. These short runs intentionally disable EMA and
+use the selected raw checkpoint with CFG scale 1.0.
 
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .
@@ -100,7 +102,7 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss/checkpoint.pt \
   --generation-method x_vloss --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
@@ -108,7 +110,7 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cbdm/checkpoint.pt \
   --generation-method x_vloss_cbdm --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
@@ -116,7 +118,7 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_oc/checkpoint.pt \
   --generation-method x_vloss_oc --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
@@ -124,7 +126,7 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
   --generation-method x_vloss_cm --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
@@ -132,7 +134,8 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_balanced/x_vloss/checkpoint.pt \
   --generation-method balanced_x_vloss --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --imbalance-factor 0.01 \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
+  --imbalance-factor 0.01 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_balanced/x_vloss/evaluation
 ```
@@ -666,6 +669,8 @@ Key options:
 | `--n-samples` | Override `sampling.n_samples`. |
 | `--n-trajectories` | Override `sampling.n_trajectories`. |
 | `--nfe` | Override `sampling.nfe`. |
+| `--weights` | Select `raw` (default) or `ema` checkpoint weights. |
+| `--classifier-free-guidance-scale` | Override classifier-free guidance directly. |
 | `--sample-batch-size` | Integrate final generated samples in chunks of this size. |
 | `--trajectory-umap` | Enable 3D UMAP trajectory plots for this sampling pass. |
 | `--no-trajectory-umap` | Disable 3D UMAP trajectory plots for this sampling pass. |

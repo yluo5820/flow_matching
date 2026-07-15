@@ -5,6 +5,7 @@ from torch import nn
 from fm_lab.paths import LinearPath
 from fm_lab.training.long_tail import (
     CBDMModifier,
+    CMModifier,
     ContinuousEndpointTransferModifier,
     ContinuousObjectiveModifier,
     OCModifier,
@@ -119,33 +120,26 @@ def test_continuous_modifier_builder_validates_names_and_class_counts() -> None:
         build_continuous_modifiers([{"name": "other"}], [1, 1])
 
 
-@pytest.mark.parametrize(
-    "modifiers",
-    [
-        [{"name": "cm"}],
-        [{"name": "cm"}, {"name": "oc"}],
-    ],
-)
-def test_cm_requires_oc_modifier_before_training(
-    modifiers: list[dict[str, str]],
-) -> None:
-    with pytest.raises(ValueError, match="CM requires OC"):
-        build_objective(
-            {
-                "name": "flow_matching",
-                "model_output": "target",
-                "loss_space": "velocity",
-                "modifiers": modifiers,
-            },
-            class_counts=[100, 10],
-        )
+def test_cm_builds_without_oc_modifier() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "modifiers": [{"name": "cm", "comparison_space": "target"}],
+        },
+        class_counts=[100, 10],
+    )
+
+    assert len(objective.modifiers) == 1
+    assert isinstance(objective.modifiers[0], CMModifier)
 
 
 def test_cm_requires_capacity_enabled_model_on_first_objective_call() -> None:
     objective = build_objective(
         {
             "name": "flow_matching",
-            "modifiers": [{"name": "oc"}, {"name": "cm"}],
+            "modifiers": [{"name": "cm"}],
         },
         class_counts=[100, 10],
     )
@@ -165,8 +159,8 @@ def test_cm_requires_capacity_enabled_model_on_first_objective_call() -> None:
 @pytest.mark.parametrize(
     ("consistency_weight", "diversity_weight", "metric_name", "expected_metric"),
     [
-        (1.0, 0.0, "cm.consistency", 16.0),
-        (0.0, 1.0, "cm.diversity", -16.0),
+        (1.0, 0.0, "cm.consistency", 4.0),
+        (0.0, 1.0, "cm.diversity", -4.0),
     ],
 )
 def test_cm_converts_branches_to_comparison_space_and_reaches_both_gradients(
@@ -181,12 +175,11 @@ def test_cm_converts_branches_to_comparison_space_and_reaches_both_gradients(
             "model_output": "target",
             "loss_space": "velocity",
             "modifiers": [
-                {"name": "oc", "transfer_mode": "full"},
                 {
                     "name": "cm",
                     "consistency_weight": consistency_weight,
                     "diversity_weight": diversity_weight,
-                    "comparison_space": "velocity",
+                    "comparison_space": "target",
                 },
             ],
         },
@@ -205,13 +198,113 @@ def test_cm_converts_branches_to_comparison_space_and_reaches_both_gradients(
     )
     loss.backward()
 
-    assert model.seen_capacity == [None, True, False]
+    assert model.seen_capacity == [True, False]
     assert metrics[metric_name] == pytest.approx(expected_metric)
     assert metrics["cm.loss"] == pytest.approx(expected_metric)
+    assert metrics["cm.distance.mean"] == pytest.approx(4.0)
+    assert metrics["cm.distance.max"] == pytest.approx(4.0)
+    assert metrics["cm.distance.many"] == pytest.approx(4.0)
+    assert metrics["cm.distance.medium"] == pytest.approx(4.0)
+    assert metrics["cm.distance.few"] == pytest.approx(0.0)
     assert model.full_predictions.grad is not None
     assert torch.count_nonzero(model.full_predictions.grad) == 2
     assert model.base_predictions.grad is not None
     assert torch.count_nonzero(model.base_predictions.grad) == 2
+
+
+def test_cm_distance_metrics_use_frequency_ranked_class_groups() -> None:
+    modifier = CMModifier(class_counts=[100, 80, 60, 40, 20, 10])
+    metrics = modifier.group_distance_metrics(
+        distance=torch.tensor([1.0, 4.0, 9.0, 16.0, 25.0, 36.0]),
+        labels=torch.arange(6),
+    )
+
+    assert metrics == {
+        "cm.distance.many": pytest.approx(2.5),
+        "cm.distance.medium": pytest.approx(12.5),
+        "cm.distance.few": pytest.approx(30.5),
+    }
+
+
+def test_cm_reports_loss_relative_to_base_objective() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "modifiers": [
+                {
+                    "name": "cm",
+                    "consistency_weight": 1.0,
+                    "diversity_weight": 0.0,
+                    "comparison_space": "target",
+                }
+            ],
+        },
+        class_counts=[1, 1],
+    )
+
+    _, metrics = objective(
+        model=CapacityTablePrediction(),
+        path=LinearPath(),
+        x0=torch.zeros(2, 1),
+        x1=torch.zeros(2, 1),
+        t=torch.full((2,), 0.5),
+        class_labels=torch.tensor([0, 1]),
+        original_class_labels=torch.tensor([0, 1]),
+    )
+
+    assert metrics["base.loss"] == pytest.approx(4.0)
+    assert metrics["cm.loss"] == pytest.approx(4.0)
+    assert metrics["cm.loss_to_base_ratio"] == pytest.approx(1.0)
+
+
+def test_cm_bounded_diversity_saturates_at_configured_margin() -> None:
+    objective = build_objective(
+        {
+            "name": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+            "modifiers": [
+                {
+                    "name": "cm",
+                    "consistency_weight": 0.0,
+                    "diversity_weight": 1.0,
+                    "comparison_space": "target",
+                    "diversity_mode": "bounded",
+                    "diversity_margin": 1.0,
+                }
+            ],
+        },
+        class_counts=[1, 1],
+    )
+
+    _, metrics = objective(
+        model=CapacityTablePrediction(),
+        path=LinearPath(),
+        x0=torch.zeros(2, 1),
+        x1=torch.ones(2, 1),
+        t=torch.full((2,), 0.5),
+        class_labels=torch.tensor([0, 1]),
+        original_class_labels=torch.tensor([0, 1]),
+    )
+
+    assert metrics["cm.distance.mean"] == pytest.approx(4.0)
+    assert metrics["cm.diversity"] == pytest.approx(-1.0)
+    assert metrics["cm.diversity_saturation"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"name": "cm", "diversity_mode": "other"},
+        {"name": "cm", "diversity_mode": "bounded"},
+        {"name": "cm", "diversity_mode": "bounded", "diversity_margin": 0.0},
+    ],
+)
+def test_cm_bounded_diversity_validates_configuration(config: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="diversity"):
+        build_continuous_modifiers([config], [100, 10])
 
 
 def test_oc_cut_t_uses_noisy_source_to_clean_target_direction() -> None:
@@ -267,6 +360,19 @@ def test_oc_reference_weights_are_finite_at_continuous_endpoints() -> None:
 
     assert torch.isfinite(weights).all()
     assert torch.allclose(weights.sum(dim=1), torch.ones(2))
+
+
+def test_oc_reference_weights_use_squared_euclidean_distance() -> None:
+    modifier = OCModifier(class_counts=[100, 10], min_denom=1e-3)
+
+    weights = modifier.reference_weights(
+        noisy_target=torch.tensor([[0.0, 0.0]]),
+        target=torch.tensor([[1.0, 0.0], [2.0, 0.0]]),
+        t=torch.tensor([0.5]),
+    )
+
+    expected = torch.softmax(-torch.tensor([1.0, 4.0]) / 2.0, dim=0)
+    assert torch.allclose(weights[0], expected)
 
 
 def test_oc_reference_weights_promote_float16_endpoint_math() -> None:

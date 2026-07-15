@@ -13,6 +13,7 @@ from torch.nn import functional as F
 from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.long_tail import (
+    CMModifier,
     ContinuousEndpointTransferModifier,
     ContinuousModifier,
     ContinuousObjectiveContext,
@@ -246,7 +247,14 @@ class FlowMatchingObjective:
         }
         velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
-            prediction = model_prediction(model, xt, t, class_labels=class_labels)
+            cm_enabled = any(isinstance(modifier, CMModifier) for modifier in self.modifiers)
+            prediction = model_prediction(
+                model,
+                xt,
+                t,
+                class_labels=class_labels,
+                use_capacity=True if cm_enabled else None,
+            )
             state = None
             if (
                 self.model_output == PredictionKind.VELOCITY.value

@@ -38,7 +38,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generation-method")
     parser.add_argument("--sampler", default="euler")
     parser.add_argument("--nfe", type=int, default=64)
-    parser.add_argument("--guidance-scale", type=float, default=2.0)
+    parser.add_argument("--guidance-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--generative-weights",
+        choices=("raw", "ema"),
+        default="raw",
+        help="Checkpoint weight variant used to produce the generated arrays.",
+    )
     parser.add_argument("--generation-seed", type=int, default=0)
     parser.add_argument("--data-root", default="data/fashion_mnist")
     parser.add_argument(
@@ -157,6 +163,7 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
             "generative_checkpoint_sha256": _sha256_file(
                 Path(args.generative_checkpoint)
             ),
+            "generative_weights": args.generative_weights,
             "generation_method": args.generation_method,
             "sampler": args.sampler,
             "nfe": args.nfe,
@@ -240,6 +247,7 @@ def _validate_cache_pair(generated: FeatureCache, real: FeatureCache) -> None:
         "source_samples_sha256",
         "source_labels_sha256",
         "generative_checkpoint_sha256",
+        "generative_weights",
         "generation_method",
         "sampler",
         "nfe",

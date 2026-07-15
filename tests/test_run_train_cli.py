@@ -200,6 +200,7 @@ def test_checkpoint_sampling_overrides_include_trajectory_umap() -> None:
         trajectory_umap_target_points=5000,
         trajectory_umap_neighbors=45,
         trajectory_umap_min_dist=0.05,
+        classifier_free_guidance_scale=1.5,
     )
 
     assert _checkpoint_sampling_overrides(args) == {
@@ -207,6 +208,7 @@ def test_checkpoint_sampling_overrides_include_trajectory_umap() -> None:
         "n_trajectories": 256,
         "nfe": 96,
         "sample_batch_size": 128,
+        "classifier_free_guidance": {"scale": 1.5},
         "trajectory_umap": {
             "enabled": True,
             "max_target_points": 5000,
@@ -214,6 +216,26 @@ def test_checkpoint_sampling_overrides_include_trajectory_umap() -> None:
             "min_dist": 0.05,
         },
     }
+
+
+def test_checkpoint_sampling_rejects_negative_cfg_scale() -> None:
+    args = Namespace(
+        n_samples=None,
+        n_trajectories=None,
+        nfe=None,
+        plot_max_points=None,
+        sample_batch_size=None,
+        trajectory_target_max_points=None,
+        trajectory_umap=False,
+        no_trajectory_umap=False,
+        trajectory_umap_target_points=None,
+        trajectory_umap_neighbors=None,
+        trajectory_umap_min_dist=None,
+        classifier_free_guidance_scale=-0.1,
+    )
+
+    with pytest.raises(ValueError, match="must be non-negative"):
+        _checkpoint_sampling_overrides(args)
 
 
 def test_checkpoint_sampling_overrides_include_density_guidance() -> None:
@@ -273,9 +295,12 @@ def test_checkpoint_sampling_overrides_can_disable_density_prior_rescale() -> No
     }
 
 
-def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
+@pytest.mark.parametrize(("weights", "expected_weight"), [("raw", 1.0), ("ema", 2.0)])
+def test_sample_checkpoint_selects_weights_and_moves_model_to_sampling_device(
     tmp_path,
     monkeypatch,
+    weights: str,
+    expected_weight: float,
 ) -> None:
     run_dir = tmp_path / "run"
     checkpoint_path = run_dir / "checkpoint.pt"
@@ -302,6 +327,7 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
             trajectory_umap_target_points=None,
             trajectory_umap_neighbors=None,
             trajectory_umap_min_dist=None,
+            weights=weights,
         ),
     )
     monkeypatch.setattr(sample_checkpoint_cli, "resolve_device", lambda value: value)
@@ -325,6 +351,7 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
                 "sampling": {"nfe": 3},
             },
             "model_state_dict": {"weight": 1.0},
+            "ema_model_state_dict": {"weight": 2.0},
         },
     )
     monkeypatch.setattr(sample_checkpoint_cli, "build_target", lambda config: object())
@@ -344,7 +371,7 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
     def fake_sample_and_plot(**kwargs):
         assert kwargs["model"] is model
         assert kwargs["path"] is not None
-        assert kwargs["model"].loaded_state == {"weight": 1.0}
+        assert kwargs["model"].loaded_state == {"weight": expected_weight}
         assert kwargs["model"].device == "mps"
         assert kwargs["device"] == "mps"
         return {"ok": True}
@@ -354,6 +381,10 @@ def test_sample_checkpoint_moves_loaded_model_to_sampling_device(
     sample_checkpoint_cli.main()
 
     assert model.device == "mps"
+    payload = json.loads(
+        (run_dir / "diagnostics" / "checkpoint_sampling.json").read_text()
+    )
+    assert payload["sampling"]["checkpoint_weights"] == weights
 
 
 def test_sample_checkpoint_rejects_discrete_metadata_before_building_model(

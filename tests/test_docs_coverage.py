@@ -56,7 +56,9 @@ def test_continuous_fashion_mnist_suite_is_documented_in_readme_and_cli() -> Non
         assert "checkpoint.pt" in docs
         assert "--sampler euler" in docs
         assert "--nfe 64" in docs
-        assert "--guidance-scale 2.0" in docs
+        assert "--guidance-scale 1.0" in docs
+        assert "--generative-weights raw" in docs
+        assert "disable EMA" in docs
         assert "--generation-seed 0" in docs
         assert "logit-normal" in docs
         assert "(-0.8, 0.8)" in docs

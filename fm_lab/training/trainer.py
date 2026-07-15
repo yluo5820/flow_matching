@@ -297,7 +297,11 @@ def train_flow_matching(
             theta_optimizer.zero_grad(set_to_none=True)
             loss.backward()
             if gradient_clip > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+                gradient_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), gradient_clip
+                )
+                if record is not None:
+                    record["gradient_norm"] = float(gradient_norm.detach().cpu())
             theta_optimizer.step()
             if theta_scheduler is not None:
                 theta_scheduler.step()
@@ -424,6 +428,9 @@ def train_flow_matching(
         model=ema_model if ema_model is not None else model,
         solvers=solvers,
         device=device,
+    )
+    sample_artifacts["checkpoint_weights"] = (
+        "ema" if ema_model is not None else "raw"
     )
     metrics["sampling"] = sample_artifacts
     write_json(metrics, run_dir / "metrics.json")
@@ -1903,6 +1910,7 @@ def _write_history(history: list[dict[str, float | int]], path: Path) -> None:
 @dataclass
 class _EarlyStopping:
     enabled: bool
+    monitor: str = "loss"
     patience_steps: int = 0
     min_delta: float = 0.0
     warmup_steps: int = 0
@@ -1917,6 +1925,7 @@ class _EarlyStopping:
     def state_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
+            "monitor": self.monitor,
             "patience_steps": self.patience_steps,
             "min_delta": self.min_delta,
             "warmup_steps": self.warmup_steps,
@@ -1932,16 +1941,18 @@ class _EarlyStopping:
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         expected_config = {
             "enabled": self.enabled,
+            "monitor": self.monitor,
             "patience_steps": self.patience_steps,
             "min_delta": self.min_delta,
             "warmup_steps": self.warmup_steps,
             "ema_alpha": self.ema_alpha,
         }
         for field, expected in expected_config.items():
-            if state.get(field) != expected:
+            actual = state.get(field, "loss") if field == "monitor" else state.get(field)
+            if actual != expected:
                 raise ValueError(
                     "Checkpoint early-stopping state is incompatible: "
-                    f"{field}={state.get(field)!r} != {expected!r}."
+                    f"{field}={actual!r} != {expected!r}."
                 )
         for field in (
             "best_score",
@@ -1972,11 +1983,19 @@ class _EarlyStopping:
 
         step = int(record["step"])
         loss = float(record["loss"])
+        if self.monitor not in record:
+            raise ValueError(
+                f"Early-stopping monitor {self.monitor!r} is missing from training metrics."
+            )
+        monitored_value = float(record[self.monitor])
         if self.current_score is None:
-            self.current_score = loss
+            self.current_score = monitored_value
         else:
-            self.current_score = self.ema_alpha * loss + (1.0 - self.ema_alpha) * self.current_score
-        record["loss_ema"] = self.current_score
+            self.current_score = (
+                self.ema_alpha * monitored_value
+                + (1.0 - self.ema_alpha) * self.current_score
+            )
+        record[f"{self.monitor}_ema"] = self.current_score
 
         if step < self.warmup_steps:
             return False
@@ -1995,7 +2014,7 @@ class _EarlyStopping:
         return {
             "enabled": self.enabled,
             "stopped": self.stopped,
-            "monitor": "loss_ema" if self.enabled else "loss",
+            "monitor": f"{self.monitor}_ema" if self.enabled else self.monitor,
             "patience_steps": self.patience_steps,
             "min_delta": self.min_delta,
             "warmup_steps": self.warmup_steps,
@@ -2012,6 +2031,7 @@ def _build_early_stopping(config: dict[str, Any]) -> _EarlyStopping:
         return _EarlyStopping(enabled=False)
 
     patience_steps = int(config.get("patience_steps", 5000))
+    monitor = config.get("monitor", "loss")
     warmup_steps = int(config.get("warmup_steps", 0))
     min_delta = float(config.get("min_delta", 0.0))
     ema_alpha = float(config.get("ema_alpha", 1.0))
@@ -2023,9 +2043,12 @@ def _build_early_stopping(config: dict[str, Any]) -> _EarlyStopping:
         raise ValueError("training.early_stopping.min_delta must be non-negative.")
     if not 0.0 < ema_alpha <= 1.0:
         raise ValueError("training.early_stopping.ema_alpha must be in (0, 1].")
+    if not isinstance(monitor, str) or not monitor:
+        raise ValueError("training.early_stopping.monitor must be a non-empty string.")
 
     return _EarlyStopping(
         enabled=True,
+        monitor=monitor,
         patience_steps=patience_steps,
         min_delta=min_delta,
         warmup_steps=warmup_steps,

@@ -53,6 +53,7 @@ def _cache(
                 "source_samples_sha256": "samples-hash",
                 "source_labels_sha256": "labels-hash",
                 "generative_checkpoint_sha256": "checkpoint-hash",
+                "generative_weights": "raw",
                 "generation_method": "flow_matching",
                 "sampler": "euler",
                 "nfe": 64,
@@ -76,6 +77,8 @@ def test_fashion_cli_uses_canonical_balanced_defaults() -> None:
     assert args.overall_samples == 10_000
     assert args.imbalance_factor == 0.01
     assert args.minimum_accuracy == 0.9
+    assert args.guidance_scale == 1.0
+    assert args.generative_weights == "raw"
 
 
 def test_fashion_cli_requires_cache_paths_as_a_pair(tmp_path) -> None:

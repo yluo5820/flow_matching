@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import torch
@@ -214,7 +215,6 @@ FASHION_MNIST_CONTINUOUS_CONFIGS = (
     "fashion_mnist_lt_ir100_x_vloss_cm.yaml",
 )
 
-
 def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     configs = [
         load_config(Path("configs/fashion_mnist_lt") / name)
@@ -232,7 +232,15 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     )
 
     for field in controlled_fields:
+        if field == "training":
+            continue
         assert all(config[field] == configs[0][field] for config in configs[1:])
+    baseline_training = configs[0]["training"]
+    for config in configs[1:]:
+        comparable_training = copy.deepcopy(config["training"])
+        comparable_training.pop("gradient_clip", None)
+        comparable_training["early_stopping"].pop("monitor", None)
+        assert comparable_training == baseline_training
     baseline_model = configs[0]["model"]
     for config in configs[1:]:
         assert {
@@ -253,8 +261,11 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
         "std": 0.8,
     }
     assert configs[0]["training"]["warmup_steps"] == 500
-    assert configs[0]["training"]["ema_decay"] == 0.9999
+    assert "ema_decay" not in configs[0]["training"]
+    assert configs[0]["sampling"]["classifier_free_guidance"]["scale"] == 1.0
     assert "gradient_clip" not in configs[0]["training"]
+    assert configs[3]["training"]["gradient_clip"] == 1.0
+    assert configs[3]["training"]["early_stopping"]["monitor"] == "base.loss"
     assert configs[0]["objective"] == {
         "name": "flow_matching",
         "model_output": "target",
@@ -275,12 +286,11 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
         {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.05}
     ]
     assert configs[3]["objective"]["modifiers"] == [
-        {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.05},
         {
             "name": "cm",
             "consistency_weight": 1.0,
             "diversity_weight": 0.2,
-            "comparison_space": "velocity",
+            "comparison_space": "target",
         },
     ]
     assert configs[3]["model"]["capacity"]["parts"] == ["up"]

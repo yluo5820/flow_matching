@@ -190,7 +190,9 @@ class CMModifier:
     class_counts: Sequence[int]
     consistency_weight: float = 1.0
     diversity_weight: float = 0.2
-    comparison_space: str = "velocity"
+    comparison_space: str = "target"
+    diversity_mode: str = "unbounded"
+    diversity_margin: float | None = None
     name: str = "cm"
 
     def __post_init__(self) -> None:
@@ -209,18 +211,61 @@ class CMModifier:
                 "CM consistency and diversity weights must be finite and non-negative."
             )
         self.comparison_space = normalize_prediction_kind(self.comparison_space).value
+        self.diversity_mode = str(self.diversity_mode).lower()
+        if self.diversity_mode not in {"unbounded", "bounded"}:
+            raise ValueError("CM diversity_mode must be 'unbounded' or 'bounded'.")
+        if self.diversity_mode == "bounded":
+            if self.diversity_margin is None:
+                raise ValueError("CM bounded diversity requires diversity_margin.")
+            self.diversity_margin = float(self.diversity_margin)
+            if not math.isfinite(self.diversity_margin) or self.diversity_margin <= 0:
+                raise ValueError("CM diversity_margin must be finite and positive.")
+        elif self.diversity_margin is not None:
+            self.diversity_margin = float(self.diversity_margin)
         counts = torch.tensor(self.class_counts, dtype=torch.float64)
         probabilities = counts / counts.sum()
         inverse_probabilities = probabilities.reciprocal()
         inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
         self.class_probabilities = probabilities.to(dtype=torch.float32)
         self.inverse_class_probabilities = inverse_probabilities.to(dtype=torch.float32)
+        ranked_classes = sorted(
+            range(len(self.class_counts)),
+            key=lambda class_id: (-self.class_counts[class_id], class_id),
+        )
+        base_size, remainder = divmod(len(ranked_classes), 3)
+        group_sizes = [base_size + int(index < remainder) for index in range(3)]
+        group_names = ("many", "medium", "few")
+        self.class_groups: dict[str, tuple[int, ...]] = {}
+        offset = 0
+        for group_name, group_size in zip(group_names, group_sizes, strict=True):
+            self.class_groups[group_name] = tuple(
+                ranked_classes[offset : offset + group_size]
+            )
+            offset += group_size
 
     @staticmethod
     def _validate_capacity_model(model: torch.nn.Module) -> None:
         metadata = getattr(model, "capacity_metadata", None)
         if not callable(metadata) or not bool(metadata().get("enabled", False)):
             raise ValueError("CM requires a model with capacity manipulation enabled.")
+
+    def group_distance_metrics(
+        self,
+        *,
+        distance: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> dict[str, float]:
+        """Summarize the capacity gap over frequency-ranked class groups."""
+
+        metrics: dict[str, float] = {}
+        for group_name, class_ids in self.class_groups.items():
+            mask = torch.zeros_like(labels, dtype=torch.bool)
+            for class_id in class_ids:
+                mask |= labels == class_id
+            group_distance = distance[mask]
+            value = group_distance.mean() if len(group_distance) else distance.new_tensor(0.0)
+            metrics[f"cm.distance.{group_name}"] = float(value.detach().cpu())
+        return metrics
 
     def __call__(
         self,
@@ -232,13 +277,6 @@ class CMModifier:
         if context.original_class_labels is None:
             raise ValueError("CM requires original class labels before CFG dropout.")
 
-        full_output = model_prediction(
-            context.model,
-            context.xt,
-            context.t,
-            class_labels=context.class_labels,
-            use_capacity=True,
-        )
         base_output = model_prediction(
             context.model,
             context.xt,
@@ -246,10 +284,7 @@ class CMModifier:
             class_labels=context.class_labels,
             use_capacity=False,
         )
-        full_value = context.state.prediction(
-            full_output,
-            context.base_prediction.kind,
-        ).convert(self.comparison_space)
+        full_value = context.base_prediction.convert(self.comparison_space)
         base_value = context.state.prediction(
             base_output,
             context.base_prediction.kind,
@@ -268,15 +303,33 @@ class CMModifier:
         consistency = num_classes * (
             probabilities[labels] * self.consistency_weight * distance
         ).mean()
+        diversity_distance = distance
+        if self.diversity_mode == "bounded":
+            assert self.diversity_margin is not None
+            diversity_distance = distance.clamp_max(self.diversity_margin)
         diversity = -num_classes * (
-            inverse_probabilities[labels] * self.diversity_weight * distance
+            inverse_probabilities[labels] * self.diversity_weight * diversity_distance
         ).mean()
         loss = consistency + diversity
-        return loss, {
+        metrics = {
             "cm.consistency": float(consistency.detach().cpu()),
             "cm.diversity": float(diversity.detach().cpu()),
             "cm.loss": float(loss.detach().cpu()),
+            "cm.distance.mean": float(distance.mean().detach().cpu()),
+            "cm.distance.max": float(distance.max().detach().cpu()),
         }
+        base_loss = context.base_loss_per_sample.detach().mean()
+        ratio_denom = base_loss.clamp_min(torch.finfo(base_loss.dtype).eps)
+        metrics["cm.loss_to_base_ratio"] = float(
+            (loss.detach() / ratio_denom).cpu()
+        )
+        if self.diversity_mode == "bounded":
+            assert self.diversity_margin is not None
+            metrics["cm.diversity_saturation"] = float(
+                (distance.detach() >= self.diversity_margin).float().mean().cpu()
+            )
+        metrics.update(self.group_distance_metrics(distance=distance, labels=labels))
+        return loss, metrics
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -284,10 +337,14 @@ class CMModifier:
             "consistency_weight": self.consistency_weight,
             "diversity_weight": self.diversity_weight,
             "comparison_space": self.comparison_space,
+            "diversity_mode": self.diversity_mode,
+            "diversity_margin": self.diversity_margin,
             "class_probabilities": self.class_probabilities.tolist(),
             "inverse_class_probabilities": self.inverse_class_probabilities.tolist(),
-            "base_target": "oc",
             "class_counts": list(self.class_counts),
+            "class_groups": {
+                name: list(class_ids) for name, class_ids in self.class_groups.items()
+            },
         }
 
 
@@ -517,18 +574,14 @@ def build_continuous_modifiers(
                 )
             )
             continue
-        preceding_oc_count = sum(
-            previous_name == "oc"
-            for previous_name, _ in normalized_configs[: len(modifiers)]
-        )
-        if preceding_oc_count != 1:
-            raise ValueError("CM requires OC exactly once before CM.")
         modifiers.append(
             CMModifier(
                 class_counts=normalized_counts,
                 consistency_weight=float(config.get("consistency_weight", 1.0)),
                 diversity_weight=float(config.get("diversity_weight", 0.2)),
-                comparison_space=str(config.get("comparison_space", "velocity")),
+                comparison_space=str(config.get("comparison_space", "target")),
+                diversity_mode=str(config.get("diversity_mode", "unbounded")),
+                diversity_margin=config.get("diversity_margin"),
             )
         )
     return tuple(modifiers)

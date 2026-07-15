@@ -143,12 +143,11 @@ def test_cm_objective_accepts_capacity_enabled_image_unet() -> None:
             "model_output": "velocity",
             "loss_space": "velocity",
             "modifiers": [
-                {"name": "oc", "transfer_mode": "t2h", "cut_t": None},
                 {
                     "name": "cm",
                     "consistency_weight": 1.0,
                     "diversity_weight": 0.2,
-                    "comparison_space": "velocity",
+                    "comparison_space": "target",
                 },
             ],
         },
@@ -186,6 +185,27 @@ def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:
 
     assert layer.rank == 2
     assert torch.equal(layer(inputs, use_adapter=True), layer(inputs, use_adapter=False))
+
+
+def test_capacity_adapter_initialization_preserves_global_rng_for_base_layers() -> None:
+    torch.manual_seed(17)
+    baseline_first = torch.nn.Conv2d(4, 6, kernel_size=3, padding=1)
+    baseline_second = torch.nn.Conv2d(6, 8, kernel_size=3, padding=1)
+
+    torch.manual_seed(17)
+    capacity_first = models.SwitchableLowRankConv2d(
+        4,
+        6,
+        kernel_size=3,
+        padding=1,
+        rank=2,
+    )
+    capacity_second = torch.nn.Conv2d(6, 8, kernel_size=3, padding=1)
+
+    assert torch.equal(capacity_first.weight, baseline_first.weight)
+    assert torch.equal(capacity_first.bias, baseline_first.bias)
+    assert torch.equal(capacity_second.weight, baseline_second.weight)
+    assert torch.equal(capacity_second.bias, baseline_second.bias)
 
 
 def test_low_rank_conv_switch_applies_scaled_factorized_weight() -> None:

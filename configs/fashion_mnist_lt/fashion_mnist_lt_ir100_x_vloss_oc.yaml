@@ -54,7 +54,6 @@ training:
   steps: 20000
   lr: 0.0001
   warmup_steps: 500
-  ema_decay: 0.9999
   time_sampling:
     name: logit_normal
     mean: -0.8
@@ -79,4 +78,4 @@ sampling:
   sample_batch_size: 500
   classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   classifier_free_guidance:
-    scale: 2.0
+    scale: 1.0

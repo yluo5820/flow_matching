@@ -49,21 +49,17 @@ objective:
   loss_space: velocity
   min_denom: 0.05
   modifiers:
-    - name: oc
-      transfer_mode: t2h
-      cut_t: null
-      min_denom: 0.05
     - name: cm
       consistency_weight: 1.0
       diversity_weight: 0.2
-      comparison_space: velocity
+      comparison_space: target
 
 training:
   batch_size: 256
   steps: 20000
   lr: 0.0001
   warmup_steps: 500
-  ema_decay: 0.9999
+  gradient_clip: 1.0
   time_sampling:
     name: logit_normal
     mean: -0.8
@@ -71,6 +67,7 @@ training:
   log_every: 250
   early_stopping:
     enabled: true
+    monitor: base.loss
     warmup_steps: 5000
     patience_steps: 3000
     min_delta: 0.0001
@@ -88,4 +85,4 @@ sampling:
   sample_batch_size: 500
   classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   classifier_free_guidance:
-    scale: 2.0
+    scale: 1.0

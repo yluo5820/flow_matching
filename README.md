@@ -106,7 +106,10 @@ console scripts are available:
 All five predict the clean target and optimize velocity loss with JiT-style
 logit-normal time sampling `(-0.8, 0.8)`. Prediction and supervision use the
 same `0.05` denominator floor. Generation remains the controlled Euler/NFE-64
-protocol used by the evaluator.
+protocol used by the evaluator. These short runs intentionally disable EMA and
+sample the selected raw checkpoint at CFG scale 1.0. CM runs directly on the
+long-tail baseline, compares capacity branches in clean-target space, and does
+not compose with OC.
 
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .
@@ -142,35 +145,36 @@ fresh controlled run. Evaluate the resulting Euler/NFE-64 artifacts with:
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss/checkpoint.pt \
   --generation-method x_vloss --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --download \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cbdm/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cbdm/checkpoint.pt \
   --generation-method x_vloss_cbdm --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --download \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cbdm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_oc/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_oc/checkpoint.pt \
   --generation-method x_vloss_oc --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --download \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
   --generation-method x_vloss_cm --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --download \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_balanced/x_vloss/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \
   --generative-checkpoint runs/fashion_mnist_balanced/x_vloss/checkpoint.pt \
   --generation-method balanced_x_vloss --sampler euler --nfe 64 \
-  --guidance-scale 2.0 --generation-seed 0 --imbalance-factor 0.01 --download \
+  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
+  --imbalance-factor 0.01 --download \
   --output-dir runs/fashion_mnist_balanced/x_vloss/evaluation
 ```
 

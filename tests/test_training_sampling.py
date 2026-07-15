@@ -1,4 +1,5 @@
 import copy
+import csv
 
 import numpy as np
 import pytest
@@ -757,6 +758,12 @@ def test_periodic_checkpoint_resume_matches_uninterrupted_training(tmp_path) -> 
         solvers=[EulerSolver()],
         device=torch.device("cpu"),
     )
+    with (tmp_path / "full" / "diagnostics" / "training_history.csv").open(
+        newline=""
+    ) as handle:
+        history = list(csv.DictReader(handle))
+    assert history
+    assert all(float(row["gradient_norm"]) >= 0.0 for row in history)
 
     split_model = TinyVelocity()
     split_model.load_state_dict(initial)
@@ -1483,12 +1490,37 @@ def test_train_flow_matching_restores_best_early_stopping_checkpoint(tmp_path) -
     assert metrics["checkpoint_step"] == 1
     assert metrics["restored_best_checkpoint"] is True
     assert metrics["final_loss"] == metrics["checkpoint_loss"]
+    assert metrics["sampling"]["checkpoint_weights"] == "ema"
     assert checkpoint["step"] == 1
     assert checkpoint["metrics"]["checkpoint_step"] == 1
     model_velocity = checkpoint["model_state_dict"]["velocity"]
     ema_velocity = checkpoint["ema_model_state_dict"]["velocity"]
     assert torch.equal(model_velocity, torch.zeros_like(model_velocity))
     assert torch.equal(ema_velocity, model_velocity)
+
+
+def test_early_stopping_can_monitor_base_loss_instead_of_negative_total() -> None:
+    early_stopping = trainer_module._build_early_stopping(
+        {
+            "enabled": True,
+            "monitor": "base.loss",
+            "warmup_steps": 0,
+            "patience_steps": 1,
+            "min_delta": 0.0,
+            "ema_alpha": 1.0,
+        }
+    )
+    first = {"step": 1, "loss": -10.0, "base.loss": 1.0}
+    second = {"step": 2, "loss": -100.0, "base.loss": 2.0}
+
+    assert early_stopping.update(first) is False
+    assert early_stopping.update(second) is True
+
+    assert first["base.loss_ema"] == 1.0
+    assert second["base.loss_ema"] == 2.0
+    assert early_stopping.best_step == 1
+    assert early_stopping.best_loss == -10.0
+    assert early_stopping.summary()["monitor"] == "base.loss_ema"
 
 
 def test_early_stopping_resume_preserves_best_state_and_ignores_log_cadence(

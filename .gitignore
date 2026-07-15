@@ -23,4 +23,11 @@ checkpoints/
 features/
 *.pt
 *.pth
+*.npz
 .ipynb_checkpoints/
+
+# Local, one-off experiment diagnostics and research notes.
+/tmp/
+/frontier_long_tail_generation_projects.md
+/long_tail_generation_literature_review.md
+/configs/fashion_mnist_lt/*_pilot_*.yaml
