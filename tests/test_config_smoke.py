@@ -313,6 +313,49 @@ def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> N
         )
 
 
+def test_bounded_lambda10_cm_config_changes_only_identity_and_cm_modifier() -> None:
+    canonical = load_config(
+        "configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml"
+    )
+    bounded = load_config(
+        "configs/fashion_mnist_lt/"
+        "fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10.yaml"
+    )
+
+    assert bounded["experiment"] == {
+        "name": "fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10",
+        "seed": 0,
+        "output_dir": "runs/fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10",
+    }
+    assert bounded["objective"]["modifiers"] == [
+        {
+            "name": "cm",
+            "consistency_weight": 10.0,
+            "diversity_weight": 10.0,
+            "comparison_space": "target",
+            "diversity_mode": "bounded",
+            "diversity_margin": 0.001,
+        }
+    ]
+    for field in (
+        "data",
+        "source",
+        "coupling",
+        "path",
+        "model",
+        "conditioning",
+        "training",
+        "solvers",
+        "sampling",
+    ):
+        assert bounded[field] == canonical[field]
+    assert {
+        key: value for key, value in bounded["objective"].items() if key != "modifiers"
+    } == {
+        key: value for key, value in canonical["objective"].items() if key != "modifiers"
+    }
+
+
 def test_balanced_fashion_mnist_x_vloss_changes_only_dataset_and_identity() -> None:
     long_tail = load_config(
         "configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml"

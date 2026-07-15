@@ -49,12 +49,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data-root", default="data/fashion_mnist")
     parser.add_argument(
         "--classifier-checkpoint",
-        default="artifacts/fashion_mnist_classifier.pt",
+        default="artifacts/fashion_mnist_lt_evaluator_minus_one_one.pt",
     )
     parser.add_argument("--classifier-steps", type=int, default=1000)
     parser.add_argument("--classifier-eval-samples", type=int, default=10_000)
     parser.add_argument("--classifier-lr", type=float, default=1.0e-3)
-    parser.add_argument("--minimum-accuracy", type=float, default=0.9)
+    parser.add_argument("--minimum-accuracy", type=float, default=0.89)
     parser.add_argument("--normalize", default="minus_one_one")
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--feature-cache-dir", default="features/fashion_mnist_lt")

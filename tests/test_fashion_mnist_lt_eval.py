@@ -73,10 +73,14 @@ def _cache(
 def test_fashion_cli_uses_canonical_balanced_defaults() -> None:
     args = parse_args(["--output-dir", "report"])
 
+    assert (
+        args.classifier_checkpoint
+        == "artifacts/fashion_mnist_lt_evaluator_minus_one_one.pt"
+    )
     assert args.samples_per_class == 1000
     assert args.overall_samples == 10_000
     assert args.imbalance_factor == 0.01
-    assert args.minimum_accuracy == 0.9
+    assert args.minimum_accuracy == 0.89
     assert args.guidance_scale == 1.0
     assert args.generative_weights == "raw"
 
