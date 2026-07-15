@@ -1523,6 +1523,101 @@ def test_early_stopping_can_monitor_base_loss_instead_of_negative_total() -> Non
     assert early_stopping.summary()["monitor"] == "base.loss_ema"
 
 
+def test_metric_stop_policy_is_disabled_by_default() -> None:
+    policy = trainer_module._build_metric_stop_policy({})
+
+    assert policy.summary() == {
+        "enabled": False,
+        "stopped": False,
+        "stop_step": None,
+        "reason": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"enabled": True, "finite_metrics": [""]},
+        {"enabled": True, "min_metrics": {"loss": float("nan")}},
+        {
+            "enabled": True,
+            "min_metrics": {"loss": 0.0},
+            "max_metrics": {"loss": 1.0},
+        },
+    ],
+)
+def test_metric_stop_policy_validates_configuration(config: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="training.diagnostic_stop"):
+        trainer_module._build_metric_stop_policy(config)
+
+
+def test_metric_stop_policy_records_first_threshold_violation() -> None:
+    policy = trainer_module._build_metric_stop_policy(
+        {
+            "enabled": True,
+            "finite_metrics": ["loss"],
+            "min_metrics": {"cm.loss_to_base_ratio": -1.0},
+            "max_metrics": {"cm.distance.max": 1.0},
+        }
+    )
+
+    assert policy.update(
+        {
+            "loss": 0.2,
+            "cm.loss_to_base_ratio": -1.2,
+            "cm.distance.max": 0.5,
+        },
+        step=7,
+    )
+    assert policy.summary() == {
+        "enabled": True,
+        "stopped": True,
+        "stop_step": 7,
+        "reason": "cm.loss_to_base_ratio=-1.2 < -1.0",
+    }
+
+
+def test_diagnostic_stop_prevents_update_that_triggers_it(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 8,
+            "steps": 2,
+            "log_every": 2,
+            "lr": 0.1,
+            "diagnostic_stop": {
+                "enabled": True,
+                "max_metrics": {"loss": -1.0},
+            },
+        },
+        "sampling": {"n_samples": 8, "n_trajectories": 4, "nfe": 3},
+        "solvers": {"schedule": "uniform"},
+    }
+    model = TrainableConstantVelocity(dim=2, value=0.0)
+    initial_state = {
+        key: value.detach().clone() for key, value in model.state_dict().items()
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert metrics["trained_steps"] == 0
+    assert metrics["diagnostic_stop"]["stopped"] is True
+    assert metrics["diagnostic_stop"]["stop_step"] == 1
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, initial_state[key])
+
+
 def test_early_stopping_resume_preserves_best_state_and_ignores_log_cadence(
     tmp_path,
 ) -> None:

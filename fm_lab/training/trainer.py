@@ -10,6 +10,7 @@ import math
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,9 @@ def train_flow_matching(
     if gradient_clip < 0:
         raise ValueError("training.gradient_clip must be non-negative.")
     early_stopping = _build_early_stopping(training_config.get("early_stopping", {}))
+    metric_stop = _build_metric_stop_policy(
+        training_config.get("diagnostic_stop", {})
+    )
     objective = build_objective(
         config.get("objective", {}),
         diffusion_config=config.get("diffusion", {}),
@@ -112,6 +116,10 @@ def train_flow_matching(
         class_counts=class_counts,
     )
     trainable_path = _is_trainable_path(path)
+    if trainable_path and metric_stop.enabled:
+        raise ValueError(
+            "training.diagnostic_stop is not supported for trainable paths."
+        )
     resume_from = training_config.get("resume_from")
     resume_checkpoint: dict[str, Any] | None = None
     if resume_from:
@@ -189,7 +197,7 @@ def train_flow_matching(
     for step in progress:
         final_step = step
         should_log = step == 1 or step % log_every == 0 or step == steps
-        should_record = should_log or early_stopping.enabled
+        should_record = should_log or early_stopping.enabled or metric_stop.enabled
         record: dict[str, float | int] | None = None
         should_stop = False
 
@@ -275,24 +283,34 @@ def train_flow_matching(
             )
             if should_record:
                 record = {"step": step, **loss_metrics}
-                previous_best_step = early_stopping.best_step
-                should_stop = early_stopping.update(record)
-                improved = (
-                    early_stopping.enabled
-                    and early_stopping.best_step == step
-                    and previous_best_step != step
-                )
-                if improved:
-                    best_state = _capture_training_state(
-                        model=model,
-                        ema_model=ema_model,
-                        path=path,
-                        theta_optimizer=theta_optimizer,
-                        theta_scheduler=theta_scheduler,
-                        psi_optimizer=psi_optimizer,
-                        step=step,
+                diagnostic_should_stop = metric_stop.update(record, step=step)
+                if not diagnostic_should_stop:
+                    previous_best_step = early_stopping.best_step
+                    should_stop = early_stopping.update(record)
+                    improved = (
+                        early_stopping.enabled
+                        and early_stopping.best_step == step
+                        and previous_best_step != step
                     )
-                    best_state.record = dict(record)
+                    if improved:
+                        best_state = _capture_training_state(
+                            model=model,
+                            ema_model=ema_model,
+                            path=path,
+                            theta_optimizer=theta_optimizer,
+                            theta_scheduler=theta_scheduler,
+                            psi_optimizer=psi_optimizer,
+                            step=step,
+                        )
+                        best_state.record = dict(record)
+
+                if diagnostic_should_stop:
+                    history.append(record)
+                    final_step = step - 1
+                    progress.set_postfix(
+                        loss=f"{record['loss']:.4f}", stopped="diagnostic"
+                    )
+                    break
 
             theta_optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -377,6 +395,7 @@ def train_flow_matching(
         "checkpoint_loss": selected_record["loss"],
         "restored_best_checkpoint": restored_best_checkpoint,
         "early_stopping": early_stopping.summary(),
+        "diagnostic_stop": metric_stop.summary(),
         "target": target.metadata(),
         "source": source.metadata(),
         "coupling": getattr(coupling, "name", coupling.__class__.__name__),
@@ -1905,6 +1924,100 @@ def _write_history(history: list[dict[str, float | int]], path: Path) -> None:
         writer.writeheader()
         for record in history:
             writer.writerow(record)
+
+
+@dataclass
+class _MetricStopPolicy:
+    enabled: bool = False
+    finite_metrics: tuple[str, ...] = ()
+    min_metrics: dict[str, float] = dataclass_field(default_factory=dict)
+    max_metrics: dict[str, float] = dataclass_field(default_factory=dict)
+    stopped: bool = False
+    stop_step: int | None = None
+    reason: str | None = None
+
+    def update(self, record: Mapping[str, float | int], *, step: int) -> bool:
+        if not self.enabled:
+            return False
+        for metric in self.finite_metrics:
+            value = self._metric_value(record, metric)
+            if not math.isfinite(value):
+                return self._stop(step, f"{metric}={value} is not finite")
+        for metric, threshold in self.min_metrics.items():
+            value = self._metric_value(record, metric)
+            if value < threshold:
+                return self._stop(step, f"{metric}={value} < {threshold}")
+        for metric, threshold in self.max_metrics.items():
+            value = self._metric_value(record, metric)
+            if value > threshold:
+                return self._stop(step, f"{metric}={value} > {threshold}")
+        return False
+
+    @staticmethod
+    def _metric_value(record: Mapping[str, float | int], metric: str) -> float:
+        if metric not in record:
+            raise ValueError(
+                f"Diagnostic-stop metric {metric!r} is missing from training metrics."
+            )
+        return float(record[metric])
+
+    def _stop(self, step: int, reason: str) -> bool:
+        self.stopped = True
+        self.stop_step = int(step)
+        self.reason = reason
+        return True
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "stopped": self.stopped,
+            "stop_step": self.stop_step,
+            "reason": self.reason,
+        }
+
+
+def _build_metric_stop_policy(config: Mapping[str, Any]) -> _MetricStopPolicy:
+    if not config or not bool(config.get("enabled", False)):
+        return _MetricStopPolicy()
+
+    finite_raw = config.get("finite_metrics", ())
+    if not isinstance(finite_raw, Sequence) or isinstance(finite_raw, str):
+        raise ValueError("training.diagnostic_stop.finite_metrics must be a sequence.")
+    finite_metrics = tuple(str(metric) for metric in finite_raw)
+    if any(not metric for metric in finite_metrics):
+        raise ValueError(
+            "training.diagnostic_stop metric names must be non-empty strings."
+        )
+
+    def thresholds(name: str) -> dict[str, float]:
+        raw = config.get(name, {})
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"training.diagnostic_stop.{name} must be a mapping.")
+        parsed = {str(metric): float(value) for metric, value in raw.items()}
+        if any(not metric for metric in parsed):
+            raise ValueError(
+                "training.diagnostic_stop metric names must be non-empty strings."
+            )
+        if any(not math.isfinite(value) for value in parsed.values()):
+            raise ValueError(
+                f"training.diagnostic_stop.{name} thresholds must be finite."
+            )
+        return parsed
+
+    min_metrics = thresholds("min_metrics")
+    max_metrics = thresholds("max_metrics")
+    overlap = min_metrics.keys() & max_metrics.keys()
+    if overlap:
+        raise ValueError(
+            "training.diagnostic_stop metrics cannot have both minimum and maximum "
+            f"thresholds: {sorted(overlap)}."
+        )
+    return _MetricStopPolicy(
+        enabled=True,
+        finite_metrics=finite_metrics,
+        min_metrics=min_metrics,
+        max_metrics=max_metrics,
+    )
 
 
 @dataclass
