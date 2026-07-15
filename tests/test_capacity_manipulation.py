@@ -33,7 +33,7 @@ def _cm_model_config() -> dict:
     }
 
 
-def _cm_image_model_config() -> dict:
+def _cm_image_model_config(*, parts: list[str] | None = None) -> dict:
     return {
         "model": {
             "name": "image_unet",
@@ -46,7 +46,7 @@ def _cm_image_model_config() -> dict:
                 "enabled": True,
                 "rank_ratio": 0.25,
                 "adapter_scale": 0.5,
-                "parts": ["up"],
+                "parts": parts or ["up"],
             },
         },
         "conditioning": {"enabled": True, "num_classes": 10},
@@ -96,17 +96,78 @@ def test_image_unet_factory_places_cm_capacity_only_in_up_blocks() -> None:
     assert adapter_names == [
         "up1_block.conv1",
         "up1_block.conv2",
+        "up1_block.skip",
         "up0_block.conv1",
         "up0_block.conv2",
+        "up0_block.skip",
     ]
+    linear_adapter_names = [
+        name
+        for name, module in model.named_modules()
+        if isinstance(module, models.SwitchableLowRankLinear)
+    ]
+    assert linear_adapter_names == ["up1_block.time_proj", "up0_block.time_proj"]
     assert model.capacity_metadata() == {
         "enabled": True,
         "rank": 0,
         "rank_ratio": 0.25,
         "adapter_scale": 0.5,
         "parts": ["up"],
-        "adapter_layers": 4,
+        "adapter_layers": 8,
+        "adapter_conv_layers": 6,
+        "adapter_linear_layers": 2,
     }
+
+
+def test_image_unet_full_capacity_covers_every_model_section() -> None:
+    parts = ["conditioning", "head", "down", "middle", "up", "tail"]
+    model = build_model(_cm_image_model_config(parts=parts), dim=3 * 8 * 8)
+    adapter_names = {
+        name
+        for name, module in model.named_modules()
+        if isinstance(
+            module,
+            (models.SwitchableLowRankConv2d, models.SwitchableLowRankLinear),
+        )
+    }
+
+    assert {
+        "time_mlp.0",
+        "time_mlp.2",
+        "class_projection",
+        "input_block.conv1",
+        "down1.0",
+        "down1_block.conv1",
+        "middle.conv1",
+        "up1_block.conv1",
+        "output_block.2",
+    } <= adapter_names
+    assert model.capacity_metadata()["parts"] == sorted(parts)
+
+
+def test_image_unet_full_capacity_preserves_same_seed_shared_parameters() -> None:
+    parts = ["conditioning", "head", "down", "middle", "up", "tail"]
+    baseline_config = _cm_image_model_config()
+    baseline_config["model"]["capacity"]["enabled"] = False
+
+    torch.manual_seed(23)
+    baseline = build_model(baseline_config, dim=3 * 8 * 8)
+    torch.manual_seed(23)
+    capacity = build_model(_cm_image_model_config(parts=parts), dim=3 * 8 * 8)
+
+    capacity_state = capacity.state_dict()
+    shared_capacity_state = {
+        name: value
+        for name, value in capacity_state.items()
+        if not name.endswith(("adapter_a", "adapter_b"))
+    }
+    baseline_state = baseline.state_dict()
+
+    assert shared_capacity_state.keys() == baseline_state.keys()
+    assert all(
+        torch.equal(shared_capacity_state[name], baseline_state[name])
+        for name in baseline_state
+    )
 
 
 def test_image_unet_capacity_switch_preserves_base_branch() -> None:
@@ -125,7 +186,10 @@ def test_image_unet_capacity_switch_preserves_base_branch() -> None:
     initial_base = model(inputs, timesteps, context=base_context)
     with torch.no_grad():
         for module in model.modules():
-            if isinstance(module, models.SwitchableLowRankConv2d):
+            if isinstance(
+                module,
+                (models.SwitchableLowRankConv2d, models.SwitchableLowRankLinear),
+            ):
                 module.adapter_b.normal_(std=0.2)
     changed_full = model(inputs, timesteps, context=full_context)
     unchanged_base = model(inputs, timesteps, context=base_context)

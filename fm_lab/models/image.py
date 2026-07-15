@@ -12,7 +12,9 @@ from torch import nn
 from fm_lab.models.capacity import (
     CapacityConfig,
     SwitchableLowRankConv2d,
+    SwitchableLowRankLinear,
     apply_capacity_conv,
+    apply_capacity_linear,
     use_capacity_from_context,
 )
 from fm_lab.models.mlp import (
@@ -62,12 +64,6 @@ class ImageUNetVelocity(nn.Module):
             adapter_scale=capacity_adapter_scale,
             parts=capacity_parts,
         )
-        unsupported_parts = self._capacity.parts - {"up"}
-        if unsupported_parts:
-            raise ValueError(
-                "ImageUNetVelocity supports capacity only in ['up'], "
-                f"got {sorted(unsupported_parts)}."
-            )
         self.time_embedding = SinusoidalTimeEmbedding(time_embedding_dim)
         self.num_classes = num_classes
         self.is_class_conditional = num_classes is not None
@@ -78,25 +74,63 @@ class ImageUNetVelocity(nn.Module):
             else None
         )
         self.class_projection = (
-            nn.Linear(condition_dim, time_embedding_dim)
+            self._capacity.linear(
+                "conditioning", condition_dim, time_embedding_dim
+            )
             if num_classes is not None
             else None
         )
         self.time_mlp = nn.Sequential(
-            nn.Linear(time_embedding_dim, time_embedding_dim),
+            self._capacity.linear(
+                "conditioning", time_embedding_dim, time_embedding_dim
+            ),
             _activation(activation),
-            nn.Linear(time_embedding_dim, time_embedding_dim),
+            self._capacity.linear(
+                "conditioning", time_embedding_dim, time_embedding_dim
+            ),
         )
 
         c0 = int(base_channels)
         c1 = 2 * c0
         c2 = 4 * c0
-        self.input_block = TimeResBlock(channels, c0, time_embedding_dim, activation)
-        self.down1 = nn.Sequential(nn.Conv2d(c0, c1, kernel_size=3, stride=2, padding=1))
-        self.down1_block = TimeResBlock(c1, c1, time_embedding_dim, activation)
-        self.down2 = nn.Sequential(nn.Conv2d(c1, c2, kernel_size=3, stride=2, padding=1))
-        self.down2_block = TimeResBlock(c2, c2, time_embedding_dim, activation)
-        self.middle = TimeResBlock(c2, c2, time_embedding_dim, activation)
+        self.input_block = TimeResBlock(
+            channels,
+            c0,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="head",
+        )
+        self.down1 = nn.Sequential(
+            self._capacity.conv("down", c0, c1, 3, stride=2, padding=1)
+        )
+        self.down1_block = TimeResBlock(
+            c1,
+            c1,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="down",
+        )
+        self.down2 = nn.Sequential(
+            self._capacity.conv("down", c1, c2, 3, stride=2, padding=1)
+        )
+        self.down2_block = TimeResBlock(
+            c2,
+            c2,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="down",
+        )
+        self.middle = TimeResBlock(
+            c2,
+            c2,
+            time_embedding_dim,
+            activation,
+            capacity=self._capacity,
+            capacity_part="middle",
+        )
         self.up1_block = TimeResBlock(
             c2 + c1,
             c1,
@@ -116,13 +150,14 @@ class ImageUNetVelocity(nn.Module):
         self.output_block = nn.Sequential(
             nn.GroupNorm(_group_count(c0), c0),
             _activation(activation),
-            nn.Conv2d(c0, channels, kernel_size=3, padding=1),
+            self._capacity.conv("tail", c0, channels, 3, padding=1),
         )
         if zero_init_head:
             nn.init.zeros_(self.output_block[-1].weight)
             nn.init.zeros_(self.output_block[-1].bias)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        use_capacity = use_capacity_from_context(context)
         image = _flat_to_image(
             x,
             channels=self.channels,
@@ -130,19 +165,46 @@ class ImageUNetVelocity(nn.Module):
             width=self.width,
             layout=self.image_layout,
         )
-        time_features = self.time_mlp(self.time_embedding(t))
+        time_features = apply_capacity_linear(
+            self.time_mlp[0],
+            self.time_embedding(t),
+            use_capacity=use_capacity,
+        )
+        time_features = self.time_mlp[1](time_features)
+        time_features = apply_capacity_linear(
+            self.time_mlp[2],
+            time_features,
+            use_capacity=use_capacity,
+        )
         if self.class_embedding is not None and self.class_projection is not None:
             labels = _class_labels_from_context(context, x.shape[0], x.device)
             class_features = self.class_embedding(_embedding_labels(labels, self.num_classes))
-            time_features = time_features + self.class_projection(class_features)
+            time_features = time_features + apply_capacity_linear(
+                self.class_projection,
+                class_features,
+                use_capacity=use_capacity,
+            )
 
-        h0 = self.input_block(image, time_features)
-        h1 = self.down1_block(self.down1(h0), time_features)
-        h2 = self.down2_block(self.down2(h1), time_features)
-        middle = self.middle(h2, time_features)
+        h0 = self.input_block(
+            image, time_features, use_capacity=use_capacity
+        )
+        h1 = self.down1_block(
+            apply_capacity_conv(
+                self.down1[0], h0, use_capacity=use_capacity
+            ),
+            time_features,
+            use_capacity=use_capacity,
+        )
+        h2 = self.down2_block(
+            apply_capacity_conv(
+                self.down2[0], h1, use_capacity=use_capacity
+            ),
+            time_features,
+            use_capacity=use_capacity,
+        )
+        middle = self.middle(h2, time_features, use_capacity=use_capacity)
 
         u1 = F.interpolate(middle, size=h1.shape[-2:], mode="nearest")
-        use_capacity = use_capacity_from_context(context)
         u1 = self.up1_block(
             torch.cat([u1, h1], dim=1),
             time_features,
@@ -154,11 +216,19 @@ class ImageUNetVelocity(nn.Module):
             time_features,
             use_capacity=use_capacity,
         )
-        return _image_to_flat(self.output_block(u0), layout=self.image_layout)
+        output = self.output_block[0](u0)
+        output = self.output_block[1](output)
+        output = apply_capacity_conv(
+            self.output_block[2], output, use_capacity=use_capacity
+        )
+        return _image_to_flat(output, layout=self.image_layout)
 
     def capacity_metadata(self) -> dict[str, object]:
-        adapter_layers = sum(
+        adapter_conv_layers = sum(
             isinstance(module, SwitchableLowRankConv2d) for module in self.modules()
+        )
+        adapter_linear_layers = sum(
+            isinstance(module, SwitchableLowRankLinear) for module in self.modules()
         )
         return {
             "enabled": self._capacity.enabled,
@@ -166,7 +236,9 @@ class ImageUNetVelocity(nn.Module):
             "rank_ratio": self._capacity.rank_ratio,
             "adapter_scale": self._capacity.adapter_scale,
             "parts": sorted(self._capacity.parts),
-            "adapter_layers": adapter_layers,
+            "adapter_layers": adapter_conv_layers + adapter_linear_layers,
+            "adapter_conv_layers": adapter_conv_layers,
+            "adapter_linear_layers": adapter_linear_layers,
         }
 
 
@@ -346,7 +418,11 @@ class TimeResBlock(nn.Module):
             if capacity is not None
             else nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         )
-        self.time_proj = nn.Linear(time_embedding_dim, out_channels)
+        self.time_proj = (
+            capacity.linear(capacity_part, time_embedding_dim, out_channels)
+            if capacity is not None
+            else nn.Linear(time_embedding_dim, out_channels)
+        )
         self.norm2 = nn.GroupNorm(_group_count(out_channels), out_channels)
         self.conv2 = (
             capacity.conv(capacity_part, out_channels, out_channels, 3, padding=1)
@@ -354,7 +430,11 @@ class TimeResBlock(nn.Module):
             else nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         )
         self.skip = (
-            nn.Conv2d(in_channels, out_channels, kernel_size=1)
+            (
+                capacity.conv(capacity_part, in_channels, out_channels, 1)
+                if capacity is not None
+                else nn.Conv2d(in_channels, out_channels, kernel_size=1)
+            )
             if in_channels != out_channels
             else nn.Identity()
         )
@@ -372,13 +452,22 @@ class TimeResBlock(nn.Module):
             self.activation(self.norm1(x)),
             use_capacity=use_capacity,
         )
-        h = h + self.time_proj(time_features)[:, :, None, None]
+        h = h + apply_capacity_linear(
+            self.time_proj,
+            time_features,
+            use_capacity=use_capacity,
+        )[:, :, None, None]
         h = apply_capacity_conv(
             self.conv2,
             self.activation(self.norm2(h)),
             use_capacity=use_capacity,
         )
-        return (h + self.skip(x)) / math.sqrt(2.0)
+        skip = (
+            apply_capacity_conv(self.skip, x, use_capacity=use_capacity)
+            if isinstance(self.skip, nn.Conv2d)
+            else self.skip(x)
+        )
+        return (h + skip) / math.sqrt(2.0)
 
 
 def _group_count(channels: int) -> int:
