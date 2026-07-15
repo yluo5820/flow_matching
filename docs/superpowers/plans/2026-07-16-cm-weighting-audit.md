@@ -235,7 +235,7 @@ training after removing `diagnostic_stop`. Assert both CM modifiers use weights
 ```bash
 .conda/fm_lab/bin/python - <<'PY'
 from pathlib import Path
-from fm_lab.config import load_config
+from fm_lab.utils.config import load_config
 
 root = Path("configs/fashion_mnist_lt")
 u = load_config(root / "fashion_mnist_lt_ir100_x_vloss_cm_pilot_paper_unbounded.yaml")
