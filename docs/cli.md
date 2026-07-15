@@ -60,8 +60,8 @@ Refresh the editable install, then train and sample the four controlled
 continuous IR100 variants and the full balanced-data baseline. All five predict
 the clean target while optimizing velocity loss; three IR100 variants add CBDM,
 OC, or CM respectively. CM is independent of OC and compares its capacity-on
-and capacity-off branches in clean-target space. Its canonical low-rank branch
-covers conditioning, encoder, bottleneck, decoder, and output weights. They use
+and capacity-off branches in clean-target space. Its default low-rank branch
+covers the decoder, while other U-Net sections remain selectable. They use
 JiT-style logit-normal time sampling `(-0.8, 0.8)` and apply the same `0.05`
 denominator floor to prediction and supervision. Evaluation retains the
 controlled Euler/NFE-64 generation protocol. These short runs intentionally

@@ -293,14 +293,7 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
             "comparison_space": "target",
         },
     ]
-    assert configs[3]["model"]["capacity"]["parts"] == [
-        "conditioning",
-        "head",
-        "down",
-        "middle",
-        "up",
-        "tail",
-    ]
+    assert configs[3]["model"]["capacity"]["parts"] == ["up"]
 
 
 def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> None:

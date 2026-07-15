@@ -35,7 +35,7 @@ model:
     enabled: true
     rank_ratio: 0.1
     adapter_scale: 1.0
-    parts: [conditioning, head, down, middle, up, tail]
+    parts: [up]
 
 conditioning:
   enabled: true

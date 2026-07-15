@@ -109,9 +109,8 @@ same `0.05` denominator floor. Generation remains the controlled Euler/NFE-64
 protocol used by the evaluator. These short runs intentionally disable EMA and
 sample the selected raw checkpoint at CFG scale 1.0. CM runs directly on the
 long-tail baseline, compares capacity branches in clean-target space, and does
-not compose with OC. Its canonical low-rank capacity branch covers the
-conditioning, encoder, bottleneck, decoder, and output weights rather than only
-the decoder blocks.
+not compose with OC. The default low-rank capacity branch covers the decoder;
+other U-Net sections remain selectable for controlled capacity studies.
 
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .
