@@ -41,20 +41,24 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             raise ValueError("Specify either rank or rank_ratio, not both.")
         if adapter_scale < 0:
             raise ValueError("adapter_scale must be non-negative.")
+        height, width = self.kernel_size
+        if self.groups != 1:
+            raise ValueError("CM low-rank convolution requires ungrouped kernels.")
         if rank_ratio > 0:
-            rank = max(int(rank_ratio * min(in_channels, out_channels)), 1)
+            rank = _rank_from_ratio(
+                rank_ratio,
+                rows=out_channels,
+                columns=in_channels * height * width,
+            )
         self.rank = int(rank)
         self.rank_ratio = float(rank_ratio)
         self.adapter_scale = float(adapter_scale)
         if self.rank > 0:
-            height, width = self.kernel_size
-            if height != width or self.groups != 1:
-                raise ValueError("CM low-rank convolution requires square, ungrouped kernels.")
             self.adapter_a = nn.Parameter(
-                self.weight.new_empty(self.rank * height, in_channels * width)
+                self.weight.new_empty(self.rank, in_channels * height * width)
             )
             self.adapter_b = nn.Parameter(
-                self.weight.new_zeros(out_channels * height, self.rank * height)
+                self.weight.new_zeros(out_channels, self.rank)
             )
             # Adapter initialization must not shift the base model's global RNG
             # stream; otherwise a same-seed capacity model starts from different
@@ -83,6 +87,61 @@ class SwitchableLowRankConv2d(nn.Conv2d):
         )
 
 
+class SwitchableLowRankLinear(nn.Linear):
+    """Linear layer with a zero-initialized low-rank weight branch."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        rank: int = 0,
+        rank_ratio: float = 0.0,
+        adapter_scale: float = 1.0,
+        bias: bool = True,
+    ) -> None:
+        super().__init__(in_features, out_features, bias=bias)
+        if rank < 0 or rank_ratio < 0:
+            raise ValueError("Low-rank linear rank settings must be non-negative.")
+        if rank > 0 and rank_ratio > 0:
+            raise ValueError("Specify either rank or rank_ratio, not both.")
+        if adapter_scale < 0:
+            raise ValueError("adapter_scale must be non-negative.")
+        if rank_ratio > 0:
+            rank = _rank_from_ratio(
+                rank_ratio,
+                rows=out_features,
+                columns=in_features,
+            )
+        self.rank = int(rank)
+        self.rank_ratio = float(rank_ratio)
+        self.adapter_scale = float(adapter_scale)
+        if self.rank > 0:
+            self.adapter_a = nn.Parameter(
+                self.weight.new_empty(self.rank, in_features)
+            )
+            self.adapter_b = nn.Parameter(
+                self.weight.new_zeros(out_features, self.rank)
+            )
+            with torch.random.fork_rng(devices=[]):
+                nn.init.kaiming_normal_(self.adapter_a, a=math.sqrt(5))
+        else:
+            self.register_parameter("adapter_a", None)
+            self.register_parameter("adapter_b", None)
+
+    def forward(self, inputs: torch.Tensor, *, use_adapter: bool = True) -> torch.Tensor:
+        weight = self.weight
+        if self.rank > 0 and use_adapter:
+            assert self.adapter_a is not None
+            assert self.adapter_b is not None
+            weight = weight + self.adapter_scale * (self.adapter_b @ self.adapter_a)
+        return F.linear(inputs, weight, self.bias)
+
+
+def _rank_from_ratio(rank_ratio: float, *, rows: int, columns: int) -> int:
+    return max(int(rank_ratio * min(rows, columns)), 1)
+
+
 @dataclass(frozen=True)
 class CapacityConfig:
     rank: int
@@ -100,7 +159,7 @@ class CapacityConfig:
         parts: Sequence[str],
     ) -> CapacityConfig:
         normalized_parts = frozenset(str(part).lower() for part in parts)
-        supported = {"head", "down", "middle", "up", "tail"}
+        supported = {"conditioning", "head", "down", "middle", "up", "tail"}
         invalid = normalized_parts - supported
         if invalid:
             raise ValueError(f"Unsupported capacity parts: {sorted(invalid)}")
@@ -144,6 +203,25 @@ class CapacityConfig:
             adapter_scale=self.adapter_scale,
         )
 
+    def linear(
+        self,
+        part: str,
+        in_features: int,
+        out_features: int,
+        *,
+        bias: bool = True,
+    ) -> nn.Linear:
+        if part not in self.parts:
+            return nn.Linear(in_features, out_features, bias=bias)
+        return SwitchableLowRankLinear(
+            in_features,
+            out_features,
+            rank=self.rank,
+            rank_ratio=self.rank_ratio,
+            adapter_scale=self.adapter_scale,
+            bias=bias,
+        )
+
 
 def apply_capacity_conv(
     layer: nn.Conv2d,
@@ -152,6 +230,17 @@ def apply_capacity_conv(
     use_capacity: bool,
 ) -> torch.Tensor:
     if isinstance(layer, SwitchableLowRankConv2d):
+        return layer(inputs, use_adapter=use_capacity)
+    return layer(inputs)
+
+
+def apply_capacity_linear(
+    layer: nn.Linear,
+    inputs: torch.Tensor,
+    *,
+    use_capacity: bool,
+) -> torch.Tensor:
+    if isinstance(layer, SwitchableLowRankLinear):
         return layer(inputs, use_adapter=use_capacity)
     return layer(inputs)
 

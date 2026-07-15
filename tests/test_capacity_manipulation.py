@@ -183,8 +183,27 @@ def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:
     )
     inputs = torch.randn(2, 8, 5, 5)
 
-    assert layer.rank == 2
+    assert layer.rank == 3
     assert torch.equal(layer(inputs, use_adapter=True), layer(inputs, use_adapter=False))
+
+
+def test_low_rank_conv_uses_canonical_flattened_kernel_factors() -> None:
+    layer = models.SwitchableLowRankConv2d(4, 6, kernel_size=3, rank=2)
+
+    assert layer.adapter_a.shape == (2, 4 * 3 * 3)
+    assert layer.adapter_b.shape == (6, 2)
+
+
+def test_low_rank_linear_switch_applies_factorized_weight() -> None:
+    layer = models.SwitchableLowRankLinear(2, 1, rank=1, bias=False)
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.adapter_a.fill_(2.0)
+        layer.adapter_b.fill_(3.0)
+    inputs = torch.ones(1, 2)
+
+    assert torch.equal(layer(inputs, use_adapter=False), torch.zeros(1, 1))
+    assert torch.equal(layer(inputs, use_adapter=True), torch.full((1, 1), 12.0))
 
 
 def test_capacity_adapter_initialization_preserves_global_rng_for_base_layers() -> None:
