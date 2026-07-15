@@ -219,11 +219,24 @@ def test_cm_distance_metrics_use_frequency_ranked_class_groups() -> None:
         labels=torch.arange(6),
     )
 
-    assert metrics == {
-        "cm.distance.many": pytest.approx(2.5),
-        "cm.distance.medium": pytest.approx(12.5),
-        "cm.distance.few": pytest.approx(30.5),
-    }
+    assert metrics["cm.distance.many"] == pytest.approx(2.5)
+    assert metrics["cm.distance.medium"] == pytest.approx(12.5)
+    assert metrics["cm.distance.few"] == pytest.approx(30.5)
+
+
+def test_cm_per_class_distance_metrics_report_observed_counts() -> None:
+    modifier = CMModifier(class_counts=[100, 10, 1])
+    metrics = modifier.group_distance_metrics(
+        distance=torch.tensor([1.0, 3.0, 5.0]),
+        labels=torch.tensor([0, 0, 1]),
+    )
+
+    assert metrics["cm.distance.class_0"] == pytest.approx(2.0)
+    assert metrics["cm.count.class_0"] == 2.0
+    assert metrics["cm.distance.class_1"] == pytest.approx(5.0)
+    assert metrics["cm.count.class_1"] == 1.0
+    assert metrics["cm.distance.class_2"] == 0.0
+    assert metrics["cm.count.class_2"] == 0.0
 
 
 def test_cm_reports_loss_relative_to_base_objective() -> None:

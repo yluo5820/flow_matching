@@ -265,6 +265,11 @@ class CMModifier:
             group_distance = distance[mask]
             value = group_distance.mean() if len(group_distance) else distance.new_tensor(0.0)
             metrics[f"cm.distance.{group_name}"] = float(value.detach().cpu())
+        for class_id in range(len(self.class_counts)):
+            class_distance = distance[labels == class_id]
+            value = class_distance.mean() if len(class_distance) else distance.new_tensor(0.0)
+            metrics[f"cm.distance.class_{class_id}"] = float(value.detach().cpu())
+            metrics[f"cm.count.class_{class_id}"] = float(len(class_distance))
         return metrics
 
     def __call__(
