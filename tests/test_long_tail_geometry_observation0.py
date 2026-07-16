@@ -23,6 +23,9 @@ from fm_lab.utils.config import load_config, save_config
 CANONICAL_PATH = Path(
     "configs/fashion_mnist_lt/long_tail_geometry_observation0_preregistration.yaml"
 )
+CIFAR_CANONICAL_PATH = Path(
+    "configs/cifar10_lt/long_tail_geometry_observation0_preregistration.yaml"
+)
 
 
 class _DiagnosticTarget:
@@ -163,6 +166,42 @@ def test_prepare_writes_three_ordinary_fm_seed_configs(tmp_path: Path) -> None:
     registry = pd.read_csv(tmp_path / "aggregate/run_registry.csv")
     assert list(registry["seed"]) == [0, 1, 2]
     assert set(registry["mapping_offset"]) == {0}
+
+
+def test_prepare_writes_three_cifar_natural_image_seed_configs(
+    tmp_path: Path,
+) -> None:
+    result = prepare_observation0_study(CIFAR_CANONICAL_PATH, tmp_path)
+
+    assert len(result.run_configs) == 3
+    for seed, config_path in zip((0, 1, 2), result.run_configs, strict=True):
+        config = load_config(config_path)
+        assert config["experiment"]["seed"] == seed
+        assert config["data"]["name"] == "cifar10_lt"
+        assert config["data"]["dequantize"] is True
+        assert config["data"]["frequency_mapping"] == {
+            "offset": 0,
+            "multiplier": 3,
+            "diagnostic_pool_per_class": 256,
+        }
+        assert config["source"]["dim"] == 3072
+        assert config["model"]["image_shape"] == [3, 32, 32]
+        assert config["model"]["base_channels"] == 32
+        assert config["model"]["capacity"]["enabled"] is False
+        assert config["objective"]["modifiers"] == []
+        assert config["training"]["steps"] == 100_000
+        assert config["training"]["batch_size"] == 64
+        assert config["training"]["checkpoint_steps"] == [
+            0,
+            2500,
+            10_000,
+            25_000,
+            50_000,
+            100_000,
+        ]
+        assert config["training"]["early_stopping"]["enabled"] is False
+        assert config["training"]["ema"]["enabled"] is False
+        assert config["training"]["ema_decay"] is None
 
 
 def test_prepare_rejects_nonordinary_base_config(tmp_path: Path) -> None:

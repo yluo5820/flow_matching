@@ -15,6 +15,12 @@ from fm_lab.diagnostics.long_tail_geometry.registry import (
 CANONICAL_PATH = Path(
     "configs/fashion_mnist_lt/long_tail_geometry_observation0_preregistration.yaml"
 )
+CIFAR_CANONICAL_PATH = Path(
+    "configs/cifar10_lt/long_tail_geometry_observation0_preregistration.yaml"
+)
+FASHION_CANONICAL_DIGEST = (
+    "6cd1bcf18692dc947573dbfb0da7b4d98b16fd291ea8d436a32e3e9abec78e24"
+)
 
 
 def test_canonical_observation0_preregistration_is_fully_locked() -> None:
@@ -30,6 +36,19 @@ def test_canonical_observation0_preregistration_is_fully_locked() -> None:
     assert prereg.required_seed_repeats == 2
     assert prereg.minimum_common_classes == 5
     assert prereg.stage1_requires_functional_lock is True
+    assert len(prereg.digest) == 64
+    assert prereg.digest == FASHION_CANONICAL_DIGEST
+
+
+def test_cifar_observation0_preregistration_locks_natural_image_scale() -> None:
+    prereg = Observation0Preregistration.load(CIFAR_CANONICAL_PATH)
+
+    assert prereg.dataset == "cifar10_lt"
+    assert prereg.training_seeds == (0, 1, 2)
+    assert prereg.checkpoint_steps == (0, 2500, 10_000, 25_000, 50_000, 100_000)
+    assert prereg.layers == Observation0Preregistration.load(CANONICAL_PATH).layers
+    assert prereg.primary_microbatches_per_cell == 16
+    assert prereg.minimum_common_classes == 5
     assert len(prereg.digest) == 64
 
 

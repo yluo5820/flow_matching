@@ -10,6 +10,8 @@ from typing import Any
 
 from fm_lab.utils.config import load_config, save_config
 
+_SUPPORTED_DATASETS = frozenset({"fashion_mnist_lt", "cifar10_lt"})
+
 
 @dataclass(frozen=True)
 class Observation0Preregistration:
@@ -233,8 +235,10 @@ class Observation0Preregistration:
     def _validate(self) -> None:
         if self.schema_version != 1:
             raise ValueError("Observation-0 preregistration schema_version must be 1.")
-        if not self.study_name or self.dataset != "fashion_mnist_lt":
-            raise ValueError("Observation 0 requires the Fashion-MNIST long-tail study.")
+        if not self.study_name or self.dataset not in _SUPPORTED_DATASETS:
+            raise ValueError(
+                "Observation 0 requires a supported long-tail image dataset."
+            )
         if not self.base_config:
             raise ValueError("Observation 0 requires a base config path.")
         if not self.training_seeds or len(set(self.training_seeds)) != len(
