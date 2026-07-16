@@ -126,6 +126,24 @@ def cell_microbatch_rows(
     return tuple(selected)
 
 
+def _combine_probe_batches(batches: tuple[ProbeBatch, ...]) -> ProbeBatch:
+    """Concatenate fixed probe batches without changing their row order."""
+
+    if not batches:
+        raise ValueError("Combining probe batches requires at least one batch.")
+    return ProbeBatch(
+        x0=torch.cat([batch.x0 for batch in batches], dim=0),
+        x1=torch.cat([batch.x1 for batch in batches], dim=0),
+        t=torch.cat([batch.t for batch in batches], dim=0),
+        labels=torch.cat([batch.labels for batch in batches], dim=0),
+        original_indices=np.concatenate(
+            [batch.original_indices for batch in batches]
+        ),
+        stratum_ids=np.concatenate([batch.stratum_ids for batch in batches]),
+        microbatch_ids=np.concatenate([batch.microbatch_ids for batch in batches]),
+    )
+
+
 def top_centered_covariance_direction(rows: torch.Tensor) -> Rank1Direction:
     """Compute the exact top right singular direction through a sample Gram matrix."""
 
@@ -898,7 +916,7 @@ def calibrate_observation0_functional_overlap(
         responses=responses,
         preregistration=context.preregistration,
     )
-    direction_digest = direction_index_digest(artifact_dir / "directions")
+    direction_digest = validated_direction_index_digest(context)
     lock_payload = _decision_to_dict(decision)
     lock_payload.update(
         {
@@ -1053,15 +1071,24 @@ def collect_response_chunk(
         path=path,
         partitions=partitions,
     )
-    base_losses = {
-        class_id: _mean_batch_loss(
-            model=model,
-            objective=objective,
-            path=path,
-            batches=partitions[class_id]["evaluation"],
+    evaluation_batch = _combine_probe_batches(
+        tuple(
+            batch
+            for class_id in context.preregistration.classes
+            for batch in partitions[class_id]["evaluation"]
         )
-        for class_id in context.preregistration.classes
-    }
+    )
+    baseline_result = evaluate_probe_batches(
+        model=model,
+        objective=objective,
+        path=path,
+        batches=(evaluation_batch,),
+    )
+    base_losses = _class_mean_losses(
+        baseline_result.row_losses,
+        evaluation_batch,
+        classes=context.preregistration.classes,
+    )
     scale_means: dict[tuple[int, str], torch.Tensor] = {}
     for class_id in context.preregistration.classes:
         gradients = collect_gradient_rows(
@@ -1084,7 +1111,7 @@ def collect_response_chunk(
                     model=model,
                     objective=objective,
                     path=path,
-                    partitions=partitions,
+                    evaluation_batch=evaluation_batch,
                     base_losses=base_losses,
                     layer=layer,
                     direction=primary.vector,
@@ -1117,7 +1144,7 @@ def collect_response_chunk(
                         model=model,
                         objective=objective,
                         path=path,
-                        partitions=partitions,
+                        evaluation_batch=evaluation_batch,
                         base_losses=base_losses,
                         layer=layer,
                         direction=random_direction.vector,
@@ -1305,7 +1332,7 @@ def _evaluate_response_direction(
     model: nn.Module,
     objective: Any,
     path: Any,
-    partitions: dict[int, dict[str, tuple[ProbeBatch, ...]]],
+    evaluation_batch: ProbeBatch,
     base_losses: dict[int, float],
     layer: str,
     direction: torch.Tensor,
@@ -1318,38 +1345,64 @@ def _evaluate_response_direction(
     control_id: int,
     classes: tuple[int, ...],
 ) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
     with virtual_layer_update(
         model,
         layer_name=layer,
         direction=direction,
         relative_step=relative_step,
     ):
-        for evaluation_class in classes:
-            perturbed = _mean_batch_loss(
-                model=model,
-                objective=objective,
-                path=path,
-                batches=partitions[evaluation_class]["evaluation"],
+        result = evaluate_probe_batches(
+            model=model,
+            objective=objective,
+            path=path,
+            batches=(evaluation_batch,),
+        )
+    perturbed_losses = _class_mean_losses(
+        result.row_losses,
+        evaluation_batch,
+        classes=classes,
+    )
+    return [
+        {
+            "checkpoint_step": checkpoint_step,
+            "layer": layer,
+            "seed": seed,
+            "direction_class": direction_class,
+            "evaluation_class": evaluation_class,
+            "direction_kind": direction_kind,
+            "control_id": control_id,
+            "relative_step": relative_step,
+            "projection_fraction": projection_fraction,
+            "base_loss": base_losses[evaluation_class],
+            "perturbed_loss": perturbed_losses[evaluation_class],
+            "benefit": -(
+                perturbed_losses[evaluation_class] - base_losses[evaluation_class]
             )
-            baseline = base_losses[evaluation_class]
-            records.append(
-                {
-                    "checkpoint_step": checkpoint_step,
-                    "layer": layer,
-                    "seed": seed,
-                    "direction_class": direction_class,
-                    "evaluation_class": evaluation_class,
-                    "direction_kind": direction_kind,
-                    "control_id": control_id,
-                    "relative_step": relative_step,
-                    "projection_fraction": projection_fraction,
-                    "base_loss": baseline,
-                    "perturbed_loss": perturbed,
-                    "benefit": -(perturbed - baseline) / baseline,
-                }
-            )
-    return records
+            / base_losses[evaluation_class],
+        }
+        for evaluation_class in classes
+    ]
+
+
+def _class_mean_losses(
+    row_losses: torch.Tensor,
+    batch: ProbeBatch,
+    *,
+    classes: tuple[int, ...],
+) -> dict[int, float]:
+    labels = batch.labels.detach().cpu()
+    if len(row_losses) != len(labels):
+        raise ValueError("Probe replay losses and labels have different row counts.")
+    means: dict[int, float] = {}
+    for class_id in classes:
+        selected = row_losses[labels == int(class_id)]
+        if not len(selected):
+            raise ValueError("Combined evaluation batch is missing a locked class.")
+        value = float(selected.mean())
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError("Functional calibration requires finite positive class loss.")
+        means[class_id] = value
+    return means
 
 
 def _mean_batch_loss(
@@ -1600,7 +1653,7 @@ def _load_completed_decision(context: CalibrationContext) -> FunctionalCalibrati
             raise ValueError(
                 f"Functional calibration artifact changed after completion: {name}"
             )
-    direction_digest = direction_index_digest(context.artifact_dir / "directions")
+    direction_digest = validated_direction_index_digest(context)
     if direction_digest != complete.get("direction_index_sha256"):
         raise ValueError("Functional calibration directions changed after completion.")
     lock = json.loads((context.artifact_dir / "functional_lock.json").read_text())
@@ -1616,6 +1669,33 @@ def _load_completed_decision(context: CalibrationContext) -> FunctionalCalibrati
     ):
         raise ValueError("Completed functional lock input identity changed.")
     return _decision_from_dict(lock)
+
+
+def validated_direction_index_digest(context: CalibrationContext) -> str:
+    """Validate every locked exact direction before digesting the index."""
+
+    for seed in context.observation0.training_seeds:
+        for checkpoint_step in context.preregistration.checkpoint_steps:
+            for class_id in context.preregistration.classes:
+                for layer in context.preregistration.layers:
+                    path = _direction_path(
+                        context.artifact_dir,
+                        seed=seed,
+                        checkpoint_step=checkpoint_step,
+                        layer=layer,
+                        class_id=class_id,
+                    )
+                    if not path.is_file():
+                        raise ValueError(f"Functional calibration is missing exact direction: {path}")
+                    _load_direction(
+                        path,
+                        context=context,
+                        seed=seed,
+                        checkpoint_step=checkpoint_step,
+                        class_id=class_id,
+                        layer=layer,
+                    )
+    return direction_index_digest(context.artifact_dir / "directions")
 
 
 def direction_index_digest(directory: str | Path) -> str:

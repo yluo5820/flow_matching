@@ -10,6 +10,7 @@ from fm_lab.diagnostics.long_tail_geometry.checkpoints import (
     restore_probe_model,
 )
 from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
+    _combine_probe_batches,
     virtual_layer_update,
 )
 from fm_lab.diagnostics.long_tail_geometry.manifest import materialize_probe_batch
@@ -96,9 +97,16 @@ def test_selected_batch_replay_matches_manifest_replay(tmp_path: Path) -> None:
         path=path,
         batches=batches[:3],
     )
+    merged = evaluate_probe_batches(
+        model=model,
+        objective=objective,
+        path=path,
+        batches=(_combine_probe_batches(batches[:3]),),
+    )
 
     assert model.training
     assert torch.equal(selected.row_losses, full.row_losses[:3])
+    assert torch.equal(merged.row_losses, selected.row_losses)
     assert selected.mean_loss == float(full.row_losses[:3].mean())
     with pytest.raises(ValueError, match="at least one batch"):
         evaluate_probe_batches(

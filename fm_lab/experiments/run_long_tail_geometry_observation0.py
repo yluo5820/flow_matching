@@ -22,7 +22,10 @@ from fm_lab.experiments.factory import resolve_device
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare, collect, or analyze long-tail geometry Observation 0."
+        description=(
+            "Prepare, collect, analyze, or functionally calibrate long-tail geometry "
+            "Observation 0."
+        )
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

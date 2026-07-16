@@ -191,7 +191,13 @@ def test_service_writes_digest_bound_lock_and_resumes_complete_result(
 
     monkeypatch.setattr(calibration, "collect_scale_chunk", fake_scale)
     monkeypatch.setattr(calibration, "collect_response_chunk", fake_responses)
-    monkeypatch.setattr(calibration, "direction_index_digest", lambda _: "d" * 64)
+    with pytest.raises(ValueError, match="missing exact direction"):
+        calibration.validated_direction_index_digest(context)
+    monkeypatch.setattr(
+        calibration,
+        "validated_direction_index_digest",
+        lambda _: "d" * 64,
+    )
 
     result = calibration.calibrate_observation0_functional_overlap(
         study_dir=tmp_path,
