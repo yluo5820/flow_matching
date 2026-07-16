@@ -1,0 +1,38 @@
+schema_version: 1
+inputs:
+  observation0_preregistration_sha256: 6cd1bcf18692dc947573dbfb0da7b4d98b16fd291ea8d436a32e3e9abec78e24
+  functional_preregistration_sha256: f40251443426eab2f24d89cdf359f07615ccda788341d16719c1f0ec40836bdf
+  required_stage1_unlocked: false
+  required_functional_next_action: stop_stage1_and_revise_functional_geometry
+  observation0_phase: primary
+checkpoints:
+  steps: [500, 20000]
+  primary_step: 20000
+  positive_control_step: 500
+probe:
+  view: a
+  stratum_id: 0
+  stratum_bounds: [0.02, 0.10]
+  rank: 1
+  layers:
+    - down2_block.conv2.weight
+    - middle.conv2.weight
+  classes: [0, 2, 3, 4, 6, 9]
+  microbatches_per_cell: 16
+crossfit:
+  fold_offsets: [0, 4, 8, 12]
+  fit_size: 8
+  scale_size: 4
+  evaluation_size: 4
+directions:
+  basis_kinds: [raw, row_normalized]
+  orientation_gradient: raw_scale_mean
+  minimum_projection_fraction: 1.0e-8
+perturbation:
+  relative_step_grid: [1.0e-4, 3.0e-4, 1.0e-3]
+  local_linearity_relative_error_max: 0.10
+inference:
+  bootstrap_resamples: 10000
+  bootstrap_seed: 20260716
+  confidence_level: 0.95
+  required_seed_repeats: 2
