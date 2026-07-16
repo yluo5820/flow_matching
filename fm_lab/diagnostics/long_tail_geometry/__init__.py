@@ -19,6 +19,14 @@ from fm_lab.diagnostics.long_tail_geometry.manifest import (
     build_probe_manifest,
     materialize_probe_batch,
 )
+from fm_lab.diagnostics.long_tail_geometry.preregistration import (
+    Observation0Preregistration,
+)
+from fm_lab.diagnostics.long_tail_geometry.registry import (
+    Observation0Run,
+    prepare_observation0_registry,
+    update_observation0_run,
+)
 from fm_lab.diagnostics.long_tail_geometry.sketch import (
     CountSketchSpec,
     SketchValidation,
@@ -33,13 +41,17 @@ __all__ = [
     "CountSketchSpec",
     "PermutationResult",
     "PlantedControlResult",
+    "Observation0Preregistration",
+    "Observation0Run",
     "SketchValidation",
     "build_probe_manifest",
     "collect_gradient_rows",
     "materialize_probe_batch",
     "permutation_null",
     "planted_low_rank_control",
+    "prepare_observation0_registry",
     "projection_overlap",
     "resolve_probe_layers",
     "validate_sketch",
+    "update_observation0_run",
 ]
