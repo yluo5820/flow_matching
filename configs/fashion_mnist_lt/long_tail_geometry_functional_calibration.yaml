@@ -1,0 +1,46 @@
+schema_version: 1
+
+observation0:
+  preregistration_sha256: 6cd1bcf18692dc947573dbfb0da7b4d98b16fd291ea8d436a32e3e9abec78e24
+  required_status: network_wide_measurable
+  required_next_action: calibrate_probe_a_functional_overlap_before_stage1
+  phase: primary
+
+checkpoints:
+  steps: [500, 20000]
+  primary_step: 20000
+  positive_control_step: 500
+
+probe:
+  view: a
+  stratum_id: 0
+  stratum_bounds: [0.02, 0.10]
+  rank: 1
+  layers:
+    - down2_block.conv2.weight
+    - middle.conv2.weight
+  classes: [0, 2, 3, 4, 6, 9]
+  fit_positions: [0, 1, 2, 3, 4, 5, 6, 7]
+  scale_positions: [8, 9, 10, 11]
+  evaluation_positions: [12, 13, 14, 15]
+
+perturbation:
+  relative_step_grid: [0.000001, 0.000003, 0.00001, 0.00003, 0.0001, 0.0003, 0.001, 0.003, 0.01]
+  target_loss_change_fraction: 0.01
+  target_benefit_interval: [0.0075, 0.0125]
+  max_relative_layer_step: 0.01
+  local_linearity_relative_error_max: 0.10
+  minimum_projection_fraction: 0.00000001
+
+controls:
+  random_controls: 99
+  random_seed: 2026071601
+  random_control_quantile: 0.99
+
+decision:
+  bootstrap_resamples: 10000
+  bootstrap_seed: 2026071602
+  confidence_level: 0.95
+  required_seed_repeats: 2
+  maximum_harm_to_benefit_ratio: 0.5
+
