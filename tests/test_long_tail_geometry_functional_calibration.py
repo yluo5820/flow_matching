@@ -1,14 +1,23 @@
+import dataclasses
+
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from torch import nn
 
 from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
+    analyze_functional_calibration,
     cell_microbatch_rows,
     deterministic_random_unit_direction,
+    response_block_metrics,
+    select_layer_scales,
     projected_descent_direction,
     top_centered_covariance_direction,
     virtual_layer_update,
+)
+from fm_lab.diagnostics.long_tail_geometry.functional_preregistration import (
+    FunctionalCalibrationPreregistration,
 )
 from fm_lab.diagnostics.long_tail_geometry.manifest import build_probe_manifest
 
@@ -199,3 +208,207 @@ def test_virtual_layer_update_rejects_invalid_update(
             relative_step=relative_step,
         ):
             pass
+
+
+def _analysis_preregistration() -> FunctionalCalibrationPreregistration:
+    canonical = FunctionalCalibrationPreregistration.load(
+        "configs/fashion_mnist_lt/long_tail_geometry_functional_calibration.yaml"
+    )
+    return dataclasses.replace(
+        canonical,
+        relative_step_grid=(1e-4, 3e-4),
+        random_controls=3,
+        bootstrap_resamples=199,
+    )
+
+
+def _passing_scale_table(prereg) -> pd.DataFrame:
+    rows = []
+    for layer in prereg.layers:
+        for seed in (0, 1, 2):
+            for class_id in prereg.classes:
+                for relative_step, benefit, doubled in (
+                    (1e-4, 0.004, 0.0082),
+                    (3e-4, 0.010, 0.0195),
+                ):
+                    rows.append(
+                        {
+                            "checkpoint_step": prereg.primary_checkpoint_step,
+                            "layer": layer,
+                            "seed": seed,
+                            "class_id": class_id,
+                            "relative_step": relative_step,
+                            "benefit": benefit,
+                            "doubled_benefit": doubled,
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def _passing_responses(prereg) -> pd.DataFrame:
+    rows = []
+    for checkpoint_step in prereg.checkpoint_steps:
+        for layer in prereg.layers:
+            for seed in (0, 1, 2):
+                for direction_class in prereg.classes:
+                    for evaluation_class in prereg.classes:
+                        rows.append(
+                            {
+                                "checkpoint_step": checkpoint_step,
+                                "layer": layer,
+                                "seed": seed,
+                                "direction_class": direction_class,
+                                "evaluation_class": evaluation_class,
+                                "direction_kind": "primary",
+                                "control_id": -1,
+                                "benefit": (
+                                    0.018
+                                    if evaluation_class == direction_class
+                                    else 0.001
+                                ),
+                            }
+                        )
+                        for control_id in range(prereg.random_controls):
+                            rows.append(
+                                {
+                                    "checkpoint_step": checkpoint_step,
+                                    "layer": layer,
+                                    "seed": seed,
+                                    "direction_class": direction_class,
+                                    "evaluation_class": evaluation_class,
+                                    "direction_kind": "random",
+                                    "control_id": control_id,
+                                    "benefit": (
+                                        0.003
+                                        if evaluation_class == direction_class
+                                        else -0.004
+                                    ),
+                                }
+                            )
+    return pd.DataFrame(rows)
+
+
+def test_select_layer_scales_uses_one_shared_step_and_checks_linearity() -> None:
+    prereg = _analysis_preregistration()
+
+    selections = select_layer_scales(_passing_scale_table(prereg), prereg)
+
+    assert set(selections) == set(prereg.layers)
+    for selection in selections.values():
+        assert selection.relative_step == 3e-4
+        assert selection.median_benefit == pytest.approx(0.01)
+        assert selection.doubled_median_benefit == pytest.approx(0.0195)
+        assert selection.local_linearity_relative_error == pytest.approx(0.025)
+        assert selection.valid
+
+
+def test_select_layer_scales_tie_breaks_toward_smaller_step() -> None:
+    prereg = _analysis_preregistration()
+    table = _passing_scale_table(prereg)
+    table.loc[table["relative_step"] == 1e-4, "benefit"] = 0.009
+    table.loc[table["relative_step"] == 3e-4, "benefit"] = 0.011
+
+    selections = select_layer_scales(table, prereg)
+
+    assert {value.relative_step for value in selections.values()} == {1e-4}
+
+
+def test_scale_selection_fails_closed_on_missing_or_nonfinite_cells() -> None:
+    prereg = _analysis_preregistration()
+    table = _passing_scale_table(prereg)
+    with pytest.raises(ValueError, match="complete scale grid"):
+        select_layer_scales(table.iloc[:-1], prereg)
+    changed = table.copy()
+    changed.loc[0, "benefit"] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        select_layer_scales(changed, prereg)
+
+
+def test_response_metrics_preserve_target_and_worst_offclass_harm() -> None:
+    prereg = _analysis_preregistration()
+    metrics = response_block_metrics(_passing_responses(prereg), prereg)
+    primary = metrics[metrics["direction_kind"] == "primary"]
+    random = metrics[metrics["direction_kind"] == "random"]
+
+    assert set(primary["target_benefit"]) == {0.018}
+    assert set(primary["non_target_harm"]) == {0.0}
+    assert set(primary["selectivity_margin"]) == {0.018}
+    assert set(random["target_benefit"]) == {0.003}
+    assert set(random["non_target_harm"]) == {0.004}
+    assert set(random["selectivity_margin"]) == {-0.001}
+
+
+def test_functional_decision_unlocks_only_when_both_layers_and_control_pass() -> None:
+    prereg = _analysis_preregistration()
+
+    decision = analyze_functional_calibration(
+        scale_table=_passing_scale_table(prereg),
+        responses=_passing_responses(prereg),
+        preregistration=prereg,
+    )
+
+    assert decision.stage1_unlocked
+    assert decision.positive_control_pass
+    assert decision.next_action == "stage1_unlocked_for_separate_preregistration"
+    assert set(decision.selected_relative_steps) == set(prereg.layers)
+    assert all(summary["passed"] for summary in decision.layer_summaries.values())
+    assert all(summary["seed_repeats"] == 3 for summary in decision.layer_summaries.values())
+
+
+@pytest.mark.parametrize("failure", ["invalid_scale", "offclass_harm", "random_control"])
+def test_functional_decision_fails_closed(failure: str) -> None:
+    prereg = _analysis_preregistration()
+    scales = _passing_scale_table(prereg)
+    responses = _passing_responses(prereg)
+    if failure == "invalid_scale":
+        scales["benefit"] = 0.03
+    elif failure == "offclass_harm":
+        mask = (
+            (responses["direction_kind"] == "primary")
+            & (responses["direction_class"] != responses["evaluation_class"])
+            & (responses["checkpoint_step"] == prereg.primary_checkpoint_step)
+        )
+        responses.loc[mask, "benefit"] = -0.02
+    else:
+        mask = (
+            (responses["direction_kind"] == "random")
+            & (responses["direction_class"] == responses["evaluation_class"])
+            & (responses["checkpoint_step"] == prereg.primary_checkpoint_step)
+        )
+        responses.loc[mask, "benefit"] = 0.03
+        offclass = (
+            (responses["direction_kind"] == "random")
+            & (responses["direction_class"] != responses["evaluation_class"])
+            & (responses["checkpoint_step"] == prereg.primary_checkpoint_step)
+        )
+        responses.loc[offclass, "benefit"] = 0.0
+
+    decision = analyze_functional_calibration(
+        scale_table=scales,
+        responses=responses,
+        preregistration=prereg,
+    )
+
+    assert not decision.stage1_unlocked
+    assert decision.next_action == "stop_stage1_and_revise_functional_geometry"
+
+
+def test_early_positive_control_failure_gets_dynamics_interpretation() -> None:
+    prereg = _analysis_preregistration()
+    responses = _passing_responses(prereg)
+    mask = (
+        (responses["checkpoint_step"] == prereg.positive_control_checkpoint_step)
+        & (responses["direction_kind"] == "primary")
+        & (responses["direction_class"] == responses["evaluation_class"])
+    )
+    responses.loc[mask, "benefit"] = -0.01
+
+    decision = analyze_functional_calibration(
+        scale_table=_passing_scale_table(prereg),
+        responses=responses,
+        preregistration=prereg,
+    )
+
+    assert not decision.positive_control_pass
+    assert not decision.stage1_unlocked
+    assert decision.next_action == "stop_stage1_and_revise_functional_geometry"
