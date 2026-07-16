@@ -32,6 +32,12 @@ from fm_lab.diagnostics.long_tail_geometry.registry import (
     prepare_observation0_registry,
     update_observation0_run,
 )
+from fm_lab.diagnostics.long_tail_geometry.reliability import (
+    Observation0Decision,
+    aggregate_observation0_reliability,
+    analyze_seed_reliability,
+    centered_cell_statistics,
+)
 from fm_lab.diagnostics.long_tail_geometry.sketch import (
     CountSketchSpec,
     SketchValidation,
@@ -48,10 +54,14 @@ __all__ = [
     "PermutationResult",
     "PlantedControlResult",
     "Observation0Preregistration",
+    "Observation0Decision",
     "Observation0Run",
     "SketchValidation",
     "build_probe_manifest",
     "build_source_noise_replica",
+    "aggregate_observation0_reliability",
+    "analyze_seed_reliability",
+    "centered_cell_statistics",
     "collect_checkpoint_measurements",
     "collect_gradient_rows",
     "materialize_probe_batch",
