@@ -1,10 +1,9 @@
-import gzip
-import struct
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
+from long_tail_geometry_helpers import write_balanced_fashion_mnist
 
 from fm_lab.data import LongTailedFashionMNIST
 from fm_lab.data.long_tail import (
@@ -125,7 +124,7 @@ def test_same_class_frequency_subsets_are_nested_across_mappings() -> None:
         )
 
 def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
-    _write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
 
     target = LongTailedFashionMNIST(
         root=tmp_path,
@@ -144,7 +143,7 @@ def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
 
 
 def test_fashion_mnist_factory_builds_ir100_target(tmp_path: Path) -> None:
-    _write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
 
     target = build_target(
         {
@@ -162,8 +161,93 @@ def test_fashion_mnist_factory_builds_ir100_target(tmp_path: Path) -> None:
     assert target.class_counts == (100, 59, 35, 21, 12, 7, 4, 2, 1, 1)
 
 
+def test_fashion_mnist_factory_builds_counterfactual_mapping_with_held_out_probes(
+    tmp_path: Path,
+) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
+
+    target = build_target(
+        {
+            "data": {
+                "name": "fashion_mnist_lt",
+                "root": str(tmp_path),
+                "imbalance_factor": 0.01,
+                "subset_seed": 7,
+                "normalize": "minus_one_one",
+                "frequency_mapping": {
+                    "offset": 4,
+                    "multiplier": 3,
+                    "diagnostic_pool_per_class": 20,
+                },
+            }
+        }
+    )
+
+    assert target.metadata()["frequency_mapping"]["offset"] == 4
+    assert len(target.diagnostic_indices("a")) == 100
+    assert len(target.diagnostic_indices("b")) == 100
+    assert not set(target.selected_indices) & set(target.diagnostic_indices("a"))
+    assert not set(target.selected_indices) & set(target.diagnostic_indices("b"))
+
+
+def test_diagnostic_samples_are_addressed_by_original_id_and_seed(
+    tmp_path: Path,
+) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
+    target = LongTailedFashionMNIST(
+        root=tmp_path,
+        imbalance_factor=0.01,
+        subset_seed=7,
+        normalize="minus_one_one",
+        dequantize=True,
+        frequency_mapping_offset=0,
+        frequency_mapping_multiplier=3,
+        diagnostic_pool_per_class=20,
+    )
+    ids = target.diagnostic_indices("a")[:3]
+    seeds = np.array([11, 12, 13], dtype=np.int64)
+
+    first, first_labels, returned = target.diagnostic_samples(
+        "a",
+        original_indices=ids,
+        dequantization_seeds=seeds,
+    )
+    second, second_labels, _ = target.diagnostic_samples(
+        "a",
+        original_indices=ids,
+        dequantization_seeds=seeds,
+    )
+    changed, _, _ = target.diagnostic_samples(
+        "a",
+        original_indices=ids,
+        dequantization_seeds=seeds + 1,
+    )
+
+    assert torch.equal(first, second)
+    assert torch.equal(first_labels, second_labels)
+    assert not torch.equal(first, changed)
+    assert np.array_equal(returned.astype(np.int64), ids)
+
+
+def test_legacy_fashion_mnist_target_does_not_reserve_diagnostic_data(
+    tmp_path: Path,
+) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
+    target = LongTailedFashionMNIST(
+        root=tmp_path,
+        imbalance_factor=0.1,
+        subset_seed=7,
+        normalize="zero_one",
+    )
+
+    assert target.class_counts == (10, 7, 5, 4, 3, 2, 2, 1, 1, 1)
+    assert "frequency_mapping" not in target.metadata()
+    with pytest.raises(ValueError, match="not configured"):
+        target.diagnostic_indices("a")
+
+
 def test_fashion_mnist_sampling_keeps_images_and_labels_aligned(tmp_path: Path) -> None:
-    _write_balanced_fashion_mnist(tmp_path, examples_per_class=4)
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=4)
     target = LongTailedFashionMNIST(
         root=tmp_path,
         imbalance_type="balanced",
@@ -176,24 +260,3 @@ def test_fashion_mnist_sampling_keeps_images_and_labels_aligned(tmp_path: Path) 
 
     assert images.shape == (20, 28 * 28)
     assert torch.equal(torch.round(images[:, 0] * 255).long(), labels)
-
-
-def _write_balanced_fashion_mnist(root: Path, *, examples_per_class: int) -> None:
-    labels = np.repeat(np.arange(10, dtype=np.uint8), examples_per_class)
-    images = np.repeat(labels[:, None, None], 28 * 28, axis=1).reshape(-1, 28, 28)
-    _write_idx_images(root / "train-images-idx3-ubyte.gz", images)
-    _write_idx_labels(root / "train-labels-idx1-ubyte.gz", labels)
-    _write_idx_images(root / "t10k-images-idx3-ubyte.gz", images)
-    _write_idx_labels(root / "t10k-labels-idx1-ubyte.gz", labels)
-
-
-def _write_idx_images(path: Path, images: np.ndarray) -> None:
-    with gzip.open(path, "wb") as handle:
-        handle.write(struct.pack(">IIII", 2051, len(images), 28, 28))
-        handle.write(images.astype(np.uint8).tobytes())
-
-
-def _write_idx_labels(path: Path, labels: np.ndarray) -> None:
-    with gzip.open(path, "wb") as handle:
-        handle.write(struct.pack(">II", 2049, len(labels)))
-        handle.write(labels.astype(np.uint8).tobytes())
