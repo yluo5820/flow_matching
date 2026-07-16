@@ -49,6 +49,7 @@ When adding or changing a CLI:
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
 | `fm-lab-long-tail-geometry-stage0` | Validate the counterfactual long-tail observation pipeline before measurement runs. | Ordinary-FM checkpoint and Stage-0 YAML config | fail-closed report, paired probe manifests, validated gradient rows |
+| `fm-lab-long-tail-geometry-observation0` | Establish the reproducible-gradient noise ceiling before any mapping experiment. | Locked Observation-0 preregistration and three raw-checkpoint runs | immutable manifests, checkpoint sketches, reliability table, noise-ceiling decision |
 
 ## `fm-lab-long-tail-geometry-stage0`
 
@@ -66,6 +67,34 @@ fm-lab-long-tail-geometry-stage0 \
 
 The command exits nonzero on the first failed gate. Its report is still written, and
 gradient-row artifacts are never produced when a pre-gradient gate fails.
+
+## `fm-lab-long-tail-geometry-observation0`
+
+Prepare the locked offset-0 pilot and its three ordinary-FM seed configs:
+
+```bash
+fm-lab-long-tail-geometry-observation0 prepare \
+  --preregistration configs/fashion_mnist_lt/long_tail_geometry_observation0_preregistration.yaml \
+  --study-dir runs/long_tail_geometry/fashion_mnist/observation0
+```
+
+Train each generated config into its printed exact run directory. Then collect one
+registered seed at a time and analyze only after all three registry rows are measured:
+
+```bash
+fm-lab-long-tail-geometry-observation0 collect \
+  --study-dir runs/long_tail_geometry/fashion_mnist/observation0 \
+  --run-dir runs/long_tail_geometry/fashion_mnist/observation0/mapping_0/seed_0 \
+  --device auto
+fm-lab-long-tail-geometry-observation0 analyze \
+  --study-dir runs/long_tail_geometry/fashion_mnist/observation0
+```
+
+The collector is resumable only when checkpoint, manifest, layer, and preregistration
+digests still match. If the primary decision is `escalate_probe_rows`, repeat `collect`
+for all seeds and `analyze` with `--escalated`. This is the single locked increase from
+16 to 32 microbatches per cell; it is not itself evidence for Outcome D. This CLI has
+no Stage-1 command and cannot schedule a nonzero frequency mapping.
 
 ## `fm-lab-fashion-mnist-lt-eval`
 

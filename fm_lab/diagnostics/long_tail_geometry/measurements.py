@@ -245,12 +245,21 @@ class CheckpointMeasurements:
             norms = self.exact_norms[layer_name]
             if sketches.ndim != 2 or sketches.shape[0] != row_count:
                 raise ValueError(f"Measurement sketch rows are invalid for {layer_name}.")
-            if norms.shape != (row_count,) or torch.any(norms <= 0):
+            if norms.shape != (row_count,) or torch.any(norms < 0):
                 raise ValueError(f"Measurement exact norms are invalid for {layer_name}.")
             if not torch.isfinite(sketches).all() or not torch.isfinite(norms).all():
                 raise ValueError(f"Measurement values are non-finite for {layer_name}.")
             sketch_norms = torch.linalg.vector_norm(sketches, dim=1)
-            if not torch.allclose(sketch_norms, torch.ones_like(sketch_norms), atol=1e-5):
+            zero_rows = norms == 0
+            if not torch.allclose(
+                sketch_norms[zero_rows],
+                torch.zeros_like(sketch_norms[zero_rows]),
+                atol=1e-7,
+            ) or not torch.allclose(
+                sketch_norms[~zero_rows],
+                torch.ones_like(sketch_norms[~zero_rows]),
+                atol=1e-5,
+            ):
                 raise ValueError(f"Measurement sketches are not normalized for {layer_name}.")
 
 
@@ -324,14 +333,19 @@ def collect_checkpoint_measurements(
                 for layer, gradient in zip(layers, gradients, strict=True):
                     row = gradient.detach().reshape(-1).float().cpu()
                     norm = torch.linalg.vector_norm(row)
-                    if not torch.isfinite(row).all() or not torch.isfinite(norm) or norm <= 0:
+                    if not torch.isfinite(row).all() or not torch.isfinite(norm):
                         raise ValueError(f"Invalid measurement gradient for {layer.name}.")
                     spec = specs[layer.name]
                     projected = row if spec is None else spec.apply(row[None])[0]
                     projected_norm = torch.linalg.vector_norm(projected)
-                    if not torch.isfinite(projected_norm) or projected_norm <= 0:
+                    if not torch.isfinite(projected_norm):
                         raise ValueError(f"Invalid measurement sketch for {layer.name}.")
-                    sketches[layer.name].append(projected / projected_norm)
+                    if norm == 0:
+                        sketches[layer.name].append(projected)
+                    elif projected_norm == 0:
+                        raise ValueError(f"Invalid measurement sketch for {layer.name}.")
+                    else:
+                        sketches[layer.name].append(projected / projected_norm)
                     exact_norms[layer.name].append(norm)
                 metadata_rows.append(
                     {

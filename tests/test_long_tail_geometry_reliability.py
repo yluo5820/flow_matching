@@ -137,6 +137,16 @@ def test_centered_cell_statistics_report_overlap_angles_rank_and_concentration()
     assert rank4["effective_rank_a"] >= 1
 
 
+def test_zero_gradient_control_cell_is_unavailable_not_corrupt() -> None:
+    zeros = torch.zeros(16, 64)
+
+    result = centered_cell_statistics(zeros, zeros, ranks=(1, 2, 4, 8, 16))
+
+    assert not result["available"].any()
+    assert result["projection_overlap"].isna().all()
+    assert set(result["directional_concentration_a"]) == {0.0}
+
+
 def test_class_permutation_null_controls_the_maximum_across_cells() -> None:
     measurements = _synthetic_measurement(shared_by_class=True, seed=3)
     second_metadata = measurements.metadata.copy()
@@ -237,6 +247,8 @@ def test_observation0_passes_only_for_repeated_adjacent_nonoutput_layers(
     assert decision.status == "network_wide_measurable"
     assert decision.network_wide_gate_passed
     assert decision.required_escalation is False
+    assert decision.probe_phase == "primary"
+    assert decision.microbatches_per_cell == 16
     assert decision.passing_pairs[0]["common_classes"] == list(range(6))
     decision.save(tmp_path)
     persisted = pd.read_csv(tmp_path / "reliability.csv")
@@ -299,6 +311,25 @@ def test_only_escalated_complete_analysis_can_return_practical_null() -> None:
     assert primary.required_escalation
     assert escalated.status == "network_wide_practical_null"
     assert not escalated.required_escalation
+    assert escalated.probe_phase == "escalated"
+    assert escalated.microbatches_per_cell == 32
+
+
+def test_mixed_primary_and_escalated_seed_tables_are_rejected() -> None:
+    preregistration = _preregistration()
+    seed_tables = {
+        seed: _seed_table(
+            preregistration,
+            seed=seed,
+            measurable_layers=(),
+            measurable_classes=range(0),
+        )
+        for seed in preregistration.training_seeds
+    }
+    seed_tables[2].attrs["microbatches_per_cell"] = 32
+
+    with pytest.raises(ValueError, match="same preregistered probe phase"):
+        aggregate_observation0_reliability(seed_tables, preregistration)
 
 
 def test_escalated_output_only_result_does_not_request_a_second_escalation() -> None:

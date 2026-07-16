@@ -40,6 +40,8 @@ class Observation0Decision:
     network_wide_gate_passed: bool
     required_escalation: bool
     next_action: str
+    probe_phase: str
+    microbatches_per_cell: int
     preregistration_digest: str
     complete_seeds: tuple[int, ...]
     incomplete_seeds: tuple[int, ...]
@@ -82,6 +84,8 @@ class Observation0Decision:
             "passing_pairs": list(self.passing_pairs),
             "output_only_cells": list(self.output_only_cells),
             "next_action": self.next_action,
+            "probe_phase": self.probe_phase,
+            "microbatches_per_cell": self.microbatches_per_cell,
             "reliability_sha256": _file_sha256(reliability_path),
             "gram_matrices_sha256": _file_sha256(gram_path),
         }
@@ -284,6 +288,20 @@ def aggregate_observation0_reliability(
         microbatch_counts.append(
             int(seed_tables[seed].attrs.get("microbatches_per_cell", 0))
         )
+    allowed_counts = {
+        preregistration.primary_microbatches_per_cell,
+        preregistration.escalation_microbatches_per_cell,
+    }
+    if len(set(microbatch_counts)) != 1 or microbatch_counts[0] not in allowed_counts:
+        raise ValueError(
+            "Every seed table must use the same preregistered probe phase."
+        )
+    microbatches_per_cell = microbatch_counts[0]
+    probe_phase = (
+        "escalated"
+        if microbatches_per_cell == preregistration.escalation_microbatches_per_cell
+        else "primary"
+    )
     combined = pd.concat(combined_parts, ignore_index=True)
     required = {
         "checkpoint_step",
@@ -363,10 +381,7 @@ def aggregate_observation0_reliability(
                 }
             )
 
-    escalated = all(
-        count == preregistration.escalation_microbatches_per_cell
-        for count in microbatch_counts
-    )
+    escalated = probe_phase == "escalated"
     if passing_pairs:
         status = "network_wide_measurable"
         gate_passed = True
@@ -408,6 +423,8 @@ def aggregate_observation0_reliability(
         network_wide_gate_passed=gate_passed,
         required_escalation=required_escalation,
         next_action=next_action,
+        probe_phase=probe_phase,
+        microbatches_per_cell=microbatches_per_cell,
         preregistration_digest=preregistration.digest,
         complete_seeds=preregistration.training_seeds,
         incomplete_seeds=(),
@@ -526,6 +543,8 @@ def _split_half_overlap(
 ) -> dict[int, float]:
     first = rows[::2]
     second = rows[1::2]
+    if len(first) < 2 or len(second) < 2:
+        return {int(rank): float("nan") for rank in ranks}
     return {
         int(rank): _overlap_or_nan(first, second, rank=int(rank), centered=centered)
         for rank in ranks

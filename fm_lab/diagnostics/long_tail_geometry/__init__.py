@@ -24,6 +24,13 @@ from fm_lab.diagnostics.long_tail_geometry.measurements import (
     CheckpointMeasurements,
     collect_checkpoint_measurements,
 )
+from fm_lab.diagnostics.long_tail_geometry.observation0 import (
+    Observation0CollectionSummary,
+    Observation0Preparation,
+    analyze_observation0_study,
+    collect_observation0_run,
+    prepare_observation0_study,
+)
 from fm_lab.diagnostics.long_tail_geometry.preregistration import (
     Observation0Preregistration,
 )
@@ -55,19 +62,24 @@ __all__ = [
     "PlantedControlResult",
     "Observation0Preregistration",
     "Observation0Decision",
+    "Observation0CollectionSummary",
+    "Observation0Preparation",
     "Observation0Run",
     "SketchValidation",
     "build_probe_manifest",
     "build_source_noise_replica",
     "aggregate_observation0_reliability",
     "analyze_seed_reliability",
+    "analyze_observation0_study",
     "centered_cell_statistics",
     "collect_checkpoint_measurements",
+    "collect_observation0_run",
     "collect_gradient_rows",
     "materialize_probe_batch",
     "permutation_null",
     "planted_low_rank_control",
     "prepare_observation0_registry",
+    "prepare_observation0_study",
     "projection_overlap",
     "resolve_probe_layers",
     "validate_sketch",

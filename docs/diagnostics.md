@@ -64,6 +64,44 @@ Treat only `passed: true` as permission to begin the ten-mapping observation run
 failed report is evidence about the measurement pipeline, not evidence for or against
 the long-tail geometry hypothesis.
 
+## Long-Tail Gradient-Geometry Observation 0
+
+`fm-lab-long-tail-geometry-observation0` first asks whether a fixed
+class/checkpoint/timestep/layer cell has geometry that is measurable at all. Its study
+directory contains:
+
+```text
+aggregate/
+  preregistration.yaml
+  run_registry.csv
+  exclusion_log.csv
+  manifests/primary/probe_a.npz
+  manifests/primary/probe_b.npz
+  reliability.csv
+  noise_ceiling.json
+  gram_matrices.npz
+mapping_0/seed_*/diagnostics/long_tail_geometry/observation0/primary/
+  checkpoint_*/gradient_rows.parquet
+  checkpoint_*/gradient_sketches.npz
+  checkpoint_*/complete.json
+```
+
+`reliability.csv` reports centered covariance and uncentered second-moment results,
+including available/unavailable ranks, Probe-A split halves, Probe-A/Probe-B overlap,
+fixed-target source-noise replicas, principal angles, mean-direction cosine,
+directional concentration, and effective rank. The primary gate uses only centered
+Probe-A/Probe-B overlap above the layer/rank max-statistic class-permutation null,
+repeated in at least two of three seeds. Checkpoint zero is a control and never enters
+the gate.
+
+`network_wide_measurable` requires at least five repeated classes in two adjacent
+non-output layers at one fixed checkpoint, timestep stratum, and rank. An
+`output_layer_only` result cannot support a network-wide claim. `escalate_probe_rows`
+means the primary measurement was inconclusive and authorizes only the preregistered
+32-microbatch repeat; it is not Outcome D. Only an equally unsuccessful completed
+escalation is reported as `network_wide_practical_null`. Even a passing result leaves
+Stage 1 locked until the separate Probe-A functional-overlap calibration is complete.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

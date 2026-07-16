@@ -149,6 +149,28 @@ def test_collection_rejects_mixed_cell_microbatch() -> None:
         )
 
 
+def test_zero_initialized_head_preserves_zero_upstream_gradient_as_unavailable() -> None:
+    model = TinyConditionalVelocity()
+    with torch.no_grad():
+        model.output.weight.zero_()
+
+    measurements = _collect(model)
+
+    assert torch.equal(
+        measurements.exact_norms["hidden.weight"],
+        torch.zeros(12),
+    )
+    assert torch.equal(
+        measurements.sketches["hidden.weight"],
+        torch.zeros(12, 8),
+    )
+    assert torch.all(measurements.exact_norms["output.weight"] > 0)
+    assert torch.allclose(
+        torch.linalg.vector_norm(measurements.sketches["output.weight"], dim=1),
+        torch.ones(12),
+    )
+
+
 def test_checkpoint_measurements_round_trip_parquet_and_npz(tmp_path: Path) -> None:
     original = _collect()
 
