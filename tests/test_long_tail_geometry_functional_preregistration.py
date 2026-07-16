@@ -117,4 +117,3 @@ def test_functional_preregistration_rejects_protocol_violations(
 
     with pytest.raises(ValueError, match=message):
         dataclasses.replace(prereg, **updates)
-

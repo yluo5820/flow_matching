@@ -43,4 +43,3 @@ decision:
   confidence_level: 0.95
   required_seed_repeats: 2
   maximum_harm_to_benefit_ratio: 0.5
-

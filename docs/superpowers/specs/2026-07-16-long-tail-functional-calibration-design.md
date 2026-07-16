@@ -1,6 +1,6 @@
 # Probe-A Functional Calibration Design
 
-**Date:** 2026-07-16  
+**Date:** 2026-07-16
 **Status:** approved by the user's instruction to implement the recommended Observation-0 follow-up
 
 ## Purpose
@@ -130,4 +130,3 @@ A repeated command validates and reuses a complete artifact set. Partial directi
 - Random controls match the selected direction: the spectral observation adds no local functional information beyond dimensionality.
 - Step 500 passes but step 20,000 fails: the geometry is an acquisition-stage phenomenon and should motivate dynamics work, not a fixed late-training intervention.
 - Both checkpoints fail: stop before Stage 1 and revise the geometric hypothesis.
-

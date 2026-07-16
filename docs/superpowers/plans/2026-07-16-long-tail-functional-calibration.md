@@ -305,4 +305,3 @@ Confirm:
 ### Step 5: Request code review, address findings, and finish the branch
 
 Use the requesting-code-review and verification-before-completion workflows. Re-run affected focused tests after any review change, then re-run the full suite before merging.
-
