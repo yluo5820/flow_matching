@@ -282,7 +282,7 @@ def test_diagnostic_samples_are_addressed_by_original_id_and_seed(tmp_path):
 
 - [ ] **Step 5: Implement diagnostic sample materialization**
 
-Use a private `_seeded_dequantization(raw_images, seeds)` helper that creates one CPU `torch.Generator` per example, draws exactly one image-shaped uniform tensor, applies the existing 256-level normalization, and never mutates global RNG state. Reject duplicate requested IDs, IDs outside the selected probe split, seed-length mismatches, and unknown split names.
+Use a private `_seeded_dequantization(raw_images, seeds)` helper that creates one CPU `torch.Generator` per example, draws exactly one image-shaped uniform tensor, applies the existing 256-level normalization, and never mutates global RNG state. Repeated requested IDs are valid because one probe example may appear in multiple timestep strata; reject IDs outside the selected probe split, seed-length mismatches, and unknown split names.
 
 - [ ] **Step 6: Verify target and factory behavior**
 
@@ -551,7 +551,7 @@ def test_restored_checkpoint_reproduces_probe_loss_bitwise(tmp_path):
     assert before.row_losses_sha256 == after.row_losses_sha256
 ```
 
-Define `build_probe_fixture` in `tests/long_tail_geometry_helpers.py`. It must call `write_balanced_fashion_mnist(root, examples_per_class=10)`, obtain `config = geometry_toy_config(root, output_dir)`, build target/source/path/model through the production factories, build the objective with the target's class counts, read Probe-A IDs and labels, and construct a one-stratum manifest with one row per class and `batch_size=10`. Return those seven objects in the order used above.
+Define `build_probe_fixture` in `tests/long_tail_geometry_helpers.py`. It must call `write_balanced_fashion_mnist(root, examples_per_class=10)`, obtain `config = geometry_toy_config(root, output_dir)`, build target/source/path/model through the production factories, build the objective with the target's class counts, read Probe-A IDs and labels, and construct a one-stratum manifest with one row per class and `batch_size=1`. Return those seven objects in the order used above.
 
 - [ ] **Step 5: Implement replay helpers**
 

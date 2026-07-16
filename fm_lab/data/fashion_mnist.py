@@ -202,8 +202,6 @@ class LongTailedFashionMNIST:
             requested = np.asarray(original_indices, dtype=np.int64)
             if requested.ndim != 1:
                 raise ValueError("Diagnostic original_indices must be a vector.")
-            if len(np.unique(requested)) != len(requested):
-                raise ValueError("Diagnostic original_indices must not contain duplicates.")
             lookup = {
                 int(original_id): position
                 for position, original_id in enumerate(available_indices)
