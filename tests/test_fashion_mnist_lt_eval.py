@@ -1,8 +1,10 @@
 import hashlib
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from fm_lab.diagnostics.mnist_eval import _classifier_checkpoint_path
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
 from fm_lab.experiments.run_fashion_mnist_lt_eval import _sha256_file, main, parse_args
 
@@ -74,13 +76,16 @@ def test_fashion_cli_uses_canonical_balanced_defaults() -> None:
     args = parse_args(["--output-dir", "report"])
 
     assert (
-        args.classifier_checkpoint
-        == "artifacts/fashion_mnist_lt_evaluator_minus_one_one.pt"
+        _classifier_checkpoint_path(
+            Path(args.classifier_checkpoint),
+            {"data": {"normalize": args.normalize}},
+        )
+        == Path("artifacts/fashion_mnist_lt_evaluator_minus_one_one.pt")
     )
     assert args.samples_per_class == 1000
     assert args.overall_samples == 10_000
     assert args.imbalance_factor == 0.01
-    assert args.minimum_accuracy == 0.89
+    assert args.minimum_accuracy == 0.9
     assert args.guidance_scale == 1.0
     assert args.generative_weights == "raw"
 
