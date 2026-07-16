@@ -130,6 +130,142 @@ def test_cifar_lt_factory_builds_reference_ir100_split(tmp_path: Path) -> None:
     assert target.class_counts == (100, 59, 35, 21, 12, 7, 4, 2, 1, 1)
 
 
+def test_cifar_frequency_mapping_reserves_disjoint_deterministic_probes(
+    tmp_path: Path,
+) -> None:
+    _write_balanced_binary_cifar(
+        tmp_path,
+        dataset="cifar10",
+        num_classes=10,
+        examples_per_class=40,
+        record_size=3073,
+        pixel_offset=1,
+    )
+    target = ImbalancedCIFARImages(
+        dataset="cifar10",
+        root=tmp_path,
+        imbalance_factor=0.1,
+        subset_seed=7,
+        horizontal_flip=True,
+        dequantize=True,
+        frequency_mapping_offset=0,
+        frequency_mapping_multiplier=3,
+        diagnostic_pool_per_class=8,
+    )
+
+    probe_a = target.diagnostic_indices("a")
+    probe_b = target.diagnostic_indices("b")
+
+    assert len(probe_a) == len(probe_b) == 40
+    assert set(probe_a).isdisjoint(probe_b)
+    assert set(probe_a).isdisjoint(target.selected_indices)
+    assert set(probe_b).isdisjoint(target.selected_indices)
+    assert target.class_ranks == (0, 3, 6, 9, 2, 5, 8, 1, 4, 7)
+
+    requested = probe_a[[3, 0, 7]]
+    seeds = np.asarray([11, 12, 13], dtype=np.int64)
+    first, labels, returned = target.diagnostic_samples(
+        "a",
+        original_indices=requested,
+        dequantization_seeds=seeds,
+    )
+    second, repeated_labels, repeated_ids = target.diagnostic_samples(
+        "a",
+        original_indices=requested,
+        dequantization_seeds=seeds,
+    )
+
+    assert np.array_equal(returned.astype(np.int64), requested)
+    assert np.array_equal(repeated_ids, returned)
+    assert torch.equal(first, second)
+    assert torch.equal(labels, repeated_labels)
+    assert first.shape == (3, 3072)
+    assert target.metadata()["frequency_mapping"]["probe_a_sha256"]
+    assert target.metadata()["frequency_mapping"]["probe_b_sha256"]
+
+
+def test_cifar_diagnostic_samples_never_apply_training_flip(tmp_path: Path) -> None:
+    _write_balanced_binary_cifar(
+        tmp_path,
+        dataset="cifar10",
+        num_classes=10,
+        examples_per_class=12,
+        record_size=3073,
+        pixel_offset=1,
+    )
+    common = {
+        "dataset": "cifar10",
+        "root": tmp_path,
+        "imbalance_factor": 1.0,
+        "subset_seed": 3,
+        "normalize": "zero_one",
+        "dequantize": True,
+        "frequency_mapping_offset": 0,
+        "diagnostic_pool_per_class": 4,
+    }
+    augmented = ImbalancedCIFARImages(horizontal_flip=True, **common)
+    unaugmented = ImbalancedCIFARImages(horizontal_flip=False, **common)
+    requested = augmented.diagnostic_indices("b")[:5]
+    seeds = np.arange(5, dtype=np.int64) + 100
+
+    with_flip, _, _ = augmented.diagnostic_samples(
+        "b",
+        original_indices=requested,
+        dequantization_seeds=seeds,
+    )
+    without_flip, _, _ = unaugmented.diagnostic_samples(
+        "b",
+        original_indices=requested,
+        dequantization_seeds=seeds,
+    )
+
+    assert torch.equal(with_flip, without_flip)
+    with pytest.raises(ValueError, match="not part of Probe-A"):
+        augmented.diagnostic_samples(
+            "a",
+            original_indices=np.asarray([int(requested[0])]),
+            dequantization_seeds=np.asarray([1]),
+        )
+
+
+def test_cifar_factory_passes_frequency_mapping_and_dequantization(
+    tmp_path: Path,
+) -> None:
+    _write_balanced_binary_cifar(
+        tmp_path,
+        dataset="cifar10",
+        num_classes=10,
+        examples_per_class=12,
+        record_size=3073,
+        pixel_offset=1,
+    )
+
+    target = build_target(
+        {
+            "data": {
+                "name": "cifar10_lt",
+                "root": str(tmp_path),
+                "imbalance_factor": 0.1,
+                "subset_seed": 2,
+                "horizontal_flip": False,
+                "dequantize": True,
+                "frequency_mapping": {
+                    "offset": 0,
+                    "multiplier": 3,
+                    "diagnostic_pool_per_class": 4,
+                },
+            }
+        }
+    )
+
+    assert isinstance(target, ImbalancedCIFARImages)
+    assert target.dequantize is True
+    assert target.frequency_mapping_offset == 0
+    assert target.frequency_mapping_multiplier == 3
+    assert target.diagnostic_pool_per_class == 4
+    assert len(target.diagnostic_indices("a")) == 20
+
+
 def test_cifar_lt_missing_data_fails_clearly(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="files are missing"):
         ImbalancedCIFARImages(dataset="cifar100", root=tmp_path, download=False)

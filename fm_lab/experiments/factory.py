@@ -67,6 +67,10 @@ def build_target(config: dict[str, Any]):
     if name in {"cifar10_lt", "cifar100_lt", "imbalanced_cifar10", "imbalanced_cifar100"}:
         dataset = "cifar10" if "10" in name and "100" not in name else "cifar100"
         default_root = f"data/{dataset}"
+        frequency_mapping = data_config.get("frequency_mapping")
+        if frequency_mapping is not None and not isinstance(frequency_mapping, dict):
+            raise ValueError("data.frequency_mapping must be a mapping.")
+        frequency_mapping = frequency_mapping or {}
         return ImbalancedCIFARImages(
             dataset=dataset,
             root=data_config.get("root", default_root),
@@ -77,6 +81,16 @@ def build_target(config: dict[str, Any]):
             subset_seed=int(data_config.get("subset_seed", 0)),
             normalize=str(data_config.get("normalize", "minus_one_one")),
             horizontal_flip=bool(data_config.get("horizontal_flip", True)),
+            dequantize=bool(data_config.get("dequantize", False)),
+            frequency_mapping_offset=(
+                int(frequency_mapping["offset"])
+                if "offset" in frequency_mapping
+                else None
+            ),
+            frequency_mapping_multiplier=int(frequency_mapping.get("multiplier", 3)),
+            diagnostic_pool_per_class=int(
+                frequency_mapping.get("diagnostic_pool_per_class", 0)
+            ),
         )
     if name in {"fashion_mnist_lt", "fashionmnist_lt", "imbalanced_fashion_mnist"}:
         frequency_mapping = data_config.get("frequency_mapping")
