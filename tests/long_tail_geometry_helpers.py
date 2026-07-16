@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
+
+from fm_lab.diagnostics.long_tail_geometry.manifest import build_probe_manifest
+from fm_lab.experiments.factory import (
+    build_model,
+    build_path,
+    build_source,
+    build_target,
+)
+from fm_lab.training.losses import build_objective
 
 
 def write_balanced_fashion_mnist(
@@ -17,6 +27,7 @@ def write_balanced_fashion_mnist(
 ) -> None:
     """Write a tiny balanced Fashion-MNIST-compatible IDX fixture."""
 
+    root.mkdir(parents=True, exist_ok=True)
     labels = np.repeat(np.arange(10, dtype=np.uint8), examples_per_class)
     images = np.repeat(labels[:, None, None], 28 * 28, axis=1).reshape(-1, 28, 28)
     _write_idx_images(root / "train-images-idx3-ubyte.gz", images)
@@ -82,6 +93,34 @@ def geometry_toy_config(root: Path, output_dir: Path) -> dict[str, Any]:
         },
         "sampling": {"n_samples": 10, "n_trajectories": 2, "nfe": 2},
     }
+
+
+def build_probe_fixture(tmp_path: Path):
+    """Build a deterministic ordinary-FM checkpoint-replay fixture."""
+
+    root = tmp_path / "data"
+    write_balanced_fashion_mnist(root, examples_per_class=10)
+    config = geometry_toy_config(root, tmp_path / "run")
+    target = build_target(config)
+    source = build_source(config)
+    path = build_path(config)
+    torch.manual_seed(0)
+    model = build_model(config, dim=source.dim)
+    objective = build_objective(
+        config["objective"],
+        class_counts=target.class_counts,
+    )
+    _, labels, sample_ids = target.diagnostic_samples("a")
+    manifest = build_probe_manifest(
+        sample_ids.astype(np.int64),
+        labels.numpy(),
+        split="a",
+        rows_per_class_per_stratum=1,
+        batch_size=1,
+        time_strata=((0.02, 0.10),),
+        seed=19,
+    )
+    return config, target, source, path, objective, model, manifest
 
 
 def _write_idx_images(path: Path, images: np.ndarray) -> None:

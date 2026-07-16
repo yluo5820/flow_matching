@@ -64,6 +64,34 @@ from fm_lab.utils.checkpoints import (
 from fm_lab.utils.logging import write_json
 
 
+def _explicit_checkpoint_steps(
+    configured: object,
+    *,
+    total_steps: int,
+    checkpoint_every: int,
+) -> frozenset[int]:
+    """Validate an optional explicit intermediate-checkpoint schedule."""
+
+    if configured is None:
+        configured = ()
+    if not isinstance(configured, (list, tuple)):
+        raise ValueError("training.checkpoint_steps must be a list of integers.")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in configured):
+        raise ValueError("training.checkpoint_steps must contain only integers.")
+    steps = tuple(int(value) for value in configured)
+    if len(set(steps)) != len(steps):
+        raise ValueError("training.checkpoint_steps must not contain duplicates.")
+    if any(value < 1 or value > total_steps for value in steps):
+        raise ValueError(
+            "training.checkpoint_steps values must be between 1 and training.steps."
+        )
+    if steps and checkpoint_every > 0:
+        raise ValueError(
+            "training.checkpoint_steps and positive checkpoint_every are mutually exclusive."
+        )
+    return frozenset(steps)
+
+
 def train_flow_matching(
     *,
     config: dict[str, Any],
@@ -88,6 +116,11 @@ def train_flow_matching(
     lr = float(training_config.get("lr", 1e-4))
     log_every = int(training_config.get("log_every", max(1, min(500, steps))))
     checkpoint_every = int(training_config.get("checkpoint_every", 0))
+    checkpoint_steps = _explicit_checkpoint_steps(
+        training_config.get("checkpoint_steps", ()),
+        total_steps=steps,
+        checkpoint_every=checkpoint_every,
+    )
     gradient_clip = float(training_config.get("gradient_clip", 0.0))
     warmup_steps = int(training_config.get("warmup_steps", 0))
     ema_decay_value = training_config.get("ema_decay")
@@ -334,7 +367,8 @@ def train_flow_matching(
                 progress.set_postfix(loss=f"{record['loss']:.4f}", stopped="early")
                 break
 
-        if checkpoint_every and step % checkpoint_every == 0:
+        interval_checkpoint = bool(checkpoint_every and step % checkpoint_every == 0)
+        if interval_checkpoint or step in checkpoint_steps:
             save_checkpoint(
                 run_dir / "checkpoints" / f"step_{step:06d}.pt",
                 model=model,
@@ -1429,7 +1463,7 @@ def validate_checkpoint_compatibility(
 _TRAINING_CONTRACT_VERSION = 2
 _RUNTIME_DATA_FIELDS = frozenset({"root", "download", "workspace"})
 _RUNTIME_TRAINING_FIELDS = frozenset(
-    {"steps", "resume_from", "log_every", "checkpoint_every"}
+    {"steps", "resume_from", "log_every", "checkpoint_every", "checkpoint_steps"}
 )
 _RUNTIME_EXPERIMENT_FIELDS = frozenset({"output_dir"})
 _RUNTIME_TOP_LEVEL_SECTIONS = frozenset(

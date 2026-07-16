@@ -212,6 +212,70 @@ class TinyVelocity(nn.Module):
         return self.linear(torch.cat((x, t[:, None]), dim=1))
 
 
+def test_training_saves_only_requested_checkpoint_steps(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 0},
+        "path": {"name": "linear"},
+        "objective": {"name": "flow_matching"},
+        "training": {
+            "batch_size": 2,
+            "steps": 5,
+            "log_every": 1,
+            "optimizer": "adam",
+            "lr": 1.0e-3,
+            "checkpoint_steps": [1, 3, 5],
+            "early_stopping": {"enabled": False},
+        },
+        "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
+    }
+
+    train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=TinyVelocity(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert sorted(
+        checkpoint.name for checkpoint in (tmp_path / "checkpoints").glob("*.pt")
+    ) == ["step_000001.pt", "step_000003.pt", "step_000005.pt"]
+
+
+@pytest.mark.parametrize(
+    "checkpoint_steps",
+    [[0, 1], [1, 1], [1, 6], [1.5, 3]],
+)
+def test_training_rejects_invalid_explicit_checkpoint_steps(
+    tmp_path,
+    checkpoint_steps,
+) -> None:
+    config = {
+        "training": {
+            "batch_size": 2,
+            "steps": 5,
+            "checkpoint_steps": checkpoint_steps,
+        }
+    }
+
+    with pytest.raises(ValueError, match="checkpoint_steps"):
+        train_flow_matching(
+            config=config,
+            run_dir=tmp_path,
+            target=ConstantTarget(),
+            source=ConstantSource(),
+            coupling=IndependentCoupling(),
+            path=LinearPath(),
+            model=TinyVelocity(),
+            solvers=[EulerSolver()],
+            device=torch.device("cpu"),
+        )
+
+
 class RejectingStateLoadVelocity(TinyVelocity):
     def load_state_dict(self, *args, **kwargs):
         pytest.fail("model state must not be loaded before resume validation")
