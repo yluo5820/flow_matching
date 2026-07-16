@@ -143,6 +143,53 @@ action. `complete.json` binds every aggregate artifact and exact direction to co
 digests. Stage 1 remains blocked unless the completed lock says
 `stage1_unlocked: true`; no Stage-1 runs are created or launched by calibration.
 
+### Representation-matched functional geometry audit
+
+If the completed calibration is blocked with
+`stop_stage1_and_revise_functional_geometry`, use the separate audit only after
+checking whether its exact directions matched Observation 0's gradient
+representation. Observation 0 normalizes every gradient sketch row, while the
+original functional calibration fits its exact covariance basis from raw gradient
+rows. The following command compares both constructions without changing the failed
+lock:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 \
+  audit-functional-geometry \
+  --study-dir runs/long_tail_geometry/fashion_mnist/observation0 \
+  --audit-preregistration \
+    configs/fashion_mnist_lt/long_tail_geometry_functional_audit.yaml \
+  --device auto
+```
+
+The audit uses four balanced circular 8/4/4 cross-fits of the same 16 Probe-A
+microbatches. In every fold it compares a raw-gradient basis with a row-normalized
+basis, while orienting both through the same disjoint raw scale gradient. Its primary
+endpoint is the exact zero-step held-out relative-benefit slope
+`-||theta_l|| <g_eval, d> / L_eval`; finite checks are restricted to relative steps
+`1e-4`, `3e-4`, and `1e-3`. The command never searches for a 1% effect and cannot
+retroactively satisfy the original calibration gate.
+
+Artifacts are isolated beneath:
+
+```text
+aggregate/functional_geometry_audit/
+  preregistration.yaml
+  chunks/seed_*_checkpoint_*/
+  slopes.csv
+  finite_steps.csv
+  basis_comparison.csv
+  audit_summary.json
+  complete.json
+```
+
+`audit_summary.json` always contains `stage1_unlocked: false` and records the digest
+of the unchanged blocked functional lock. Its status distinguishes a normalized-only
+local signal, representation-independent local transport, no transferable local
+descent, and mixed class/seed transport. Probe B remains unopened; any method or
+Stage-1 experiment still requires a new, separate preregistration.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

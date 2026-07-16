@@ -6,6 +6,9 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from fm_lab.diagnostics.long_tail_geometry.functional_audit import (
+    run_functional_geometry_audit,
+)
 from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
     calibrate_observation0_functional_overlap,
 )
@@ -23,8 +26,8 @@ from fm_lab.experiments.factory import resolve_device
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare, collect, analyze, or functionally calibrate long-tail geometry "
-            "Observation 0."
+            "Prepare, collect, analyze, functionally calibrate, or audit long-tail "
+            "geometry Observation 0."
         )
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -64,6 +67,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     calibrate.add_argument("--study-dir", required=True)
     calibrate.add_argument("--calibration-preregistration", required=True)
     calibrate.add_argument("--device", default="auto")
+
+    audit = commands.add_parser(
+        "audit-functional-geometry",
+        help="Compare raw and row-normalized exact geometry using Probe-A only.",
+    )
+    audit.add_argument("--study-dir", required=True)
+    audit.add_argument("--audit-preregistration", required=True)
+    audit.add_argument("--device", default="auto")
     return parser.parse_args(argv)
 
 
@@ -94,6 +105,24 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
         print(f"Selected relative steps: {selected}")
         print(f"Only allowed next action: {decision.next_action}")
+        return
+
+    if args.command == "audit-functional-geometry":
+        result = run_functional_geometry_audit(
+            study_dir=study_dir,
+            audit_preregistration_path=args.audit_preregistration,
+            device=resolve_device(args.device),
+        )
+        decision = result.decision
+        print(f"Audit status: {decision.status}")
+        print("Original functional lock: stage1_blocked (unchanged)")
+        opened = "yes" if decision.probe_b_opened else "no"
+        print(f"Probe B opened: {opened}")
+        for layer, summary in sorted(decision.layer_summaries.items()):
+            normalized = summary["normalized_target_slope_median"]
+            raw = summary["raw_target_slope_median"]
+            print(f"{layer}: normalized_slope={normalized:g}, raw_slope={raw:g}")
+        print(f"Only allowed audit next action: {decision.next_action}")
         return
 
     preregistration = Observation0Preregistration.load(

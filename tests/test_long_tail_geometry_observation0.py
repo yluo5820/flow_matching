@@ -373,7 +373,7 @@ def test_tiny_three_seed_study_runs_end_to_end(
     assert (study_dir / "aggregate/noise_ceiling.json").exists()
 
 
-def test_observation0_cli_exposes_calibration_but_not_stage1() -> None:
+def test_observation0_cli_exposes_calibration_and_audit_but_not_stage1() -> None:
     from fm_lab.experiments.run_long_tail_geometry_observation0 import parse_args
 
     prepare = parse_args(
@@ -409,6 +409,17 @@ def test_observation0_cli_exposes_calibration_but_not_stage1() -> None:
             "cpu",
         ]
     )
+    audit = parse_args(
+        [
+            "audit-functional-geometry",
+            "--study-dir",
+            "study",
+            "--audit-preregistration",
+            "audit.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
 
     assert prepare.command == "prepare"
     assert collect.command == "collect"
@@ -417,6 +428,9 @@ def test_observation0_cli_exposes_calibration_but_not_stage1() -> None:
     assert calibrate.command == "calibrate"
     assert calibrate.calibration_preregistration == "functional.yaml"
     assert calibrate.device == "cpu"
+    assert audit.command == "audit-functional-geometry"
+    assert audit.audit_preregistration == "audit.yaml"
+    assert audit.device == "cpu"
     with pytest.raises(SystemExit):
         parse_args(["stage1", "--study-dir", "study"])
 
@@ -460,3 +474,56 @@ def test_observation0_calibration_cli_prints_locked_handoff(
     assert "Positive control: passed" in output
     assert "down2_block.conv2.weight=0.0003" in output
     assert "Only allowed next action: stage1_unlocked_for_separate_preregistration" in output
+
+
+def test_observation0_audit_cli_prints_nonunlocking_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    import fm_lab.experiments.run_long_tail_geometry_observation0 as cli
+
+    decision = SimpleNamespace(
+        stage1_unlocked=False,
+        probe_b_opened=False,
+        status="normalized_representation_rescue",
+        layer_summaries={
+            "down2_block.conv2.weight": {
+                "normalized_target_slope_median": 1.25,
+                "raw_target_slope_median": -0.10,
+            },
+            "middle.conv2.weight": {
+                "normalized_target_slope_median": 0.80,
+                "raw_target_slope_median": -0.20,
+            },
+        },
+        next_action="review_separate_small_local_step_preregistration",
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_functional_geometry_audit",
+        lambda **kwargs: SimpleNamespace(decision=decision),
+    )
+    monkeypatch.setattr(cli, "resolve_device", lambda value: torch.device("cpu"))
+
+    cli.main(
+        [
+            "audit-functional-geometry",
+            "--study-dir",
+            "study",
+            "--audit-preregistration",
+            "audit.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Audit status: normalized_representation_rescue" in output
+    assert "Original functional lock: stage1_blocked (unchanged)" in output
+    assert "Probe B opened: no" in output
+    assert "down2_block.conv2.weight: normalized_slope=1.25, raw_slope=-0.1" in output
+    assert "middle.conv2.weight: normalized_slope=0.8, raw_slope=-0.2" in output
+    assert (
+        "Only allowed audit next action: "
+        "review_separate_small_local_step_preregistration"
+    ) in output
