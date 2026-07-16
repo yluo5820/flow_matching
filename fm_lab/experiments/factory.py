@@ -79,6 +79,10 @@ def build_target(config: dict[str, Any]):
             horizontal_flip=bool(data_config.get("horizontal_flip", True)),
         )
     if name in {"fashion_mnist_lt", "fashionmnist_lt", "imbalanced_fashion_mnist"}:
+        frequency_mapping = data_config.get("frequency_mapping")
+        if frequency_mapping is not None and not isinstance(frequency_mapping, dict):
+            raise ValueError("data.frequency_mapping must be a mapping.")
+        frequency_mapping = frequency_mapping or {}
         return LongTailedFashionMNIST(
             root=data_config.get("root", "data/fashion_mnist"),
             train=bool(data_config.get("train", True)),
@@ -88,6 +92,15 @@ def build_target(config: dict[str, Any]):
             subset_seed=int(data_config.get("subset_seed", 0)),
             normalize=str(data_config.get("normalize", "minus_one_one")),
             dequantize=bool(data_config.get("dequantize", False)),
+            frequency_mapping_offset=(
+                int(frequency_mapping["offset"])
+                if "offset" in frequency_mapping
+                else None
+            ),
+            frequency_mapping_multiplier=int(frequency_mapping.get("multiplier", 3)),
+            diagnostic_pool_per_class=int(
+                frequency_mapping.get("diagnostic_pool_per_class", 0)
+            ),
         )
     if data_config.get("variant_id"):
         return ImageVariantImages(

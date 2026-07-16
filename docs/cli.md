@@ -48,6 +48,24 @@ When adding or changing a CLI:
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
+| `fm-lab-long-tail-geometry-stage0` | Validate the counterfactual long-tail observation pipeline before measurement runs. | Ordinary-FM checkpoint and Stage-0 YAML config | fail-closed report, paired probe manifests, validated gradient rows |
+
+## `fm-lab-long-tail-geometry-stage0`
+
+Run this gate before scheduling any counterfactual frequency-mapping experiment. It
+rejects CM, objective modifiers, capacity adapters, early stopping, unpaired probes,
+inexact checkpoint replay, inaccurate gradient sketches, and failed synthetic controls.
+
+```bash
+fm-lab-long-tail-geometry-stage0 \
+  --config configs/fashion_mnist_lt/fashion_mnist_lt_geometry_stage0.yaml \
+  --checkpoint runs/fashion_mnist_lt_geometry_stage0/checkpoints/step_000500.pt \
+  --output-dir runs/fashion_mnist_lt_geometry_stage0 \
+  --device auto
+```
+
+The command exits nonzero on the first failed gate. Its report is still written, and
+gradient-row artifacts are never produced when a pre-gradient gate fails.
 
 ## `fm-lab-fashion-mnist-lt-eval`
 

@@ -185,6 +185,24 @@ def test_fashion_mnist_lt_ir100_config_builds_conditional_components(monkeypatch
     assert output.shape == (2, 784)
 
 
+def test_stage0_config_uses_ordinary_flow_matching_without_capacity() -> None:
+    config = load_config(
+        "configs/fashion_mnist_lt/fashion_mnist_lt_geometry_stage0.yaml"
+    )
+
+    assert config["objective"].get("modifiers", []) == []
+    assert not config["model"].get("capacity", {}).get("enabled", False)
+    assert config["training"]["early_stopping"]["enabled"] is False
+    assert config["training"]["checkpoint_steps"] == [
+        500,
+        1000,
+        3000,
+        7000,
+        13000,
+        20000,
+    ]
+
+
 def test_diffusion_config_builds_path_and_objective() -> None:
     config = {
         "source": {"name": "gaussian", "dim": 3},
