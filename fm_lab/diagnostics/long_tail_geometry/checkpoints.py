@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import torch
 from torch import nn
 
 from fm_lab.diagnostics.long_tail_geometry.manifest import (
+    ProbeBatch,
     ProbeManifest,
     materialize_probe_batch,
 )
@@ -70,20 +72,41 @@ def evaluate_probe_loss(
 ) -> ProbeLossResult:
     """Replay deterministic per-row ordinary flow-matching losses."""
 
+    batches = (
+        materialize_probe_batch(
+            target,
+            source,
+            manifest,
+            rows,
+            device=device,
+        )
+        for rows in manifest.microbatch_row_indices()
+    )
+    return evaluate_probe_batches(
+        model=model,
+        objective=objective,
+        path=path,
+        batches=batches,
+    )
+
+
+@torch.no_grad()
+def evaluate_probe_batches(
+    *,
+    model: nn.Module,
+    objective: Any,
+    path: Any,
+    batches: Iterable[ProbeBatch],
+) -> ProbeLossResult:
+    """Replay exact per-row losses for a selected sequence of materialized batches."""
+
     _validate_ordinary_objective(objective)
     _validate_capacity_disabled(model)
     was_training = model.training
     model.eval()
     losses: list[torch.Tensor] = []
     try:
-        for rows in manifest.microbatch_row_indices():
-            batch = materialize_probe_batch(
-                target,
-                source,
-                manifest,
-                rows,
-                device=device,
-            )
+        for batch in batches:
             xt = path.sample_xt(batch.x0, batch.x1, batch.t)
             target_velocity = path.target_velocity(batch.x0, batch.x1, batch.t)
             output = model_prediction(
@@ -113,6 +136,8 @@ def evaluate_probe_loss(
     finally:
         model.train(was_training)
 
+    if not losses:
+        raise ValueError("Probe replay requires at least one batch.")
     row_losses = torch.cat(losses).contiguous()
     digest = hashlib.sha256(row_losses.numpy().tobytes()).hexdigest()
     return ProbeLossResult(
