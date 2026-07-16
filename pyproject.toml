@@ -46,6 +46,9 @@ image-embeddings = [
   "torchvision",
   "transformers>=4.50",
 ]
+long-tail-geometry = [
+  "pyarrow>=16.0",
+]
 
 [project.scripts]
 fm-lab-diagnostics = "fm_lab.experiments.run_diagnostics:main"

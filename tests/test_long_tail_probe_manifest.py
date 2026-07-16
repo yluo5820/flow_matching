@@ -9,6 +9,7 @@ from fm_lab.data import LongTailedFashionMNIST
 from fm_lab.diagnostics.long_tail_geometry.manifest import (
     ProbeManifest,
     build_probe_manifest,
+    build_source_noise_replica,
     materialize_probe_batch,
 )
 from fm_lab.sources import GaussianSource
@@ -56,6 +57,37 @@ def test_probe_manifest_rejects_insufficient_unique_class_examples() -> None:
             time_strata=((0.02, 0.10),),
             seed=19,
         )
+
+
+def test_source_noise_replica_changes_only_source_seeds() -> None:
+    manifest = build_probe_manifest(
+        np.arange(40),
+        np.repeat(np.arange(4), 10),
+        split="a",
+        rows_per_class_per_stratum=8,
+        batch_size=4,
+        time_strata=((0.02, 0.10), (0.10, 0.30)),
+        seed=19,
+    )
+    numpy_state = np.random.get_state()
+
+    replica = build_source_noise_replica(manifest, seed=31)
+
+    assert replica.digest != manifest.digest
+    assert not np.array_equal(replica.source_seeds, manifest.source_seeds)
+    for field in (
+        "original_indices",
+        "labels",
+        "dequantization_seeds",
+        "timesteps",
+        "stratum_ids",
+        "microbatch_ids",
+    ):
+        assert np.array_equal(getattr(replica, field), getattr(manifest, field))
+    restored_numpy_state = np.random.get_state()
+    assert numpy_state[0] == restored_numpy_state[0]
+    assert np.array_equal(numpy_state[1], restored_numpy_state[1])
+    assert numpy_state[2:] == restored_numpy_state[2:]
 
 
 def test_same_manifest_materializes_identical_tuples_across_frequency_mappings(

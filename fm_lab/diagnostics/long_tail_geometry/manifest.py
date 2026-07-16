@@ -277,6 +277,35 @@ def build_probe_manifest(
     )
 
 
+def build_source_noise_replica(
+    manifest: ProbeManifest,
+    *,
+    seed: int,
+) -> ProbeManifest:
+    """Copy a manifest while replacing only its source-noise seeds."""
+
+    rng = np.random.RandomState(int(seed))
+    source_seeds = rng.randint(
+        0,
+        np.iinfo(np.int64).max,
+        size=manifest.num_rows,
+        dtype=np.int64,
+    )
+    return ProbeManifest(
+        split=manifest.split,
+        original_indices=manifest.original_indices,
+        labels=manifest.labels,
+        dequantization_seeds=manifest.dequantization_seeds,
+        source_seeds=source_seeds,
+        timesteps=manifest.timesteps,
+        stratum_ids=manifest.stratum_ids,
+        microbatch_ids=manifest.microbatch_ids,
+        time_strata=manifest.time_strata,
+        batch_size=manifest.batch_size,
+        schema_version=manifest.schema_version,
+    )
+
+
 def materialize_probe_batch(
     target: Any,
     source: Any,

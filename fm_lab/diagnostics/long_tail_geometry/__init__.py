@@ -17,7 +17,12 @@ from fm_lab.diagnostics.long_tail_geometry.manifest import (
     ProbeBatch,
     ProbeManifest,
     build_probe_manifest,
+    build_source_noise_replica,
     materialize_probe_batch,
+)
+from fm_lab.diagnostics.long_tail_geometry.measurements import (
+    CheckpointMeasurements,
+    collect_checkpoint_measurements,
 )
 from fm_lab.diagnostics.long_tail_geometry.preregistration import (
     Observation0Preregistration,
@@ -39,12 +44,15 @@ __all__ = [
     "ProbeManifest",
     "GradientRows",
     "CountSketchSpec",
+    "CheckpointMeasurements",
     "PermutationResult",
     "PlantedControlResult",
     "Observation0Preregistration",
     "Observation0Run",
     "SketchValidation",
     "build_probe_manifest",
+    "build_source_noise_replica",
+    "collect_checkpoint_measurements",
     "collect_gradient_rows",
     "materialize_probe_batch",
     "permutation_null",
