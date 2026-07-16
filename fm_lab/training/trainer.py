@@ -81,9 +81,9 @@ def _explicit_checkpoint_steps(
     steps = tuple(int(value) for value in configured)
     if len(set(steps)) != len(steps):
         raise ValueError("training.checkpoint_steps must not contain duplicates.")
-    if any(value < 1 or value > total_steps for value in steps):
+    if any(value < 0 or value > total_steps for value in steps):
         raise ValueError(
-            "training.checkpoint_steps values must be between 1 and training.steps."
+            "training.checkpoint_steps values must be between 0 and training.steps."
         )
     if steps and checkpoint_every > 0:
         raise ValueError(
@@ -224,6 +224,23 @@ def train_flow_matching(
             raise ValueError(
                 f"Resume checkpoint step {start_step - 1} already meets training.steps={steps}."
             )
+
+    if 0 in checkpoint_steps and not resume_from:
+        save_checkpoint(
+            run_dir / "checkpoints" / "step_000000.pt",
+            model=model,
+            ema_model=ema_model,
+            optimizer=theta_optimizer,
+            scheduler=theta_scheduler,
+            step=0,
+            config=checkpoint_config,
+            prediction_contract=prediction_contract,
+            training_contract=training_contract,
+            resume_state=_checkpoint_resume_state(early_stopping, best_state),
+            metrics={"latest_loss": float("nan"), "initial_control": True},
+            history=[],
+            rng_state=capture_rng_state(),
+        )
 
     final_step = 0
     progress = trange(start_step, steps + 1, desc="training", dynamic_ncols=True)

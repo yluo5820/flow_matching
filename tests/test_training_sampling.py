@@ -212,6 +212,98 @@ class TinyVelocity(nn.Module):
         return self.linear(torch.cat((x, t[:, None]), dim=1))
 
 
+def _checkpoint_schedule_config(
+    checkpoint_steps: list[int],
+    *,
+    steps: int = 5,
+    resume_from=None,
+) -> dict:
+    training = {
+        "batch_size": 2,
+        "steps": steps,
+        "log_every": 1,
+        "optimizer": "adam",
+        "lr": 1.0e-3,
+        "checkpoint_steps": checkpoint_steps,
+        "early_stopping": {"enabled": False},
+    }
+    if resume_from is not None:
+        training["resume_from"] = str(resume_from)
+    return {
+        "experiment": {"seed": 0},
+        "path": {"name": "linear"},
+        "objective": {"name": "flow_matching"},
+        "training": training,
+        "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
+    }
+
+
+def _train_checkpoint_fixture(*, config: dict, model: nn.Module, run_dir) -> None:
+    train_flow_matching(
+        config=config,
+        run_dir=run_dir,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        coupling=IndependentCoupling(),
+        path=LinearPath(),
+        model=model,
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+
+def test_training_saves_exact_initial_state_when_checkpoint_zero_is_requested(
+    tmp_path,
+) -> None:
+    model = TinyVelocity()
+    initial = {name: value.clone() for name, value in model.state_dict().items()}
+    config = _checkpoint_schedule_config([0, 1, 3], steps=3)
+
+    _train_checkpoint_fixture(config=config, model=model, run_dir=tmp_path)
+
+    zero = load_checkpoint(tmp_path / "checkpoints/step_000000.pt")
+    assert zero["step"] == 0
+    assert zero["history"] == []
+    assert zero["metrics"]["initial_control"] is True
+    assert np.isnan(zero["metrics"]["latest_loss"])
+    assert all(
+        torch.equal(zero["model_state_dict"][name], value)
+        for name, value in initial.items()
+    )
+    assert sorted(
+        checkpoint.name for checkpoint in (tmp_path / "checkpoints").glob("*.pt")
+    ) == ["step_000000.pt", "step_000001.pt", "step_000003.pt"]
+
+
+def test_training_does_not_resave_step_zero_when_resuming(tmp_path) -> None:
+    first_run = tmp_path / "first"
+    _train_checkpoint_fixture(
+        config=_checkpoint_schedule_config([0, 1], steps=1),
+        model=TinyVelocity(),
+        run_dir=first_run,
+    )
+    zero_state = load_checkpoint(first_run / "checkpoints/step_000000.pt")
+    resumed_run = tmp_path / "resumed"
+
+    _train_checkpoint_fixture(
+        config=_checkpoint_schedule_config(
+            [0, 2],
+            steps=2,
+            resume_from=first_run / "checkpoints/step_000001.pt",
+        ),
+        model=TinyVelocity(),
+        run_dir=resumed_run,
+    )
+
+    assert not (resumed_run / "checkpoints/step_000000.pt").exists()
+    unchanged = load_checkpoint(first_run / "checkpoints/step_000000.pt")
+    assert unchanged["step"] == zero_state["step"]
+    assert all(
+        torch.equal(unchanged["model_state_dict"][name], value)
+        for name, value in zero_state["model_state_dict"].items()
+    )
+
+
 def test_training_saves_only_requested_checkpoint_steps(tmp_path) -> None:
     config = {
         "experiment": {"seed": 0},
@@ -248,7 +340,7 @@ def test_training_saves_only_requested_checkpoint_steps(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "checkpoint_steps",
-    [[0, 1], [1, 1], [1, 6], [1.5, 3]],
+    [[-1, 1], [1, 1], [1, 6], [1.5, 3]],
 )
 def test_training_rejects_invalid_explicit_checkpoint_steps(
     tmp_path,
