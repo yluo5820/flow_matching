@@ -24,6 +24,16 @@ from fm_lab.diagnostics.long_tail_geometry.measurements import (
     CheckpointMeasurements,
     collect_checkpoint_measurements,
 )
+from fm_lab.diagnostics.long_tail_geometry.natural_image import (
+    NaturalImageTransportAnalysis,
+    NaturalImageTransportDecision,
+    NaturalImageTransportResult,
+    analyze_natural_image_transport,
+    run_natural_image_transport_falsification,
+)
+from fm_lab.diagnostics.long_tail_geometry.natural_image_preregistration import (
+    NaturalImageTransportPreregistration,
+)
 from fm_lab.diagnostics.long_tail_geometry.observation0 import (
     Observation0CollectionSummary,
     Observation0Preparation,
@@ -65,12 +75,17 @@ __all__ = [
     "Observation0CollectionSummary",
     "Observation0Preparation",
     "Observation0Run",
+    "NaturalImageTransportAnalysis",
+    "NaturalImageTransportDecision",
+    "NaturalImageTransportPreregistration",
+    "NaturalImageTransportResult",
     "SketchValidation",
     "build_probe_manifest",
     "build_source_noise_replica",
     "aggregate_observation0_reliability",
     "analyze_seed_reliability",
     "analyze_observation0_study",
+    "analyze_natural_image_transport",
     "centered_cell_statistics",
     "collect_checkpoint_measurements",
     "collect_observation0_run",
@@ -82,6 +97,7 @@ __all__ = [
     "prepare_observation0_study",
     "projection_overlap",
     "resolve_probe_layers",
+    "run_natural_image_transport_falsification",
     "validate_sketch",
     "update_observation0_run",
 ]

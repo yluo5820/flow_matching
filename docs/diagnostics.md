@@ -190,6 +190,80 @@ local signal, representation-independent local transport, no transferable local
 descent, and mixed class/seed transport. Probe B remains unopened; any method or
 Stage-1 experiment still requires a new, separate preregistration.
 
+### CIFAR-10-LT natural-image falsification
+
+The CIFAR-10-LT workflow is a terminal replication of the geometry and sign-transport
+phenomenon. It does not use the Fashion-MNIST functional calibration, CM, capacity
+adapters, or a 1% perturbation target. Prepare the locked three-seed study first:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 prepare \
+  --preregistration \
+    configs/cifar10_lt/long_tail_geometry_observation0_preregistration.yaml \
+  --study-dir \
+    runs/long_tail_geometry/cifar10_lt/natural_image_falsification
+```
+
+Train the three generated ordinary-flow-matching configs:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/fm-lab-train \
+  --config runs/long_tail_geometry/cifar10_lt/natural_image_falsification/configs/seed_0.yaml \
+  --device auto
+PYTHONPATH=. .conda/fm_lab/bin/fm-lab-train \
+  --config runs/long_tail_geometry/cifar10_lt/natural_image_falsification/configs/seed_1.yaml \
+  --device auto
+PYTHONPATH=. .conda/fm_lab/bin/fm-lab-train \
+  --config runs/long_tail_geometry/cifar10_lt/natural_image_falsification/configs/seed_2.yaml \
+  --device auto
+```
+
+Collect the locked Probe-A/Probe-B sketches for each completed run, then analyze the
+primary reliability allocation:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 collect \
+  --study-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification \
+  --run-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification/mapping_0/seed_0 \
+  --device auto
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 collect \
+  --study-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification \
+  --run-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification/mapping_0/seed_1 \
+  --device auto
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 collect \
+  --study-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification \
+  --run-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification/mapping_0/seed_2 \
+  --device auto
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 analyze \
+  --study-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification
+```
+
+Finally run the exact-gradient cross-fitted decision:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 \
+  falsify-natural-image-transport \
+  --study-dir runs/long_tail_geometry/cifar10_lt/natural_image_falsification \
+  --transport-preregistration \
+    configs/cifar10_lt/long_tail_geometry_natural_image_transport.yaml \
+  --device auto
+```
+
+The final command writes beneath
+`aggregate/natural_image_transport_falsification/`. `slopes.csv` contains every
+10-by-10 zero-step response; `class_transport.csv` and
+`frequency_associations.csv` summarize class/seed/frequency heterogeneity;
+`interference_matrices.npz` retains the complete response matrices; and
+`falsification_summary.json` records the baseline-learning guard, reliable common
+classes, two-layer transport intervals, terminal status, and only allowed next action.
+Every status keeps `stage1_unlocked: false` and `method_opened: false`.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

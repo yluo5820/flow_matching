@@ -12,6 +12,9 @@ from fm_lab.diagnostics.long_tail_geometry.functional_audit import (
 from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
     calibrate_observation0_functional_overlap,
 )
+from fm_lab.diagnostics.long_tail_geometry.natural_image import (
+    run_natural_image_transport_falsification,
+)
 from fm_lab.diagnostics.long_tail_geometry.observation0 import (
     analyze_observation0_study,
     collect_observation0_run,
@@ -26,8 +29,8 @@ from fm_lab.experiments.factory import resolve_device
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare, collect, analyze, functionally calibrate, or audit long-tail "
-            "geometry Observation 0."
+            "Prepare, collect, analyze, functionally calibrate, audit, or falsify "
+            "long-tail geometry transport."
         )
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -75,6 +78,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     audit.add_argument("--study-dir", required=True)
     audit.add_argument("--audit-preregistration", required=True)
     audit.add_argument("--device", default="auto")
+
+    falsify = commands.add_parser(
+        "falsify-natural-image-transport",
+        help="Run the terminal CIFAR-10-LT geometry and transport decision.",
+    )
+    falsify.add_argument("--study-dir", required=True)
+    falsify.add_argument("--transport-preregistration", required=True)
+    falsify.add_argument("--device", default="auto")
     return parser.parse_args(argv)
 
 
@@ -123,6 +134,32 @@ def main(argv: Sequence[str] | None = None) -> None:
             raw = summary["raw_target_slope_median"]
             print(f"{layer}: normalized_slope={normalized:g}, raw_slope={raw:g}")
         print(f"Only allowed audit next action: {decision.next_action}")
+        return
+
+    if args.command == "falsify-natural-image-transport":
+        result = run_natural_image_transport_falsification(
+            study_dir=study_dir,
+            preregistration_path=args.transport_preregistration,
+            device=resolve_device(args.device),
+        )
+        decision = result.decision
+        print(f"Natural-image falsification: {decision.status}")
+        learned = "yes" if decision.baseline_learned else "no"
+        print(
+            f"Baseline learned: {learned} "
+            f"(final/step-zero loss ratio={decision.baseline_loss_ratio:g})"
+        )
+        print(
+            f"Reliable common classes: {len(decision.reliable_common_classes)}"
+        )
+        for layer, summary in sorted(decision.layer_summaries.items()):
+            slope = summary["normalized_target_slope_median"]
+            selectivity = summary["normalized_selectivity_slope_median"]
+            print(
+                f"{layer}: normalized_slope={slope:g}, "
+                f"selectivity={selectivity:g}"
+            )
+        print(f"Only allowed next action: {decision.next_action}")
         return
 
     preregistration = Observation0Preregistration.load(

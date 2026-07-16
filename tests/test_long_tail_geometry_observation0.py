@@ -459,6 +459,17 @@ def test_observation0_cli_exposes_calibration_and_audit_but_not_stage1() -> None
             "cpu",
         ]
     )
+    falsify = parse_args(
+        [
+            "falsify-natural-image-transport",
+            "--study-dir",
+            "study",
+            "--transport-preregistration",
+            "transport.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
 
     assert prepare.command == "prepare"
     assert collect.command == "collect"
@@ -470,6 +481,9 @@ def test_observation0_cli_exposes_calibration_and_audit_but_not_stage1() -> None
     assert audit.command == "audit-functional-geometry"
     assert audit.audit_preregistration == "audit.yaml"
     assert audit.device == "cpu"
+    assert falsify.command == "falsify-natural-image-transport"
+    assert falsify.transport_preregistration == "transport.yaml"
+    assert falsify.device == "cpu"
     with pytest.raises(SystemExit):
         parse_args(["stage1", "--study-dir", "study"])
 
@@ -566,3 +580,59 @@ def test_observation0_audit_cli_prints_nonunlocking_handoff(
         "Only allowed audit next action: "
         "review_separate_small_local_step_preregistration"
     ) in output
+
+
+def test_natural_image_falsification_cli_prints_terminal_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    import fm_lab.experiments.run_long_tail_geometry_observation0 as cli
+
+    decision = SimpleNamespace(
+        stage1_unlocked=False,
+        method_opened=False,
+        status="natural_image_transport_confirmed",
+        baseline_learned=True,
+        baseline_loss_ratio=0.42,
+        reliable_common_classes=(0, 1, 2, 3, 4, 5),
+        layer_summaries={
+            "down2_block.conv2.weight": {
+                "normalized_target_slope_median": 1.25,
+                "normalized_selectivity_slope_median": 0.75,
+            },
+            "middle.conv2.weight": {
+                "normalized_target_slope_median": 0.80,
+                "normalized_selectivity_slope_median": 0.30,
+            },
+        },
+        next_action="develop_sign_transport_theory",
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_natural_image_transport_falsification",
+        lambda **kwargs: SimpleNamespace(decision=decision),
+    )
+    monkeypatch.setattr(cli, "resolve_device", lambda value: torch.device("cpu"))
+
+    cli.main(
+        [
+            "falsify-natural-image-transport",
+            "--study-dir",
+            "study",
+            "--transport-preregistration",
+            "transport.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Natural-image falsification: natural_image_transport_confirmed" in output
+    assert "Baseline learned: yes (final/step-zero loss ratio=0.42)" in output
+    assert "Reliable common classes: 6" in output
+    assert (
+        "down2_block.conv2.weight: normalized_slope=1.25, selectivity=0.75"
+        in output
+    )
+    assert "middle.conv2.weight: normalized_slope=0.8, selectivity=0.3" in output
+    assert "Only allowed next action: develop_sign_transport_theory" in output
