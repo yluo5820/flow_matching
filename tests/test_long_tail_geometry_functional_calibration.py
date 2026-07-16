@@ -10,9 +10,9 @@ from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
     analyze_functional_calibration,
     cell_microbatch_rows,
     deterministic_random_unit_direction,
+    projected_descent_direction,
     response_block_metrics,
     select_layer_scales,
-    projected_descent_direction,
     top_centered_covariance_direction,
     virtual_layer_update,
 )
@@ -323,6 +323,16 @@ def test_scale_selection_fails_closed_on_missing_or_nonfinite_cells() -> None:
     with pytest.raises(ValueError, match="finite"):
         select_layer_scales(changed, prereg)
 
+    missing_block = table[
+        ~(
+            (table["layer"] == prereg.layers[0])
+            & (table["seed"] == 0)
+            & (table["class_id"] == prereg.classes[0])
+        )
+    ]
+    with pytest.raises(ValueError, match="seed/class blocks"):
+        select_layer_scales(missing_block, prereg)
+
 
 def test_response_metrics_preserve_target_and_worst_offclass_harm() -> None:
     prereg = _analysis_preregistration()
@@ -336,6 +346,23 @@ def test_response_metrics_preserve_target_and_worst_offclass_harm() -> None:
     assert set(random["target_benefit"]) == {0.003}
     assert set(random["non_target_harm"]) == {0.004}
     assert set(random["selectivity_margin"]) == {-0.001}
+
+
+def test_response_metrics_rejects_a_wholly_missing_direction_block() -> None:
+    prereg = _analysis_preregistration()
+    responses = _passing_responses(prereg)
+    missing = responses[
+        ~(
+            (responses["checkpoint_step"] == prereg.primary_checkpoint_step)
+            & (responses["layer"] == prereg.layers[0])
+            & (responses["seed"] == 0)
+            & (responses["direction_class"] == prereg.classes[0])
+            & (responses["direction_kind"] == "primary")
+        )
+    ]
+
+    with pytest.raises(ValueError, match="complete seed/class response blocks"):
+        response_block_metrics(missing, prereg)
 
 
 def test_functional_decision_unlocks_only_when_both_layers_and_control_pass() -> None:

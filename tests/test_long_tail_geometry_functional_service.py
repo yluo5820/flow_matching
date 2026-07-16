@@ -83,7 +83,9 @@ def _response_rows(prereg, seed: int, checkpoint_step: int) -> pd.DataFrame:
                             "relative_step": 3e-4,
                             "projection_fraction": 0.01,
                             "base_loss": 1.0,
-                            "perturbed_loss": 0.997 if direction_class == evaluation_class else 1.004,
+                            "perturbed_loss": (
+                                0.997 if direction_class == evaluation_class else 1.004
+                            ),
                             "benefit": 0.003 if direction_class == evaluation_class else -0.004,
                         }
                     )

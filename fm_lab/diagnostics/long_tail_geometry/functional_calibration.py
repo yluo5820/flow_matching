@@ -5,10 +5,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -19,12 +20,12 @@ from fm_lab.diagnostics.long_tail_geometry.checkpoints import (
     evaluate_probe_batches,
     restore_probe_model,
 )
+from fm_lab.diagnostics.long_tail_geometry.functional_preregistration import (
+    FunctionalCalibrationPreregistration,
+)
 from fm_lab.diagnostics.long_tail_geometry.gradients import (
     collect_gradient_rows,
     resolve_probe_layers,
-)
-from fm_lab.diagnostics.long_tail_geometry.functional_preregistration import (
-    FunctionalCalibrationPreregistration,
 )
 from fm_lab.diagnostics.long_tail_geometry.manifest import (
     ProbeBatch,
@@ -323,16 +324,26 @@ def select_layer_scales(
         ["layer", "seed", "class_id", "relative_step"]
     ).any():
         raise ValueError("Scale table contains duplicate calibration cells.")
+    seeds = set(int(value) for value in table["seed"])
+    if len(seeds) < preregistration.required_seed_repeats:
+        raise ValueError("Scale table has too few training seeds.")
+    expected_blocks = {
+        (seed, class_id)
+        for seed in seeds
+        for class_id in preregistration.classes
+    }
 
     selections: dict[str, ScaleSelection] = {}
     locked_steps = set(preregistration.relative_step_grid)
     for layer in preregistration.layers:
         layer_table = table[table["layer"] == layer]
         blocks = layer_table[["seed", "class_id"]].drop_duplicates()
-        if len(set(int(value) for value in blocks["seed"])) < (
-            preregistration.required_seed_repeats
-        ):
-            raise ValueError("Scale table has too few training seeds.")
+        actual_blocks = {
+            (int(row.seed), int(row.class_id))
+            for row in blocks.itertuples(index=False)
+        }
+        if actual_blocks != expected_blocks:
+            raise ValueError("Every layer requires complete seed/class blocks.")
         counts = layer_table.groupby(["seed", "class_id"]).size()
         step_sets = layer_table.groupby(["seed", "class_id"])[
             "relative_step"
@@ -484,6 +495,34 @@ def response_block_metrics(
         raise ValueError("Primary directions must use control_id -1.")
     random = metrics[metrics["direction_kind"] == "random"]
     expected_controls = set(range(preregistration.random_controls))
+    seeds = set(int(value) for value in metrics["seed"])
+    expected_blocks = {
+        (checkpoint_step, layer, seed, class_id)
+        for checkpoint_step in preregistration.checkpoint_steps
+        for layer in preregistration.layers
+        for seed in seeds
+        for class_id in preregistration.classes
+    }
+    primary_blocks = {
+        (
+            int(row.checkpoint_step),
+            str(row.layer),
+            int(row.seed),
+            int(row.direction_class),
+        )
+        for row in primary.itertuples(index=False)
+    }
+    random_blocks = {
+        (
+            int(row.checkpoint_step),
+            str(row.layer),
+            int(row.seed),
+            int(row.direction_class),
+        )
+        for row in random.itertuples(index=False)
+    }
+    if primary_blocks != expected_blocks or random_blocks != expected_blocks:
+        raise ValueError("Response table requires complete seed/class response blocks.")
     control_sets = random.groupby(
         ["checkpoint_step", "layer", "seed", "direction_class"]
     )["control_id"].apply(lambda values: set(int(value) for value in values))
@@ -1416,7 +1455,7 @@ def _mean_batch_loss(
         model=model,
         objective=objective,
         path=path,
-        batches=batches,
+        batches=(_combine_probe_batches(batches),),
     )
     if not np.isfinite(result.mean_loss) or result.mean_loss <= 0:
         raise ValueError("Functional calibration requires a finite positive base loss.")
@@ -1686,7 +1725,9 @@ def validated_direction_index_digest(context: CalibrationContext) -> str:
                         class_id=class_id,
                     )
                     if not path.is_file():
-                        raise ValueError(f"Functional calibration is missing exact direction: {path}")
+                        raise ValueError(
+                            f"Functional calibration is missing exact direction: {path}"
+                        )
                     _load_direction(
                         path,
                         context=context,

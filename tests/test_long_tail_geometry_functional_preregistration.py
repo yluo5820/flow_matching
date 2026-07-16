@@ -7,7 +7,6 @@ from fm_lab.diagnostics.long_tail_geometry.functional_preregistration import (
     FunctionalCalibrationPreregistration,
 )
 
-
 CANONICAL_PATH = Path(
     "configs/fashion_mnist_lt/long_tail_geometry_functional_calibration.yaml"
 )
