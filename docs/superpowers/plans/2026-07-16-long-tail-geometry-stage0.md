@@ -801,7 +801,7 @@ def test_stage0_validator_fails_before_gradients_when_pairing_breaks(tmp_path, m
     assert not list(report_path.parent.glob("gradient_rows_*.npz"))
 ```
 
-Add `write_geometry_toy_checkpoint(tmp_path)` to `tests/long_tail_geometry_helpers.py`. It must extend `geometry_toy_config` with a minimal `diagnostics.long_tail_geometry` section using offsets `[0, 1, 7]`, one timestep stratum, one row per class, microbatch size 10, layers `input_block.conv2.weight` and `output_block.2.weight`, sketch dimension 64, maximum sketch dimension 256, 99 permutations, and the scientific error thresholds. Build the model through `build_model`, save its untrained state with `save_checkpoint`, and return `(config, checkpoint_path)`.
+Add `write_geometry_toy_checkpoint(tmp_path)` to `tests/long_tail_geometry_helpers.py`. It must extend `geometry_toy_config` with a minimal `diagnostics.long_tail_geometry` section using offsets `[0, 1, 7]`, one timestep stratum, one row per class, microbatch size 1, layers `input_block.conv2.weight` and `output_block.2.weight`, sketch dimension 4,096, maximum sketch dimension 4,096, 99 permutations, and the scientific error thresholds. The size is intentionally above both toy layer dimensions, exercising the exact-dimension branch without weakening the scientific error thresholds. Build the model through `build_model`, save its untrained state with `save_checkpoint`, and return `(config, checkpoint_path)`.
 
 - [ ] **Step 4: Implement the validator in ordered gates**
 

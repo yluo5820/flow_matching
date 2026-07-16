@@ -47,6 +47,23 @@ metrics, or reproduce exactly which points were shown. They are not needed to re
 training; `checkpoint.pt`, `config.yaml`, and `metrics.json` are the important files for
 that.
 
+## Long-Tail Gradient-Geometry Stage 0
+
+`fm-lab-long-tail-geometry-stage0` writes under
+`diagnostics/long_tail_geometry/`:
+
+- `stage0_report.json`: ordered gate results, provenance hashes, thresholds, observed
+  sketch errors, permutation p-values, and planted-control recovery.
+- `probe_a.npz` and `probe_b.npz`: immutable, digest-checked row manifests containing
+  original IDs and every random choice needed to pair tuples across mappings.
+- `gradient_rows_<layer>.npz`: exact validation-subset gradient rows and their accepted
+  sketches. These files exist only after all config, mapping, pairing, manifest, and
+  checkpoint gates pass.
+
+Treat only `passed: true` as permission to begin the ten-mapping observation runs. A
+failed report is evidence about the measurement pipeline, not evidence for or against
+the long-tail geometry hypothesis.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

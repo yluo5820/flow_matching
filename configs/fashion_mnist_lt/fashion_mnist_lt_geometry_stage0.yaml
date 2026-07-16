@@ -1,0 +1,106 @@
+experiment:
+  name: fashion_mnist_lt_geometry_stage0
+  seed: 0
+  output_dir: runs/fashion_mnist_lt_geometry_stage0
+
+data:
+  name: fashion_mnist_lt
+  root: data/fashion_mnist
+  train: true
+  download: true
+  normalize: minus_one_one
+  dequantize: true
+  imbalance_type: exp
+  imbalance_factor: 0.01
+  subset_seed: 0
+  frequency_mapping:
+    offset: 0
+    multiplier: 3
+    diagnostic_pool_per_class: 500
+
+source:
+  name: gaussian
+  dim: 784
+
+coupling:
+  name: independent
+
+path:
+  name: linear
+
+model:
+  name: image_unet
+  image_shape: [1, 28, 28]
+  base_channels: 32
+  time_embedding_dim: 128
+  activation: silu
+  zero_init_head: true
+  capacity:
+    enabled: false
+
+conditioning:
+  enabled: true
+  num_classes: 10
+  embedding_dim: 128
+  dropout_probability: 0.15
+
+objective:
+  name: flow_matching
+  model_output: target
+  loss_space: velocity
+  min_denom: 0.05
+  modifiers: []
+
+training:
+  batch_size: 256
+  steps: 20000
+  lr: 0.0001
+  warmup_steps: 500
+  time_sampling:
+    name: logit_normal
+    mean: -0.8
+    std: 0.8
+  log_every: 250
+  checkpoint_steps: [500, 1000, 3000, 7000, 13000, 20000]
+  early_stopping:
+    enabled: false
+
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+
+sampling:
+  n_samples: 10000
+  n_trajectories: 20
+  nfe: 64
+  sample_batch_size: 500
+  classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  classifier_free_guidance:
+    scale: 1.0
+
+diagnostics:
+  long_tail_geometry:
+    pairing_check_offsets: [0, 1, 7]
+    probe_splits: [a, b]
+    rows_per_class_per_stratum: 128
+    microbatch_size: 8
+    time_strata:
+      - [0.02, 0.10]
+      - [0.10, 0.30]
+      - [0.30, 0.70]
+      - [0.70, 0.90]
+      - [0.90, 0.98]
+    layers:
+      - input_block.conv2.weight
+      - down2_block.conv2.weight
+      - middle.conv2.weight
+      - up1_block.conv2.weight
+      - up0_block.conv2.weight
+      - output_block.2.weight
+    sketch_dim: 4096
+    max_sketch_dim: 16384
+    sketch_seed: 20260716
+    max_cosine_error: 0.02
+    max_subspace_error: 0.03
+    permutation_count: 999

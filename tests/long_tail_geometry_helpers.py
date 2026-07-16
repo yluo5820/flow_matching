@@ -18,6 +18,7 @@ from fm_lab.experiments.factory import (
     build_target,
 )
 from fm_lab.training.losses import build_objective
+from fm_lab.utils.checkpoints import save_checkpoint
 
 
 def write_balanced_fashion_mnist(
@@ -121,6 +122,52 @@ def build_probe_fixture(tmp_path: Path):
         seed=19,
     )
     return config, target, source, path, objective, model, manifest
+
+
+def write_geometry_toy_checkpoint(tmp_path: Path) -> tuple[dict[str, Any], Path]:
+    """Write a tiny ordinary-FM checkpoint and its Stage-0 validation config."""
+
+    root = tmp_path / "data"
+    write_balanced_fashion_mnist(root, examples_per_class=10)
+    config = geometry_toy_config(root, tmp_path / "run")
+    config["diagnostics"] = {
+        "long_tail_geometry": {
+            "pairing_check_offsets": [0, 1, 7],
+            "probe_splits": ["a", "b"],
+            "rows_per_class_per_stratum": 1,
+            "microbatch_size": 1,
+            "time_strata": [[0.02, 0.10]],
+            "layers": [
+                "input_block.conv2.weight",
+                "output_block.2.weight",
+            ],
+            "sketch_dim": 4096,
+            "max_sketch_dim": 4096,
+            "sketch_seed": 20260716,
+            "max_cosine_error": 0.02,
+            "max_subspace_error": 0.03,
+            "permutation_count": 99,
+        }
+    }
+    torch.manual_seed(0)
+    source = build_source(config)
+    model = build_model(config, dim=source.dim)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    save_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=None,
+        step=1,
+        config=config,
+        metrics={},
+        prediction_contract={
+            "path": "linear",
+            "objective": "flow_matching",
+            "model_output": "target",
+            "loss_space": "velocity",
+        },
+    )
+    return config, checkpoint_path
 
 
 def _write_idx_images(path: Path, images: np.ndarray) -> None:
