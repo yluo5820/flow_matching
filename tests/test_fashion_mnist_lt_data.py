@@ -3,10 +3,15 @@ import struct
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from fm_lab.data import LongTailedFashionMNIST
-from fm_lab.data.long_tail import long_tail_indices
+from fm_lab.data.long_tail import (
+    frequency_rank_mapping,
+    long_tail_indices,
+    nested_frequency_split,
+)
 from fm_lab.experiments.factory import build_target
 
 
@@ -47,6 +52,77 @@ def test_long_tail_indices_retain_at_least_one_sample_per_class() -> None:
     )
 
     assert np.all(np.bincount(labels[selected], minlength=10) >= 1)
+
+
+def test_frequency_rank_mappings_balance_class_and_rank() -> None:
+    mappings = np.stack(
+        [
+            frequency_rank_mapping(10, multiplier=3, offset=mapping_id)
+            for mapping_id in range(10)
+        ]
+    )
+
+    assert all(
+        np.array_equal(np.sort(mapping), np.arange(10)) for mapping in mappings
+    )
+    assert all(
+        np.array_equal(np.sort(mappings[:, class_id]), np.arange(10))
+        for class_id in range(10)
+    )
+
+
+def test_frequency_rank_mapping_requires_coprime_multiplier() -> None:
+    with pytest.raises(ValueError, match="coprime"):
+        frequency_rank_mapping(10, multiplier=2, offset=0)
+
+
+def test_nested_frequency_split_reserves_probe_pool_before_training() -> None:
+    labels = np.repeat(np.arange(10), 100)
+
+    split = nested_frequency_split(
+        labels,
+        num_classes=10,
+        imbalance_factor=0.01,
+        seed=17,
+        diagnostic_pool_per_class=20,
+        multiplier=3,
+        offset=0,
+    )
+
+    assert len(split.probe_a_indices) == 100
+    assert len(split.probe_b_indices) == 100
+    assert not set(split.train_indices) & set(split.probe_a_indices)
+    assert not set(split.train_indices) & set(split.probe_b_indices)
+    assert not set(split.probe_a_indices) & set(split.probe_b_indices)
+    assert max(split.class_counts) == 80
+    assert min(split.class_counts) == 1
+
+
+def test_same_class_frequency_subsets_are_nested_across_mappings() -> None:
+    labels = np.repeat(np.arange(10), 100)
+    splits = [
+        nested_frequency_split(
+            labels,
+            num_classes=10,
+            imbalance_factor=0.01,
+            seed=17,
+            diagnostic_pool_per_class=20,
+            multiplier=3,
+            offset=mapping_id,
+        )
+        for mapping_id in range(10)
+    ]
+
+    for class_id in range(10):
+        class_sets = [
+            set(split.train_indices[labels[split.train_indices] == class_id])
+            for split in splits
+        ]
+        ordered = sorted(class_sets, key=len)
+        assert all(
+            smaller <= larger
+            for smaller, larger in zip(ordered, ordered[1:], strict=False)
+        )
 
 def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
     _write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
