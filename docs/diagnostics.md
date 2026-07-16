@@ -102,6 +102,47 @@ means the primary measurement was inconclusive and authorizes only the preregist
 escalation is reported as `network_wide_practical_null`. Even a passing result leaves
 Stage 1 locked until the separate Probe-A functional-overlap calibration is complete.
 
+### Probe-A functional calibration
+
+After and only after `noise_ceiling.json` reports `network_wide_measurable` with
+`calibrate_probe_a_functional_overlap_before_stage1` as its next action, run:
+
+```bash
+PYTHONPATH=. .conda/fm_lab/bin/python -m \
+  fm_lab.experiments.run_long_tail_geometry_observation0 calibrate \
+  --study-dir runs/long_tail_geometry/fashion_mnist/observation0 \
+  --calibration-preregistration \
+    configs/fashion_mnist_lt/long_tail_geometry_functional_calibration.yaml \
+  --device auto
+```
+
+The locked calibration recomputes exact rank-1 directions at steps 500 and 20,000 for
+stratum 0, the `down2`/`middle` adjacent layer pair, and classes 0, 2, 3, 4, 6, and 9.
+Within each 16-microbatch Probe-A cell, positions 0-7 fit the covariance direction,
+8-11 orient and scale the projected descent direction, and 12-15 evaluate the
+cross-class response. Step 20,000 chooses one shared relative step per layer; step 500
+reuses those steps as a positive control. Probe-B is never loaded by this command.
+
+The command is resumable by seed/checkpoint chunks and writes:
+
+```text
+aggregate/functional_calibration/
+  preregistration.yaml
+  directions/seed_*/checkpoint_*/<layer>/class_*.pt
+  chunks/
+  scale_grid.csv
+  responses.csv
+  functional_lock.json
+  complete.json
+```
+
+`functional_lock.json` reports the 1% scale validity, doubled-step local-linearity
+check, held-out target benefit, worst off-class harm, matched-random-control threshold,
+bootstrap confidence bounds, positive-control result, and the only allowed next
+action. `complete.json` binds every aggregate artifact and exact direction to content
+digests. Stage 1 remains blocked unless the completed lock says
+`stage1_unlocked: true`; no Stage-1 runs are created or launched by calibration.
+
 ## 3D Toy Runs
 
 The current training, sampling, solver, and kNN path diagnostics support 3D tensors.

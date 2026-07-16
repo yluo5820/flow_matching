@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from contextlib import contextmanager
@@ -1160,15 +1161,39 @@ def _load_probe_components(
     locked_config = load_config(context.study_dir / "configs" / f"seed_{seed}.yaml")
     if config != locked_config:
         raise ValueError("Functional checkpoint config differs from its locked run config.")
-    target = build_target(config)
-    source = build_source(config)
-    path = build_path(config)
+    runtime_config = _resolve_runtime_paths(config, study_dir=context.study_dir)
+    target = build_target(runtime_config)
+    source = build_source(runtime_config)
+    path = build_path(runtime_config)
     objective = build_objective(
-        config.get("objective", {}),
-        diffusion_config=config.get("diffusion", {}),
+        runtime_config.get("objective", {}),
+        diffusion_config=runtime_config.get("diffusion", {}),
         class_counts=getattr(target, "class_counts", None),
     )
     return model, target, source, path, objective
+
+
+def _resolve_runtime_paths(config: dict[str, Any], *, study_dir: Path) -> dict[str, Any]:
+    """Resolve locked relative data paths without changing checkpoint identity."""
+
+    resolved = copy.deepcopy(config)
+    data = resolved.get("data", {}) or {}
+    configured_root = Path(str(data.get("root", "")))
+    if configured_root.is_absolute():
+        if not configured_root.exists():
+            raise ValueError(f"Configured diagnostic data root does not exist: {configured_root}")
+        data["download"] = False
+        resolved["data"] = data
+        return resolved
+    candidates = [Path.cwd() / configured_root]
+    candidates.extend(parent / configured_root for parent in study_dir.parents)
+    for candidate in candidates:
+        if candidate.is_dir() and any(candidate.iterdir()):
+            data["root"] = str(candidate.resolve())
+            data["download"] = False
+            resolved["data"] = data
+            return resolved
+    raise ValueError(f"Could not resolve diagnostic data root: {configured_root}")
 
 
 def _materialize_partitions(

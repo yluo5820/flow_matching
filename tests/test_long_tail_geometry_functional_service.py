@@ -129,6 +129,28 @@ def test_noise_ceiling_scope_requires_locked_pair_at_both_checkpoints() -> None:
         calibration.validate_noise_ceiling_scope(changed, observation0, functional)
 
 
+def test_runtime_data_path_skips_empty_worktree_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    study_dir = project / "runs/study"
+    real_data = project / "data/fashion_mnist"
+    shadow = tmp_path / "worktree/data/fashion_mnist"
+    study_dir.mkdir(parents=True)
+    real_data.mkdir(parents=True)
+    shadow.mkdir(parents=True)
+    (real_data / "train-images-idx3-ubyte.gz").write_bytes(b"fixture")
+    monkeypatch.chdir(tmp_path / "worktree")
+    config = {"data": {"root": "data/fashion_mnist", "download": True}}
+
+    resolved = calibration._resolve_runtime_paths(config, study_dir=study_dir)
+
+    assert resolved["data"]["root"] == str(real_data)
+    assert resolved["data"]["download"] is False
+    assert config["data"] == {"root": "data/fashion_mnist", "download": True}
+
+
 def test_service_writes_digest_bound_lock_and_resumes_complete_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -6,6 +6,9 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from fm_lab.diagnostics.long_tail_geometry.functional_calibration import (
+    calibrate_observation0_functional_overlap,
+)
 from fm_lab.diagnostics.long_tail_geometry.observation0 import (
     analyze_observation0_study,
     collect_observation0_run,
@@ -50,6 +53,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Analyze the locked 32-microbatch escalation artifacts.",
     )
+
+    calibrate = commands.add_parser(
+        "calibrate",
+        help="Calibrate exact rank-1 directions using Probe-A only.",
+    )
+    calibrate.add_argument("--study-dir", required=True)
+    calibrate.add_argument("--calibration-preregistration", required=True)
+    calibrate.add_argument("--device", default="auto")
     return parser.parse_args(argv)
 
 
@@ -61,6 +72,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Prepared Observation 0 at {result.study_dir}")
         for config, run_dir in zip(result.run_configs, result.run_dirs, strict=True):
             print(f"  train {config} -> {run_dir}")
+        return
+
+    if args.command == "calibrate":
+        result = calibrate_observation0_functional_overlap(
+            study_dir=study_dir,
+            calibration_preregistration_path=args.calibration_preregistration,
+            device=resolve_device(args.device),
+        )
+        decision = result.decision
+        status = "stage1_unlocked" if decision.stage1_unlocked else "stage1_blocked"
+        print(f"Functional lock: {status}")
+        control = "passed" if decision.positive_control_pass else "failed"
+        print(f"Positive control: {control}")
+        selected = ", ".join(
+            f"{layer}={step:g}"
+            for layer, step in sorted(decision.selected_relative_steps.items())
+        )
+        print(f"Selected relative steps: {selected}")
+        print(f"Only allowed next action: {decision.next_action}")
         return
 
     preregistration = Observation0Preregistration.load(

@@ -1,5 +1,6 @@
 import dataclasses
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -372,7 +373,7 @@ def test_tiny_three_seed_study_runs_end_to_end(
     assert (study_dir / "aggregate/noise_ceiling.json").exists()
 
 
-def test_observation0_cli_exposes_only_prepare_collect_and_analyze() -> None:
+def test_observation0_cli_exposes_calibration_but_not_stage1() -> None:
     from fm_lab.experiments.run_long_tail_geometry_observation0 import parse_args
 
     prepare = parse_args(
@@ -397,10 +398,65 @@ def test_observation0_cli_exposes_only_prepare_collect_and_analyze() -> None:
         ]
     )
     analyze = parse_args(["analyze", "--study-dir", "study"])
+    calibrate = parse_args(
+        [
+            "calibrate",
+            "--study-dir",
+            "study",
+            "--calibration-preregistration",
+            "functional.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
 
     assert prepare.command == "prepare"
     assert collect.command == "collect"
     assert collect.escalated is True
     assert analyze.command == "analyze"
+    assert calibrate.command == "calibrate"
+    assert calibrate.calibration_preregistration == "functional.yaml"
+    assert calibrate.device == "cpu"
     with pytest.raises(SystemExit):
         parse_args(["stage1", "--study-dir", "study"])
+
+
+def test_observation0_calibration_cli_prints_locked_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    import fm_lab.experiments.run_long_tail_geometry_observation0 as cli
+
+    decision = SimpleNamespace(
+        stage1_unlocked=True,
+        positive_control_pass=True,
+        selected_relative_steps={
+            "down2_block.conv2.weight": 3e-4,
+            "middle.conv2.weight": 1e-4,
+        },
+        next_action="stage1_unlocked_for_separate_preregistration",
+    )
+    monkeypatch.setattr(
+        cli,
+        "calibrate_observation0_functional_overlap",
+        lambda **kwargs: SimpleNamespace(decision=decision),
+    )
+    monkeypatch.setattr(cli, "resolve_device", lambda value: torch.device("cpu"))
+
+    cli.main(
+        [
+            "calibrate",
+            "--study-dir",
+            "study",
+            "--calibration-preregistration",
+            "functional.yaml",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "Functional lock: stage1_unlocked" in output
+    assert "Positive control: passed" in output
+    assert "down2_block.conv2.weight=0.0003" in output
+    assert "Only allowed next action: stage1_unlocked_for_separate_preregistration" in output
