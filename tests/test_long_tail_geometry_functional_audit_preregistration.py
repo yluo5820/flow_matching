@@ -7,7 +7,6 @@ from fm_lab.diagnostics.long_tail_geometry.functional_audit_preregistration impo
     FunctionalGeometryAuditPreregistration,
 )
 
-
 AUDIT_CONFIG = (
     "configs/fashion_mnist_lt/long_tail_geometry_functional_audit.yaml"
 )

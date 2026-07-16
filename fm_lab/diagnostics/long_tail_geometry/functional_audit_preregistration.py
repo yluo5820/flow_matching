@@ -11,7 +11,6 @@ from typing import Any
 
 from fm_lab.utils.config import load_config, save_config
 
-
 _OBSERVATION0_DIGEST = (
     "6cd1bcf18692dc947573dbfb0da7b4d98b16fd291ea8d436a32e3e9abec78e24"
 )
