@@ -324,6 +324,41 @@ oracle evaluation, and the adjustment is reported rather than hidden. Across the
 three runs, 18.3–23.3% of pixels were clipped, primarily slightly oversaturated white
 background pixels; mean absolute adjustments were 0.0048–0.0065.
 
+## Balanced learning-curve findings
+
+The three rotations were repeated from the same initialization and data-order seed
+at 2,000 and 5,000 updates. Every run and condition-specific evaluation completed.
+Class leakage was zero at both new horizons.
+
+| Updates | True dimension | Off-renderer rate | Joint-valid rate | Oracle-feature FID | Active-factor energy distance |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1 | 0.0444 | 0.9556 | 1.7320 | 0.0933 |
+| 2,000 | 1 | 0.0000 | 1.0000 | 1.3580 | 0.0595 |
+| 5,000 | 1 | 0.0000 | 1.0000 | 0.7072 | 0.0283 |
+| 1,000 | 3 | 0.2733 | 0.7267 | 5.1904 | 0.0371 |
+| 2,000 | 3 | 0.1378 | 0.8622 | 3.5270 | 0.0487 |
+| 5,000 | 3 | 0.0478 | 0.9522 | 3.6147 | 0.0718 |
+| 1,000 | 5 | 0.9944 | 0.0056 | 12.7415 | 0.1248 |
+| 2,000 | 5 | 0.9556 | 0.0444 | 12.9983 | 0.1636 |
+| 5,000 | 5 | 0.9122 | 0.0878 | 16.0968 | 0.2770 |
+
+Dimension 1 converged cleanly, and dimension 3 became mostly renderer-valid. The
+dimension-5 valid fraction increased, but remained below 9% overall. Its three
+object-specific trajectories were 0.7%→8.3%→17.0% (monument),
+0.0%→0.3%→5.0% (vane), and 1.0%→4.7%→4.3% (arch). Thus the increase is not a
+uniform approach to convergence. Moreover, dimension-5 FID and active-factor energy
+distance worsened. At 5,000 updates the monument's learned azimuth/elevation central
+ranges contracted to 0.52/0.66 of the reference, while the vane's learned depth
+range contracted to 0.54. The arch did not show the same single-factor collapse,
+despite remaining 95.7% off renderer.
+
+Generated silhouettes look sharper with training and retain object identity, while
+the training-loss windows also improve. Pixel clipping decreases at 5,000 updates,
+so neither optimization divergence nor output clipping explains the geometry result.
+The disagreement between plausible-looking images and the stringent oracle-rerender
+test means that direct latent projection and sampler sensitivity should be checked
+before interpreting every rejection as true geometric memorization.
+
 ## Effects
 
 <!-- GENERATED:effects:START -->
@@ -351,16 +386,19 @@ causal yet about frequency or dimension-by-frequency interaction.
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. On the current CPU it would require
-roughly 19 hours per run, and the reduced pilot gate is still failed because the
-five-dimensional balanced classes are almost entirely off renderer.
+roughly 19 hours per run, and the learning curve shows that additional updates alone
+do not yet produce a usable dimension-5 baseline. A frequency reduction would likely
+push the already 91% off-renderer balanced condition into a saturated failure regime,
+making a dimension-by-frequency interaction hard to estimate.
 
-The next controlled experiment should be a balanced learning curve (for example
-1,000, 2,000, and 5,000 updates) using saved checkpoints or exact resume. Its purpose
-is to determine whether dimension 5 merely learns more slowly or approaches a
-persistent fidelity floor. Only after selecting the smallest horizon at which the
-balanced dimension-5 classes have measurable validity should the frequency rotations
-be run. A later Jacobian/tangent-rank probe should test whether the high-dimensional
-failure is specifically a loss of learned directions rather than only pixel blur.
+Before changing model capacity or training longer, run two cheaper validity checks on
+the existing 5,000-step checkpoints: increase ODE solver accuracy, and directly fit
+renderer factors to a sample of generated images rather than relying only on the
+oracle initialization. If the failure survives both checks, a Jacobian/tangent-rank
+probe should test whether the contracted factor ranges reflect a genuine loss of
+learned directions. That would provide a more direct geometric-memorization test and
+guide whether the next intervention should be model capacity, sharing, or training
+horizon.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
