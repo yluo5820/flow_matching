@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +23,42 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     canonical_factor_rows,
 )
 from fm_lab.training.trainer import _sample_target_with_optional_labels
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        (
+            "from fm_lab.geometry_explorer.synthetic_long_tail_design "
+            "import FACTOR_COLUMNS, build_master_pools; "
+            "assert FACTOR_COLUMNS; assert build_master_pools; "
+            "from fm_lab.data import SyntheticLongTailImages; "
+            "from fm_lab.experiments.factory import build_target; "
+            "assert SyntheticLongTailImages; assert build_target"
+        ),
+        (
+            "from fm_lab.data import SyntheticLongTailImages; "
+            "from fm_lab.experiments.factory import build_target; "
+            "from fm_lab.geometry_explorer.synthetic_long_tail_design "
+            "import FACTOR_COLUMNS, build_master_pools; "
+            "assert SyntheticLongTailImages; assert build_target; "
+            "assert FACTOR_COLUMNS; assert build_master_pools"
+        ),
+    ],
+)
+def test_synthetic_long_tail_imports_work_in_a_fresh_process(script: str) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    environment = os.environ | {"PYTHONPATH": str(project_root)}
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=project_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def write_tiny_condition(

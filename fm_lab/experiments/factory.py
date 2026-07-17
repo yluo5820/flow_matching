@@ -31,11 +31,11 @@ from fm_lab.data import (
     PlanarDisk,
     SphericalShell,
     SwissRoll,
-    SyntheticLongTailImages,
     Torus,
     TrefoilKnot,
     TwoMoons,
 )
+from fm_lab.data.synthetic_long_tail import SyntheticLongTailImages
 from fm_lab.models import (
     DDPMUNet,
     DirectionSpeedImageUNet,
