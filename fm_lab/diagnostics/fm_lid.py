@@ -169,10 +169,12 @@ class FMJacobianSpectrumEstimator:
         self.generator = generator
 
     @torch.no_grad()
-    def compute_spectrum(self, x: torch.Tensor, t: float) -> torch.Tensor:
+    def compute_pushforward_matrix(self, x: torch.Tensor, t: float) -> torch.Tensor:
+        """Return the finite-perturbation pushforward used by the spectrum API."""
+
         x1 = x.to(self.device)
         if x1.ndim < 1:
-            raise ValueError("compute_spectrum expects one data point.")
+            raise ValueError("compute_pushforward_matrix expects one data point.")
         x1_batch = x1.unsqueeze(0)
         xt = self._integrate(x1_batch, t0=1.0, t1=float(t))[0]
         directions = sample_unit_directions(
@@ -183,11 +185,14 @@ class FMJacobianSpectrumEstimator:
             normalize=self.normalize_directions,
             generator=self.generator,
         )
-        xt_perturbed = xt.unsqueeze(0) + self.eps * directions
-        x1_perturbed = self._integrate(xt_perturbed, t0=float(t), t1=1.0)
+        x1_perturbed = self._integrate(
+            xt.unsqueeze(0) + self.eps * directions,
+            t0=float(t),
+            t1=1.0,
+        )
 
         if self.representation_fn is None:
-            base = x1.reshape(1, -1)
+            base = x1_batch.reshape(1, -1)
             perturbed = x1_perturbed.reshape(self.num_directions, -1)
         else:
             base = self.representation_fn(x1_batch).reshape(1, -1)
@@ -195,8 +200,11 @@ class FMJacobianSpectrumEstimator:
                 self.num_directions,
                 -1,
             )
-        delta = (perturbed - base) / self.eps
-        return svdvals(delta.T)
+        return ((perturbed - base) / self.eps).T
+
+    @torch.no_grad()
+    def compute_spectrum(self, x: torch.Tensor, t: float) -> torch.Tensor:
+        return svdvals(self.compute_pushforward_matrix(x, t))
 
     def estimate_point(self, x: torch.Tensor) -> FMJacobianSpectrumEstimate:
         spectra = tuple(self.compute_spectrum(x, t) for t in self.t_values)

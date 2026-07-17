@@ -104,6 +104,28 @@ def test_fm_jacobian_spectrum_recovers_projection_plane_rank() -> None:
     assert estimate.participation_rank[0] <= 2.0
 
 
+def test_pushforward_matrix_preserves_existing_spectrum() -> None:
+    estimator = FMJacobianSpectrumEstimator(
+        model=ZeroVelocity(),
+        ode_solver=ProjectionFlowSolver(tangent_dim=2),
+        t_values=[0.5],
+        eps=1e-2,
+        num_directions=16,
+        device="cpu",
+        nfe=4,
+        generator=torch.Generator().manual_seed(3),
+    )
+    point = torch.tensor([0.2, -0.1, 0.4])
+
+    estimator.generator.manual_seed(3)
+    matrix = estimator.compute_pushforward_matrix(point, t=0.5)
+    estimator.generator.manual_seed(3)
+    spectrum = estimator.compute_spectrum(point, t=0.5)
+
+    assert matrix.ndim == 2
+    assert torch.allclose(torch.linalg.svdvals(matrix), spectrum, atol=1e-6)
+
+
 def test_fm_flipd_recovers_flat_subspace_dimensions_with_exact_divergence() -> None:
     x = torch.tensor([[1.0, -1.0, 0.0], [0.5, 2.0, 0.0]])
     estimator = FMFLIPDEstimator(
