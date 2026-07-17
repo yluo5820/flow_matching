@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
+import os
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +37,7 @@ from fm_lab.utils.logging import write_json
 FACTOR_NAMES = ("tx", "ty", "tz", "azimuth", "elevation")
 _CHECKPOINT_FILENAME = "factor_oracle.pt"
 _GATE_FILENAME = "oracle_gate.json"
-_CHECKPOINT_SCHEMA_VERSION = 1
+_CHECKPOINT_SCHEMA_VERSION = 2
 _TRANSLATION_RANGES = ((-0.25, 0.25), (-0.25, 0.25), (-0.75, 0.75))
 
 
@@ -232,6 +235,24 @@ def train_factor_oracle(
         raise FileExistsError(f"Oracle destination already exists: {destination}")
     parsed = _parse_config(config)
     resolved_device = _resolve_device(device)
+    with _deterministic_training_context(resolved_device) as determinism:
+        return _train_factor_oracle_impl(
+            config,
+            destination=destination,
+            parsed=parsed,
+            device=resolved_device,
+            determinism=determinism,
+        )
+
+
+def _train_factor_oracle_impl(
+    config: dict[str, Any],
+    *,
+    destination: Path,
+    parsed: _OracleConfig,
+    device: torch.device,
+    determinism: dict[str, Any],
+) -> dict[str, Any]:
     object_configs = _object_configs(config)
     factor = _factor_space(parsed.elevation_bounds)
     normalization = _factor_normalization(parsed.elevation_bounds)
@@ -259,7 +280,7 @@ def train_factor_oracle(
         split_seed=validation_seed,
         parsed=parsed,
     )
-    model = SyntheticFactorOracle(num_classes=len(OBJECT_IDS)).to(resolved_device)
+    model = SyntheticFactorOracle(num_classes=len(OBJECT_IDS)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=parsed.learning_rate)
     generator = torch.Generator(device="cpu").manual_seed(parsed.seed + 30_000_000)
     _train_steps(
@@ -268,7 +289,7 @@ def train_factor_oracle(
         train_data,
         steps=parsed.steps,
         batch_size=parsed.batch_size,
-        device=resolved_device,
+        device=device,
         generator=generator,
     )
     metrics = _validate_oracle(
@@ -278,7 +299,7 @@ def train_factor_oracle(
         object_configs=object_configs,
         factor=factor,
         parsed=parsed,
-        device=resolved_device,
+        device=device,
     )
     gate = oracle_gate_metrics(
         object_accuracy=metrics["object_accuracy"],
@@ -286,6 +307,23 @@ def train_factor_oracle(
         min_accuracy=parsed.min_accuracy,
         max_factor_mae=parsed.max_factor_mae,
         rerender_pixel_mae_q995=metrics["validation_rerender_pixel_mae_q995"],
+    )
+    configured_gate_passed = bool(gate["passed"])
+    configured_failure_reasons = list(gate["failure_reasons"])
+    gate_profile = "production" if _is_production_profile(config, parsed) else "fixture_only"
+    production_qualified = gate_profile == "production" and configured_gate_passed
+    qualification_reasons = list(configured_failure_reasons)
+    if gate_profile != "production":
+        qualification_reasons.append("fixture_only_profile")
+    gate.update(
+        {
+            "gate_profile": gate_profile,
+            "configured_gate_passed": configured_gate_passed,
+            "configured_failure_reasons": configured_failure_reasons,
+            "production_qualified": production_qualified,
+            "passed": production_qualified,
+            "failure_reasons": qualification_reasons,
+        }
     )
     provenance = {
         "source": "independently_sampled_high_dimensional_renderer",
@@ -326,17 +364,21 @@ def train_factor_oracle(
         "training_config": dict(config.get("oracle", {})),
         "config": config,
         "data_provenance": provenance,
+        "determinism": determinism,
         "metrics": gate,
     }
+    checkpoint["artifact_digest"] = _checkpoint_artifact_digest(checkpoint)
+    published_gate = dict(gate)
+    published_gate["checkpoint_artifact_digest"] = checkpoint["artifact_digest"]
     checkpoint_path, gate_path = _publish_artifacts(
         destination,
         checkpoint=checkpoint,
-        gate=gate,
+        gate=published_gate,
     )
     return {
         "checkpoint_path": str(checkpoint_path),
         "gate_path": str(gate_path),
-        "metrics": gate,
+        "metrics": published_gate,
     }
 
 
@@ -353,7 +395,17 @@ def load_factor_oracle(
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict):
         raise ValueError("Oracle checkpoint payload must be a dictionary.")
+    stored_digest = payload.get("artifact_digest")
+    if not isinstance(stored_digest, str) or len(stored_digest) != 64:
+        raise ValueError("Oracle checkpoint artifact digest is missing or malformed.")
+    try:
+        computed_digest = _checkpoint_artifact_digest(payload)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Oracle checkpoint artifact digest cannot be recomputed.") from exc
+    if not hmac.compare_digest(stored_digest, computed_digest):
+        raise ValueError("Oracle checkpoint artifact digest mismatch.")
     required = {
+        "artifact_digest",
         "schema_version",
         "architecture",
         "model_state_dict",
@@ -365,6 +417,7 @@ def load_factor_oracle(
         "training_config",
         "config",
         "data_provenance",
+        "determinism",
         "metrics",
     }
     missing = sorted(required - set(payload))
@@ -709,14 +762,199 @@ def _publish_artifacts(
 ) -> tuple[Path, Path]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+    published = False
     try:
         torch.save(checkpoint, staging / _CHECKPOINT_FILENAME)
         write_json(gate, staging / _GATE_FILENAME)
-        staging.replace(destination)
+        os.symlink(
+            os.path.relpath(staging, start=destination.parent),
+            destination,
+            target_is_directory=True,
+        )
+        published = True
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not published:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
     return destination / _CHECKPOINT_FILENAME, destination / _GATE_FILENAME
+
+
+def _checkpoint_artifact_digest(payload: Mapping[str, Any]) -> str:
+    """Hash the complete local checkpoint contract, excluding only this digest.
+
+    This detects accidental or internally inconsistent local artifacts. It is not
+    a signature and does not establish an external publisher identity.
+    """
+
+    hasher = hashlib.sha256()
+    _update_digest_blob(hasher, b"synthetic-factor-oracle-checkpoint-v2")
+    if any(not isinstance(name, str) for name in payload):
+        raise TypeError("Checkpoint field names must be strings.")
+    metadata_items = sorted(
+        (str(name), name) for name in payload if name not in {"artifact_digest", "model_state_dict"}
+    )
+    for key_label, original_key in metadata_items:
+        _update_digest_blob(hasher, key_label.encode("utf-8"))
+        _update_digest_blob(hasher, _canonical_json_bytes(payload[original_key]))
+    state = payload.get("model_state_dict")
+    if not isinstance(state, Mapping):
+        raise TypeError("model_state_dict must be a mapping for artifact digesting.")
+    if any(not isinstance(name, str) for name in state):
+        raise TypeError("model_state_dict field names must be strings.")
+    _update_digest_blob(hasher, b"model_state_dict")
+    state_items = sorted((str(name), name) for name in state)
+    for name_label, original_name in state_items:
+        tensor = state[original_name]
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f"model_state_dict.{name_label} must be a tensor.")
+        values = tensor.detach().cpu().contiguous()
+        _update_digest_blob(hasher, name_label.encode("utf-8"))
+        _update_digest_blob(hasher, str(values.dtype).encode("ascii"))
+        _update_digest_blob(hasher, _canonical_json_bytes(list(values.shape)))
+        raw = values.view(torch.uint8).reshape(-1).numpy().tobytes(order="C")
+        _update_digest_blob(hasher, raw)
+    return hasher.hexdigest()
+
+
+def _update_digest_blob(hasher: Any, value: bytes) -> None:
+    hasher.update(len(value).to_bytes(8, "big"))
+    hasher.update(value)
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+        default=_digest_json_default,
+    ).encode("utf-8")
+
+
+def _digest_json_default(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Unsupported checkpoint metadata type: {type(value).__name__}")
+
+
+@contextmanager
+def _deterministic_training_context(device: torch.device) -> Iterator[dict[str, Any]]:
+    previous_enabled = torch.are_deterministic_algorithms_enabled()
+    previous_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    previous_cpu_rng = torch.get_rng_state()
+    previous_cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    previous_mps_rng = torch.mps.get_rng_state() if torch.backends.mps.is_available() else None
+    previous_cudnn_deterministic = torch.backends.cudnn.deterministic
+    previous_cudnn_benchmark = torch.backends.cudnn.benchmark
+    previous_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+    previous_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    settings = _determinism_payload(device)
+    try:
+        yield settings
+    finally:
+        torch.use_deterministic_algorithms(previous_enabled, warn_only=previous_warn_only)
+        torch.backends.cudnn.deterministic = previous_cudnn_deterministic
+        torch.backends.cudnn.benchmark = previous_cudnn_benchmark
+        torch.backends.cudnn.allow_tf32 = previous_cudnn_tf32
+        torch.backends.cuda.matmul.allow_tf32 = previous_matmul_tf32
+        torch.set_rng_state(previous_cpu_rng)
+        if previous_cuda_rng is not None:
+            torch.cuda.set_rng_state_all(previous_cuda_rng)
+        if previous_mps_rng is not None:
+            torch.mps.set_rng_state(previous_mps_rng)
+
+
+def _determinism_payload(device: torch.device) -> dict[str, Any]:
+    cuda_available = torch.cuda.is_available()
+    mps_available = torch.backends.mps.is_available()
+    selected_cuda_name = None
+    if device.type == "cuda":
+        selected_cuda_name = torch.cuda.get_device_name(device)
+    return {
+        "resolved_device": str(device),
+        "torch_version": str(torch.__version__),
+        "deterministic_algorithms": True,
+        "warn_only": False,
+        "cudnn_deterministic": True,
+        "cudnn_benchmark": False,
+        "cudnn_allow_tf32": False,
+        "cuda_matmul_allow_tf32": False,
+        "backend_context": {
+            "cpu": {
+                "available": True,
+                "threads": int(torch.get_num_threads()),
+                "interop_threads": int(torch.get_num_interop_threads()),
+            },
+            "cuda": {
+                "available": cuda_available,
+                "device_count": int(torch.cuda.device_count()) if cuda_available else 0,
+                "selected_device_name": selected_cuda_name,
+                "runtime_version": torch.version.cuda,
+                "cudnn_version": torch.backends.cudnn.version(),
+            },
+            "mps": {
+                "available": mps_available,
+                "built": bool(torch.backends.mps.is_built()),
+            },
+        },
+    }
+
+
+def _is_production_profile(config: dict[str, Any], parsed: _OracleConfig) -> bool:
+    approved_objects = [
+        ("stepped_monument", 25.0, 1.0),
+        ("crooked_arch", 145.0, 1.0),
+        ("three_arm_vane", 265.0, 1.0),
+    ]
+    raw_objects = config.get("objects")
+    if not isinstance(raw_objects, list) or len(raw_objects) != len(approved_objects):
+        return False
+    observed_objects = []
+    try:
+        for item in raw_objects:
+            observed_objects.append(
+                (str(item["id"]), float(item["hue_degrees"]), float(item.get("scale", 1.0)))
+            )
+    except (KeyError, TypeError, ValueError):
+        return False
+    material = config.get("material", {})
+    render = config.get("render", {})
+    try:
+        canonical_material = (
+            float(material.get("oklch_lightness")) == 0.70
+            and float(material.get("oklch_chroma")) == 0.12
+        )
+        canonical_render = (
+            [float(value) for value in render.get("background", [])] == [1.0, 1.0, 1.0]
+            and float(render.get("camera_distance")) == 4.0
+            and [float(value) for value in render.get("elevation_bounds_degrees", [])]
+            == [-30.0, 30.0]
+            and int(render.get("supersample")) == 3
+            and int(render.get("render_batch_size")) == 128
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        int(config.get("image_size", -1)) == 32
+        and observed_objects == approved_objects
+        and canonical_material
+        and canonical_render
+        and parsed.train_per_object == 30_000
+        and parsed.validation_per_object == 5_000
+        and parsed.batch_size == 256
+        and parsed.steps == 20_000
+        and parsed.learning_rate == 1.0e-3
+        and parsed.min_accuracy == 0.99
+        and parsed.max_factor_mae == 0.02
+    )
 
 
 def _validate_model_input(images: torch.Tensor, model: nn.Module) -> None:
@@ -790,10 +1028,15 @@ def _resolve_device(device: str | torch.device) -> torch.device:
         raise ValueError(f"Invalid oracle device: {device!r}") from exc
     if resolved.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("Requested CUDA device is unavailable.")
+    if resolved.type == "cuda" and resolved.index is not None:
+        if resolved.index < 0 or resolved.index >= torch.cuda.device_count():
+            raise ValueError(f"Requested CUDA device index is unavailable: {resolved}")
     if resolved.type == "mps" and not torch.backends.mps.is_available():
         raise ValueError("Requested MPS device is unavailable.")
     if resolved.type not in {"cpu", "cuda", "mps"}:
         raise ValueError(f"Unsupported oracle device type: {resolved.type}")
+    if resolved.type in {"cpu", "mps"} and resolved.index not in {None, 0}:
+        raise ValueError(f"Unsupported oracle device index: {resolved}")
     return resolved
 
 

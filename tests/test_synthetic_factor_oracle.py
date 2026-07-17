@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 import torch
 
+import fm_lab.geometry_explorer.synthetic_factor_oracle as oracle_module
 from fm_lab.geometry_explorer.synthetic_factor_oracle import (
     FACTOR_NAMES,
     SyntheticFactorOracle,
@@ -142,11 +144,17 @@ def test_tiny_training_writes_reproducible_checkpoint_and_complete_gate(
     assert result["checkpoint_path"] == str(checkpoint_path)
     assert result["gate_path"] == str(gate_path)
     assert checkpoint_path.is_file()
+    assert output_dir.is_symlink()
     gate = json.loads(gate_path.read_text(encoding="utf-8"))
     assert set(gate["factor_mae"]) == set(FACTOR_NAMES)
     assert gate["validation_rerender_pixel_mae_q995"] >= 0.0
     assert gate["off_renderer_threshold"] == gate["validation_rerender_pixel_mae_q995"]
     assert isinstance(gate["failure_reasons"], list)
+    assert gate["gate_profile"] == "fixture_only"
+    assert gate["configured_gate_passed"] is True
+    assert gate["production_qualified"] is False
+    assert gate["passed"] is False
+    assert len(gate["checkpoint_artifact_digest"]) == 64
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     assert payload["architecture"] == {
@@ -156,6 +164,7 @@ def test_tiny_training_writes_reproducible_checkpoint_and_complete_gate(
         "feature_dim": 256,
     }
     assert payload["seed"] == 17
+    assert payload["artifact_digest"] == gate["checkpoint_artifact_digest"]
     assert len(payload["renderer_config_hash"]) == 64
     assert payload["data_provenance"]["master_pool_reads"] == 0
     assert payload["data_provenance"]["training_samples_per_object"] == 2
@@ -168,6 +177,9 @@ def test_tiny_training_writes_reproducible_checkpoint_and_complete_gate(
     assert payload["factor_normalization"]["elevation"]["world_range_radians"] == pytest.approx(
         [-math.pi / 6.0, math.pi / 6.0]
     )
+    assert payload["determinism"]["resolved_device"] == "cpu"
+    assert payload["determinism"]["deterministic_algorithms"] is True
+    assert payload["determinism"]["backend_context"]["cpu"]["available"] is True
 
     restored = load_factor_oracle(checkpoint_path, "cpu")
     expected = restored(torch.zeros(1, 3, 8, 8))
@@ -187,6 +199,41 @@ def test_training_is_deterministic_and_independent_of_master_pool_files(
     right = load_factor_oracle(second["checkpoint_path"], "cpu").state_dict()
     assert all(torch.equal(left[name], right[name]) for name in left)
     assert first["metrics"] == second["metrics"]
+    first_payload = torch.load(first["checkpoint_path"], map_location="cpu", weights_only=True)
+    second_payload = torch.load(second["checkpoint_path"], map_location="cpu", weights_only=True)
+    assert first_payload["artifact_digest"] == second_payload["artifact_digest"]
+
+
+def test_training_scopes_deterministic_backend_settings(tmp_path: Path) -> None:
+    before_enabled = torch.are_deterministic_algorithms_enabled()
+    before_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+
+    result = train_factor_oracle(_config(), tmp_path / "oracle", "cpu")
+
+    assert torch.are_deterministic_algorithms_enabled() is before_enabled
+    assert torch.is_deterministic_algorithms_warn_only_enabled() is before_warn_only
+    payload = torch.load(result["checkpoint_path"], map_location="cpu", weights_only=True)
+    assert payload["determinism"]["resolved_device"] == "cpu"
+    assert payload["determinism"]["deterministic_algorithms"] is True
+    assert payload["determinism"]["warn_only"] is False
+
+
+def test_production_profile_requires_every_frozen_scientific_setting() -> None:
+    config = _config(
+        training_samples_per_object=30_000,
+        validation_samples_per_object=5_000,
+        batch_size=256,
+        steps=20_000,
+        min_object_accuracy=0.99,
+        max_normalized_factor_mae=0.02,
+    )
+    config["image_size"] = 32
+    config["render"]["supersample"] = 3
+    config["render"]["render_batch_size"] = 128
+    assert oracle_module._is_production_profile(config, oracle_module._parse_config(config))
+
+    config["render"]["background"] = [0.99, 1.0, 1.0]
+    assert not oracle_module._is_production_profile(config, oracle_module._parse_config(config))
 
 
 def test_training_refuses_overwrite_without_mutating_artifacts(tmp_path: Path) -> None:
@@ -198,6 +245,33 @@ def test_training_refuses_overwrite_without_mutating_artifacts(tmp_path: Path) -
         train_factor_oracle(_config(), output_dir, "cpu")
 
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == before
+
+
+def test_training_refuses_publication_race_and_cleans_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "raced-oracle"
+    original_symlink = oracle_module.os.symlink
+
+    def race_destination(
+        target: str,
+        link_name: Path,
+        *,
+        target_is_directory: bool,
+    ) -> None:
+        output_dir.mkdir()
+        (output_dir / "sentinel.txt").write_text("preserve me", encoding="utf-8")
+        original_symlink(target, link_name, target_is_directory=target_is_directory)
+
+    monkeypatch.setattr(oracle_module.os, "symlink", race_destination)
+    with pytest.raises(FileExistsError):
+        train_factor_oracle(_config(), output_dir, "cpu")
+
+    assert (output_dir / "sentinel.txt").read_text(encoding="utf-8") == "preserve me"
+    assert not (output_dir / "factor_oracle.pt").exists()
+    assert not (output_dir / "oracle_gate.json").exists()
+    assert not list(tmp_path.glob(".raced-oracle-*"))
 
 
 @pytest.mark.parametrize(
@@ -235,6 +309,11 @@ def test_training_rejects_invalid_elevation_ranges_and_unavailable_device(
     with pytest.raises(ValueError, match="unavailable"):
         train_factor_oracle(_config(), tmp_path / "bad-device", unavailable)
 
+    with pytest.raises(ValueError, match="Unsupported oracle device"):
+        train_factor_oracle(_config(), tmp_path / "bad-meta", "meta")
+    with pytest.raises(ValueError, match="Unsupported oracle device"):
+        train_factor_oracle(_config(), tmp_path / "bad-cpu-index", "cpu:1")
+
 
 @pytest.mark.parametrize(
     ("field", "value"),
@@ -265,12 +344,63 @@ def test_load_rejects_checkpoint_schema_and_renderer_hash_mismatch(tmp_path: Pat
     malformed.pop("factor_normalization")
     malformed_path = tmp_path / "malformed.pt"
     torch.save(malformed, malformed_path)
-    with pytest.raises(ValueError, match="factor_normalization"):
+    with pytest.raises(ValueError, match="artifact digest"):
         load_factor_oracle(malformed_path, "cpu")
 
     bad_hash = dict(payload)
     bad_hash["renderer_config_hash"] = "0" * 64
     bad_hash_path = tmp_path / "bad-hash.pt"
     torch.save(bad_hash, bad_hash_path)
-    with pytest.raises(ValueError, match="renderer config hash"):
+    with pytest.raises(ValueError, match="artifact digest"):
         load_factor_oracle(bad_hash_path, "cpu")
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "schema_version",
+        "architecture",
+        "renderer_config",
+        "seed",
+        "factor_normalization",
+        "object_ids",
+        "training_config",
+        "config",
+        "data_provenance",
+        "metrics",
+        "determinism",
+    ],
+)
+def test_load_rejects_tampering_in_every_major_checkpoint_section(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    result = train_factor_oracle(_config(), tmp_path / "oracle", "cpu")
+    payload = torch.load(result["checkpoint_path"], map_location="cpu", weights_only=True)
+    tampered = copy.deepcopy(payload)
+    if field == "seed":
+        tampered[field] += 1
+    elif field == "schema_version":
+        tampered[field] += 1
+    elif isinstance(tampered[field], list):
+        tampered[field] = list(reversed(tampered[field]))
+    else:
+        tampered[field]["tampered"] = True
+    path = tmp_path / f"tampered-{field}.pt"
+    torch.save(tampered, path)
+
+    with pytest.raises(ValueError, match="artifact digest"):
+        load_factor_oracle(path, "cpu")
+
+
+def test_load_rejects_same_shape_tensor_tampering(tmp_path: Path) -> None:
+    result = train_factor_oracle(_config(), tmp_path / "oracle", "cpu")
+    payload = torch.load(result["checkpoint_path"], map_location="cpu", weights_only=True)
+    tampered = copy.deepcopy(payload)
+    name = next(iter(tampered["model_state_dict"]))
+    tampered["model_state_dict"][name].view(-1)[0] += 1.0
+    path = tmp_path / "tampered-tensor.pt"
+    torch.save(tampered, path)
+
+    with pytest.raises(ValueError, match="artifact digest"):
+        load_factor_oracle(path, "cpu")
