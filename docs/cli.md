@@ -48,8 +48,24 @@ When adding or changing a CLI:
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
+| `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
 | `fm-lab-long-tail-geometry-stage0` | Validate the counterfactual long-tail observation pipeline before measurement runs. | Ordinary-FM checkpoint and Stage-0 YAML config | fail-closed report, paired probe manifests, validated gradient rows |
 | `fm-lab-long-tail-geometry-observation0` | Establish the reproducible-gradient noise ceiling before any mapping experiment. | Locked Observation-0 preregistration and three raw-checkpoint runs | immutable manifests, checkpoint sketches, reliability table, noise-ceiling decision |
+
+## `fm-lab-synthetic-long-tail`
+
+Execute the preregistered synthetic study one gated stage at a time. Use `plan` or
+`matrix --dry-run` to inspect the frozen 36-run matrix without starting a process.
+
+```bash
+fm-lab-synthetic-long-tail \
+  --config configs/synthetic_long_tail_geometry/experiment.yaml \
+  matrix --dry-run
+```
+
+The stage commands are `plan`, `build-pools`, `calibrate-renderer`, `train-oracle`,
+`pilot`, `smoke`, `matrix`, `evaluate`, `aggregate`, and `report`. Downstream training
+fails closed when renderer, oracle, metric-control, or pilot gates are absent or failed.
 
 ## `fm-lab-long-tail-geometry-stage0`
 
