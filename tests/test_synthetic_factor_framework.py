@@ -5,6 +5,7 @@ import numpy as np
 from fm_lab.geometry_explorer.latent_factors import (
     AmbientLightInterval,
     AzimuthCircle,
+    BoundedLookAtView,
     BoundedTranslation,
     CameraDepthTranslationInterval,
     CameraIntrinsicsFactor,
@@ -120,6 +121,46 @@ def test_primitive_factor_spaces_sample_retract_and_distance() -> None:
             factor.distance(values[0], values[1]),
             factor.distance(values[1], values[0]),
         )
+
+
+def test_bounded_look_at_view_samples_area_uniform_band_and_retracts() -> None:
+    factor = BoundedLookAtView(elevation_bounds=(-np.pi / 6, np.pi / 6))
+    values = np.asarray(sample_values(factor.sample(20_000, seed=7)))
+
+    assert values.shape == (20_000, 2)
+    assert np.all(values[:, 0] >= -np.pi)
+    assert np.all(values[:, 0] < np.pi)
+    assert np.all(values[:, 1] >= -0.5)
+    assert np.all(values[:, 1] <= 0.5)
+    assert abs(float(values[:, 1].mean())) < 0.01
+    assert factor.dim == 2
+    assert factor.tangent_labels(values[0]) == [
+        "camera_azimuth",
+        "camera_elevation",
+    ]
+
+    retracted = factor.retract(
+        np.asarray([np.pi - 0.1, 0.45], dtype=np.float32),
+        np.asarray([1.0, 1.0], dtype=np.float32),
+        eps=0.2,
+    )
+    assert np.isclose(retracted[0], -np.pi + 0.1)
+    assert np.isclose(retracted[1], 0.5)
+
+
+def test_render_map_applies_bounded_look_at_view() -> None:
+    factor = BoundedLookAtView(elevation_bounds=(-np.pi / 6, np.pi / 6))
+    render_map = RenderMap(
+        factor,
+        object_name="offset_monument",
+        config=RenderConfig(image_size=32, render_mode="silhouette"),
+    )
+    front = render_map.render(np.asarray([0.0, 0.0], dtype=np.float32))
+    side = render_map.render(np.asarray([np.pi / 2, 0.0], dtype=np.float32))
+    high = render_map.render(np.asarray([0.0, 0.5], dtype=np.float32))
+
+    assert np.mean(np.abs(front - side)) > 0.01
+    assert np.mean(np.abs(front - high)) > 0.01
 
 
 def test_product_factor_space_preserves_block_structure_metadata() -> None:

@@ -11,6 +11,7 @@ import numpy as np
 from fm_lab.geometry_explorer.latent_factors import (
     AmbientLightInterval,
     AzimuthCircle,
+    BoundedLookAtView,
     BoundedTranslation,
     CameraDepthTranslationInterval,
     CameraLocalTranslation,
@@ -236,6 +237,19 @@ class RenderMap:
             return
         if isinstance(factor, ImageLogExposureInterval):
             controls.image_exposure = math.exp(float(z))
+            return
+        if isinstance(factor, BoundedLookAtView):
+            azimuth, sin_elevation = np.asarray(z, dtype=np.float64)
+            elevation = math.asin(float(np.clip(sin_elevation, -1.0, 1.0)))
+            cos_elevation = math.cos(elevation)
+            controls.camera_direction = np.asarray(
+                [
+                    cos_elevation * math.cos(float(azimuth)),
+                    cos_elevation * math.sin(float(azimuth)),
+                    math.sin(elevation),
+                ],
+                dtype=np.float64,
+            )
             return
         if isinstance(factor, LookAtViewSphere):
             controls.camera_direction = _unit3(z)

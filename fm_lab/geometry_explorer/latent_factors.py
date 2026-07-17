@@ -167,6 +167,82 @@ class LookAtViewSphere(LatentFactorSpace):
 
 
 @dataclass(frozen=True)
+class BoundedLookAtView(LatentFactorSpace):
+    """Look-at camera direction within an elevation band, without roll."""
+
+    elevation_bounds: tuple[float, float] = (-math.pi / 6.0, math.pi / 6.0)
+    name: str = "bounded_look_at_view"
+    dim: int = 2
+    factor_names: tuple[str, ...] = ("camera_view",)
+    factor_dims: tuple[int, ...] = (2,)
+
+    def __post_init__(self) -> None:
+        low, high = (float(value) for value in self.elevation_bounds)
+        if not -math.pi / 2.0 < low < high < math.pi / 2.0:
+            raise ValueError("elevation_bounds must lie inside (-pi/2, pi/2).")
+
+    def sample(self, n: int, seed: int | None = None) -> LatentSample:
+        rng = np.random.default_rng(seed)
+        low, high = self.elevation_bounds
+        values = np.column_stack(
+            [
+                rng.uniform(-math.pi, math.pi, int(n)),
+                rng.uniform(math.sin(low), math.sin(high), int(n)),
+            ]
+        ).astype(np.float32)
+        return LatentSample(values=values, metadata=_columns(self, values))
+
+    def tangent_basis(self, z: Any) -> np.ndarray:
+        del z
+        return np.eye(2, dtype=np.float32)
+
+    def tangent_labels(self, z: Any | None = None) -> list[str]:
+        del z
+        return ["camera_azimuth", "camera_elevation"]
+
+    def retract(self, z: Any, tangent_vec: Any, eps: float) -> np.ndarray:
+        value = np.asarray(z, dtype=np.float64) + eps * np.asarray(tangent_vec)
+        value[0] = (value[0] + math.pi) % (2.0 * math.pi) - math.pi
+        low, high = self.elevation_bounds
+        value[1] = np.clip(value[1], math.sin(low), math.sin(high))
+        return value.astype(np.float32)
+
+    def distance(self, z1: Any, z2: Any) -> float:
+        first = np.asarray(z1, dtype=np.float64)
+        second = np.asarray(z2, dtype=np.float64)
+        azimuth = abs(first[0] - second[0])
+        azimuth = min(azimuth, 2.0 * math.pi - azimuth)
+        return float(np.hypot(azimuth, first[1] - second[1]))
+
+    def coordinates(self, z: Any) -> dict[str, float]:
+        azimuth, sin_elevation = np.asarray(z, dtype=np.float64)
+        return {
+            "camera_azimuth": float(azimuth),
+            "camera_elevation": float(math.asin(np.clip(sin_elevation, -1.0, 1.0))),
+        }
+
+    def bins(self, z: Any, num_bins: int = 36) -> dict[str, str]:
+        coordinates = self.coordinates(z)
+        azimuth_bin = _linear_bin(
+            coordinates["camera_azimuth"],
+            (-math.pi, math.pi),
+            bins=num_bins,
+        )
+        elevation_bin = _linear_bin(
+            coordinates["camera_elevation"],
+            self.elevation_bounds,
+            bins=num_bins,
+        )
+        label_id = azimuth_bin * num_bins + elevation_bin
+        return {
+            "label": f"bounded_view_bin_{label_id:04d}",
+            "label_id": str(label_id),
+            "camera_azimuth_bin": str(azimuth_bin),
+            "camera_elevation_bin": str(elevation_bin),
+        }
+
+
+@dataclass(frozen=True)
 class LightingDirectionSphere(LookAtViewSphere):
     """Directional light factor on S^2."""
 
