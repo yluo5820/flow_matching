@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -55,9 +56,21 @@ _CLASS_CSV_FIELDS = (
     "reference_seed",
     "generated_seed",
     "source_revision",
+    "generated_samples_path",
+    "generated_labels_path",
     "generated_samples_sha256",
     "generated_labels_sha256",
+    "oracle_checkpoint_path",
+    "oracle_checkpoint_file_sha256",
     "oracle_checkpoint_digest",
+    "oracle_gate_path",
+    "oracle_gate_file_sha256",
+    "oracle_gate_profile",
+    "oracle_production_qualified",
+    "oracle_configured_gate_passed",
+    "oracle_seed",
+    "oracle_data_provenance_json",
+    "factor_normalization_json",
     "renderer_config_hash",
     *(f"all_{name}_normalized_wasserstein" for name in FACTOR_NAMES),
     *(f"all_{name}_central_range_ratio" for name in FACTOR_NAMES),
@@ -147,8 +160,18 @@ def multivariate_energy_distance(
     cross = float(cdist(generated_values, reference_values).mean())
     within_generated = float(cdist(generated_values, generated_values).mean())
     within_reference = float(cdist(reference_values, reference_values).mean())
-    value = 2.0 * cross - within_generated - within_reference
-    return float(max(value, 0.0))
+    terms = np.asarray([2.0 * cross, within_generated, within_reference], dtype=np.float64)
+    if not bool(np.all(np.isfinite(terms))):
+        raise ValueError("energy distance backend results must be finite.")
+    value = float(terms[0] - terms[1] - terms[2])
+    scale = max(float(np.max(np.abs(terms))), 1.0)
+    tolerance = 64.0 * np.finfo(np.float64).eps * scale
+    if value < -tolerance:
+        raise ValueError(
+            "energy distance statistic is materially negative: "
+            f"{value} (roundoff tolerance {tolerance})."
+        )
+    return 0.0 if value < 0.0 else value
 
 
 def oracle_feature_fid(generated: np.ndarray, reference: np.ndarray) -> float:
@@ -233,12 +256,14 @@ def evaluate_generated_distribution(
     batch_size = _positive_integer(inference_batch_size, "inference_batch_size")
     revision = _nonempty_string(source_revision, "source_revision")
     samples_path, labels_path = _generated_paths(generated_root)
-    samples = _load_numeric_array(samples_path, "generated samples")
-    requested_labels = _load_requested_labels(labels_path, count)
+    samples_snapshot = _snapshot_file(samples_path, "generated samples")
+    labels_snapshot = _snapshot_file(labels_path, "generated labels")
+    samples = _load_numeric_snapshot(samples_snapshot, "generated samples")
+    requested_labels = _load_requested_labels(labels_snapshot, count)
     if len(samples) != len(requested_labels):
         raise ValueError("generated samples and requested labels must have matching lengths.")
 
-    payload, gate, model = _validated_oracle(
+    payload, gate, model, oracle_provenance = _validated_oracle(
         oracle_checkpoint,
         oracle_gate,
         device=device,
@@ -341,11 +366,16 @@ def evaluate_generated_distribution(
         "source_revision": revision,
         "generated_samples_path": str(samples_path),
         "generated_labels_path": str(labels_path),
-        "generated_samples_sha256": _sha256_file(samples_path),
-        "generated_labels_sha256": _sha256_file(labels_path),
-        "oracle_checkpoint_path": str(Path(oracle_checkpoint).expanduser().resolve()),
+        "generated_samples_sha256": samples_snapshot["sha256"],
+        "generated_labels_sha256": labels_snapshot["sha256"],
+        **oracle_provenance,
         "oracle_checkpoint_digest": str(payload["artifact_digest"]),
         "oracle_gate_profile": str(gate["gate_profile"]),
+        "oracle_production_qualified": bool(gate["production_qualified"]),
+        "oracle_configured_gate_passed": bool(gate["configured_gate_passed"]),
+        "oracle_seed": int(payload["seed"]),
+        "oracle_data_provenance": payload["data_provenance"],
+        "factor_normalization": payload["factor_normalization"],
         "renderer_config_hash": str(payload["renderer_config_hash"]),
         "reference_source": "independently_sampled_high_dimensional_renderer",
         "master_pool_reads": 0,
@@ -396,7 +426,7 @@ def calibrate_metric_controls(
     control_seed = _nonnegative_integer(seed, "seed")
     batch_size = _positive_integer(inference_batch_size, "inference_batch_size")
     revision = _nonempty_string(source_revision, "source_revision")
-    payload, gate, model = _validated_oracle(
+    payload, gate, model, oracle_provenance = _validated_oracle(
         oracle_checkpoint,
         oracle_gate,
         device=device,
@@ -405,57 +435,93 @@ def calibrate_metric_controls(
     parsed = _parse_config(payload["config"])
     factor = _factor_space(parsed.elevation_bounds)
     object_configs = _object_configs(payload["config"])
-    base_states: list[tuple[int, Any]] = []
-    for class_id in range(len(OBJECT_IDS)):
-        states = sample_values(factor.sample(count, seed=control_seed + class_id * 1_000))
-        base_states.extend((class_id, state) for state in states)
-    controls = {}
-    rendered_by_control: dict[str, dict[str, np.ndarray]] = {}
-    reference_truth = _control_truth(
-        [state for _, state in base_states], elevation_bounds=parsed.elevation_bounds
+    reference_seed = control_seed
+    control_seeds = {
+        "full": control_seed + 100_000,
+        "half": control_seed + 200_000,
+        "collapsed": control_seed + 300_000,
+    }
+    reference_rows = _sample_control_rows(
+        factor=factor,
+        count_per_class=count,
+        seed=reference_seed,
+        scale=1.0,
     )
+    reference_states = [state for _, state in reference_rows]
+    reference_classes = np.asarray([class_id for class_id, _ in reference_rows], dtype=np.int64)
+    reference_truth = _control_truth(reference_states, elevation_bounds=parsed.elevation_bounds)
+    reference_images = _render_states(
+        reference_states,
+        class_ids=reference_classes,
+        config=payload["config"],
+        object_configs=object_configs,
+        factor=factor,
+    )
+    reference_prediction = _infer(model, reference_images, device=device, batch_size=batch_size)
+    reference_mask = np.ones(len(reference_rows), dtype=bool)
+    controls = {}
     for control_name, scale in (("full", 1.0), ("half", 0.5), ("collapsed", 0.0)):
-        states = [_scaled_state(state, factor=factor, scale=scale) for _, state in base_states]
+        rows = _sample_control_rows(
+            factor=factor,
+            count_per_class=count,
+            seed=control_seeds[control_name],
+            scale=scale,
+        )
+        states = [state for _, state in rows]
+        class_ids = np.asarray([class_id for class_id, _ in rows], dtype=np.int64)
         images = _render_states(
             states,
-            class_ids=np.asarray([class_id for class_id, _ in base_states], dtype=np.int64),
+            class_ids=class_ids,
             config=payload["config"],
             object_configs=object_configs,
             factor=factor,
         )
         prediction = _infer(model, images, device=device, batch_size=batch_size)
         truth = _control_truth(states, elevation_bounds=parsed.elevation_bounds)
-        rendered_by_control[control_name] = prediction
         controls[control_name] = {
-            "factor_truth": _factor_metrics(truth, reference_truth),
-            "oracle_inferred": None,
+            "seed": control_seeds[control_name],
+            "factor_sample_sha256": _array_sha256(_joint_factor_matrix(truth)),
+            "rendered_images_sha256": _array_sha256(images),
+            "latent_truth_diagnostics": _factor_metrics(truth, reference_truth),
+            "oracle_inferred": _metric_bundle(
+                prediction,
+                np.ones(len(rows), dtype=bool),
+                reference_prediction,
+                reference_mask,
+                seed=control_seeds[control_name] + 1,
+            ),
         }
-    reference_prediction = rendered_by_control["full"]
-    full_mask = np.ones(len(base_states), dtype=bool)
-    for index, control_name in enumerate(("full", "half", "collapsed")):
-        prediction = rendered_by_control[control_name]
-        controls[control_name]["oracle_inferred"] = _metric_bundle(
-            prediction,
-            full_mask,
-            reference_prediction,
-            full_mask,
-            seed=control_seed + index,
-        )
     ordering = _control_ordering(controls)
+    reference = {
+        "seed": reference_seed,
+        "factor_sample_sha256": _array_sha256(_joint_factor_matrix(reference_truth)),
+        "rendered_images_sha256": _array_sha256(reference_images),
+    }
     provenance = {
         "control_seed": control_seed,
+        "control_reference_seed": reference_seed,
+        "control_seeds": control_seeds,
+        "control_reference_factor_sha256": reference["factor_sample_sha256"],
+        "control_reference_images_sha256": reference["rendered_images_sha256"],
         "source_revision": revision,
+        **oracle_provenance,
         "oracle_checkpoint_digest": str(payload["artifact_digest"]),
         "oracle_gate_profile": str(gate["gate_profile"]),
+        "oracle_production_qualified": bool(gate["production_qualified"]),
+        "oracle_configured_gate_passed": bool(gate["configured_gate_passed"]),
+        "oracle_seed": int(payload["seed"]),
+        "oracle_data_provenance": payload["data_provenance"],
+        "factor_normalization": payload["factor_normalization"],
         "renderer_config_hash": str(payload["renderer_config_hash"]),
         "reference_source": "independently_sampled_high_dimensional_renderer",
         "master_pool_reads": 0,
     }
     result = {
         "schema_version": 1,
-        "rendered_samples_per_control": len(base_states),
+        "rendered_samples_per_control": len(reference_rows),
         "samples_per_class": count,
         "provenance": provenance,
+        "reference": reference,
         "controls": controls,
         "control_ordering": ordering,
         "artifacts": {
@@ -496,11 +562,27 @@ def _generated_paths(root: str | Path) -> tuple[Path, Path]:
     return samples_path, labels_path
 
 
-def _load_numeric_array(path: Path, label: str) -> np.ndarray:
+def _snapshot_file(path: Path, label: str) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"{label.capitalize()} does not exist: {resolved}")
+    before = _sha256_file(resolved)
     try:
-        values = np.load(path, allow_pickle=False)
+        data = resolved.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"Unable to snapshot {label}: {resolved}") from exc
+    snapshot_hash = hashlib.sha256(data).hexdigest()
+    after = _sha256_file(resolved)
+    if before != snapshot_hash or snapshot_hash != after:
+        raise ValueError(f"{label.capitalize()} changed while being snapshotted: {resolved}")
+    return {"path": resolved, "bytes": data, "sha256": snapshot_hash}
+
+
+def _load_numeric_snapshot(snapshot: Mapping[str, Any], label: str) -> np.ndarray:
+    try:
+        values = np.load(io.BytesIO(snapshot["bytes"]), allow_pickle=False)
     except (OSError, ValueError) as exc:
-        raise ValueError(f"Unable to load {label}: {path}") from exc
+        raise ValueError(f"Unable to load {label}: {snapshot['path']}") from exc
     if not isinstance(values, np.ndarray) or values.ndim < 1 or len(values) == 0:
         raise ValueError(f"{label} must be a non-empty numpy array.")
     if not np.issubdtype(values.dtype, np.number):
@@ -510,8 +592,8 @@ def _load_numeric_array(path: Path, label: str) -> np.ndarray:
     return values
 
 
-def _load_requested_labels(path: Path, samples_per_class: int) -> np.ndarray:
-    labels = _load_numeric_array(path, "generated labels")
+def _load_requested_labels(snapshot: Mapping[str, Any], samples_per_class: int) -> np.ndarray:
+    labels = _load_numeric_snapshot(snapshot, "generated labels")
     if labels.ndim != 1:
         raise ValueError("generated labels must have shape (N,).")
     if not np.issubdtype(labels.dtype, np.integer):
@@ -538,23 +620,40 @@ def _validated_oracle(
     *,
     device: str | torch.device,
     required_gate_profile: str,
-) -> tuple[dict[str, Any], dict[str, Any], torch.nn.Module]:
+) -> tuple[dict[str, Any], dict[str, Any], torch.nn.Module, dict[str, Any]]:
     profile = _nonempty_string(required_gate_profile, "required_gate_profile")
+    if profile not in {"production", "fixture_only"}:
+        raise ValueError("required_gate_profile must be 'production' or 'fixture_only'.")
     checkpoint_path = Path(checkpoint).expanduser().resolve()
     gate_file = Path(gate_path).expanduser().resolve()
-    if not gate_file.is_file():
-        raise FileNotFoundError(f"Oracle gate does not exist: {gate_file}")
+    checkpoint_snapshot = _snapshot_file(checkpoint_path, "oracle checkpoint")
+    gate_snapshot = _snapshot_file(gate_file, "oracle gate")
     try:
-        gate = json.loads(gate_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        gate = json.loads(gate_snapshot["bytes"].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"Oracle gate is not valid JSON: {gate_file}") from exc
     if not isinstance(gate, dict):
         raise ValueError("Oracle gate payload must be a dictionary.")
-    model = load_factor_oracle(checkpoint_path, device)
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    try:
+        payload = torch.load(
+            io.BytesIO(checkpoint_snapshot["bytes"]),
+            map_location="cpu",
+            weights_only=True,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        raise ValueError("Oracle checkpoint snapshot cannot be loaded.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Oracle checkpoint snapshot must contain a dictionary.")
     digest = payload.get("artifact_digest")
     if gate.get("checkpoint_artifact_digest") != digest:
         raise ValueError("Oracle gate checkpoint digest does not match the checkpoint.")
+    checkpoint_metrics = payload.get("metrics")
+    if not isinstance(checkpoint_metrics, dict):
+        raise ValueError("Oracle checkpoint metrics must be a dictionary.")
+    expected_gate = dict(checkpoint_metrics)
+    expected_gate["checkpoint_artifact_digest"] = digest
+    if gate != expected_gate:
+        raise ValueError("Oracle gate must exactly match checkpoint metrics plus its digest.")
     if gate.get("renderer_config_hash") != payload.get("renderer_config_hash"):
         raise ValueError("Oracle gate renderer config hash does not match the checkpoint.")
     if gate.get("gate_profile") != profile:
@@ -562,7 +661,11 @@ def _validated_oracle(
             f"Oracle gate_profile must be {profile!r}; found {gate.get('gate_profile')!r}."
         )
     if profile == "production":
-        if gate.get("production_qualified") is not True or gate.get("passed") is not True:
+        if (
+            checkpoint_metrics.get("gate_profile") != "production"
+            or checkpoint_metrics.get("production_qualified") is not True
+            or checkpoint_metrics.get("passed") is not True
+        ):
             raise ValueError("Oracle is not production-qualified.")
     elif gate.get("configured_gate_passed") is not True:
         raise ValueError("Oracle did not pass its configured fixture gate.")
@@ -571,7 +674,22 @@ def _validated_oracle(
         raise ValueError("Oracle gate off_renderer_threshold is missing or invalid.")
     if not np.isfinite(threshold) or float(threshold) < 0.0:
         raise ValueError("Oracle gate off_renderer_threshold must be finite and non-negative.")
-    return payload, gate, model
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as handle:
+            handle.write(checkpoint_snapshot["bytes"])
+            temporary_path = Path(handle.name)
+        model = load_factor_oracle(temporary_path, device)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    provenance = {
+        "oracle_checkpoint_path": str(checkpoint_snapshot["path"]),
+        "oracle_checkpoint_file_sha256": checkpoint_snapshot["sha256"],
+        "oracle_gate_path": str(gate_snapshot["path"]),
+        "oracle_gate_file_sha256": gate_snapshot["sha256"],
+    }
+    return payload, gate, model, provenance
 
 
 def _normalize_generated_images(
@@ -795,9 +913,27 @@ def _class_csv_row(item: Mapping[str, Any], provenance: Mapping[str, Any]) -> di
         "reference_seed": provenance["reference_seed"],
         "generated_seed": provenance["generated_seed"],
         "source_revision": provenance["source_revision"],
+        "generated_samples_path": provenance["generated_samples_path"],
+        "generated_labels_path": provenance["generated_labels_path"],
         "generated_samples_sha256": provenance["generated_samples_sha256"],
         "generated_labels_sha256": provenance["generated_labels_sha256"],
+        "oracle_checkpoint_path": provenance["oracle_checkpoint_path"],
+        "oracle_checkpoint_file_sha256": provenance["oracle_checkpoint_file_sha256"],
         "oracle_checkpoint_digest": provenance["oracle_checkpoint_digest"],
+        "oracle_gate_path": provenance["oracle_gate_path"],
+        "oracle_gate_file_sha256": provenance["oracle_gate_file_sha256"],
+        "oracle_gate_profile": provenance["oracle_gate_profile"],
+        "oracle_production_qualified": provenance["oracle_production_qualified"],
+        "oracle_configured_gate_passed": provenance["oracle_configured_gate_passed"],
+        "oracle_seed": provenance["oracle_seed"],
+        "oracle_data_provenance_json": json.dumps(
+            provenance["oracle_data_provenance"],
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "factor_normalization_json": json.dumps(
+            provenance["factor_normalization"], sort_keys=True, separators=(",", ":")
+        ),
         "renderer_config_hash": provenance["renderer_config_hash"],
         "all_multivariate_energy_distance": all_metrics["multivariate_energy_distance"],
         "joint_multivariate_energy_distance": (
@@ -832,6 +968,22 @@ def _scaled_state(state: Any, *, factor: Any, scale: float) -> dict[str, np.ndar
         dtype=np.float32,
     )
     return {translation_key: translation, view_key: view}
+
+
+def _sample_control_rows(
+    *,
+    factor: Any,
+    count_per_class: int,
+    seed: int,
+    scale: float,
+) -> list[tuple[int, dict[str, np.ndarray]]]:
+    rows = []
+    for class_id in range(len(OBJECT_IDS)):
+        states = sample_values(factor.sample(count_per_class, seed=seed + class_id * 1_000))
+        rows.extend(
+            (class_id, _scaled_state(state, factor=factor, scale=scale)) for state in states
+        )
+    return rows
 
 
 def _render_states(
@@ -879,18 +1031,25 @@ def _control_ordering(controls: Mapping[str, Any]) -> dict[str, Any]:
     checks = {}
     for name in FACTOR_NAMES:
         errors = [
-            controls[control]["factor_truth"][name]["normalized_wasserstein"]
+            controls[control]["oracle_inferred"]["factor_metrics"][name]["normalized_wasserstein"]
             for control in ("full", "half", "collapsed")
         ]
         coverage = [
-            controls[control]["factor_truth"][name]["central_range_ratio"]
+            controls[control]["oracle_inferred"]["factor_metrics"][name]["central_range_ratio"]
             for control in ("full", "half", "collapsed")
         ]
         checks[name] = {
             "error_full_lt_half_lt_collapsed": errors[0] < errors[1] < errors[2],
             "coverage_full_gt_half_gt_collapsed": coverage[0] > coverage[1] > coverage[2],
         }
+    for metric in ("multivariate_energy_distance", "oracle_feature_fid"):
+        values = [
+            controls[control]["oracle_inferred"][metric]
+            for control in ("full", "half", "collapsed")
+        ]
+        checks[metric] = {"full_lt_half_lt_collapsed": values[0] < values[1] < values[2]}
     return {
+        "metric_source": "oracle_predictions",
         "passed": all(all(values.values()) for values in checks.values()),
         "checks": checks,
     }
@@ -906,15 +1065,43 @@ def _control_csv_rows(
         row = {
             "control": control_name,
             "samples_per_class": samples_per_class,
-            "control_seed": provenance["control_seed"],
+            "control_reference_seed": provenance["control_reference_seed"],
+            "control_seed": provenance["control_seeds"][control_name],
+            "control_reference_factor_sha256": provenance["control_reference_factor_sha256"],
+            "control_reference_images_sha256": provenance["control_reference_images_sha256"],
+            "control_factor_sha256": controls[control_name]["factor_sample_sha256"],
+            "control_images_sha256": controls[control_name]["rendered_images_sha256"],
             "source_revision": provenance["source_revision"],
+            "oracle_checkpoint_path": provenance["oracle_checkpoint_path"],
+            "oracle_checkpoint_file_sha256": provenance["oracle_checkpoint_file_sha256"],
             "oracle_checkpoint_digest": provenance["oracle_checkpoint_digest"],
+            "oracle_gate_path": provenance["oracle_gate_path"],
+            "oracle_gate_file_sha256": provenance["oracle_gate_file_sha256"],
+            "oracle_gate_profile": provenance["oracle_gate_profile"],
+            "oracle_production_qualified": provenance["oracle_production_qualified"],
+            "oracle_configured_gate_passed": provenance["oracle_configured_gate_passed"],
+            "oracle_seed": provenance["oracle_seed"],
+            "oracle_data_provenance_json": json.dumps(
+                provenance["oracle_data_provenance"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "factor_normalization_json": json.dumps(
+                provenance["factor_normalization"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "renderer_config_hash": provenance["renderer_config_hash"],
         }
         for name in FACTOR_NAMES:
-            values = controls[control_name]["factor_truth"][name]
-            row[f"{name}_normalized_wasserstein"] = values["normalized_wasserstein"]
-            row[f"{name}_central_range_ratio"] = values["central_range_ratio"]
+            inferred = controls[control_name]["oracle_inferred"]["factor_metrics"][name]
+            diagnostic = controls[control_name]["latent_truth_diagnostics"][name]
+            row[f"{name}_normalized_wasserstein"] = inferred["normalized_wasserstein"]
+            row[f"{name}_central_range_ratio"] = inferred["central_range_ratio"]
+            row[f"truth_diagnostic_{name}_normalized_wasserstein"] = diagnostic[
+                "normalized_wasserstein"
+            ]
+            row[f"truth_diagnostic_{name}_central_range_ratio"] = diagnostic["central_range_ratio"]
         oracle_metrics = controls[control_name]["oracle_inferred"]
         row["oracle_multivariate_energy_distance"] = oracle_metrics["multivariate_energy_distance"]
         row["oracle_feature_fid"] = oracle_metrics["oracle_feature_fid"]
@@ -957,6 +1144,16 @@ def _sha256_file(path: Path) -> str:
     with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
             hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _array_sha256(values: np.ndarray) -> str:
+    array = np.asarray(values)
+    contiguous = np.ascontiguousarray(array)
+    hasher = hashlib.sha256()
+    hasher.update(str(contiguous.dtype).encode("ascii"))
+    hasher.update(json.dumps(list(contiguous.shape), separators=(",", ":")).encode("ascii"))
+    hasher.update(contiguous.view(np.uint8).reshape(-1).tobytes())
     return hasher.hexdigest()
 
 
