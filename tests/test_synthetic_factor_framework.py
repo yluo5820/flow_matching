@@ -124,15 +124,25 @@ def test_primitive_factor_spaces_sample_retract_and_distance() -> None:
 
 
 def test_bounded_look_at_view_samples_area_uniform_band_and_retracts() -> None:
-    factor = BoundedLookAtView(elevation_bounds=(-np.pi / 6, np.pi / 6))
+    elevation_bounds = (-np.pi / 6, np.pi / 3)
+    factor = BoundedLookAtView(elevation_bounds=elevation_bounds)
     values = np.asarray(sample_values(factor.sample(20_000, seed=7)))
+    sin_bounds = np.sin(elevation_bounds)
+    expected_quartiles = sin_bounds[0] + (sin_bounds[1] - sin_bounds[0]) * np.asarray(
+        [0.25, 0.75]
+    )
 
     assert values.shape == (20_000, 2)
     assert np.all(values[:, 0] >= -np.pi)
     assert np.all(values[:, 0] < np.pi)
-    assert np.all(values[:, 1] >= -0.5)
-    assert np.all(values[:, 1] <= 0.5)
-    assert abs(float(values[:, 1].mean())) < 0.01
+    assert np.all(values[:, 1] >= sin_bounds[0])
+    assert np.all(values[:, 1] <= sin_bounds[1])
+    assert abs(float(values[:, 1].mean()) - float(np.mean(sin_bounds))) < 0.01
+    assert np.allclose(
+        np.quantile(values[:, 1], [0.25, 0.75]),
+        expected_quartiles,
+        atol=0.015,
+    )
     assert factor.dim == 2
     assert factor.tangent_labels(values[0]) == [
         "camera_azimuth",
@@ -141,11 +151,11 @@ def test_bounded_look_at_view_samples_area_uniform_band_and_retracts() -> None:
 
     retracted = factor.retract(
         np.asarray([np.pi - 0.1, 0.45], dtype=np.float32),
-        np.asarray([1.0, 1.0], dtype=np.float32),
+        np.asarray([1.0, 3.0], dtype=np.float32),
         eps=0.2,
     )
     assert np.isclose(retracted[0], -np.pi + 0.1)
-    assert np.isclose(retracted[1], 0.5)
+    assert np.isclose(retracted[1], sin_bounds[1])
 
 
 def test_render_map_applies_bounded_look_at_view() -> None:
