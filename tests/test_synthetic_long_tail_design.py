@@ -11,6 +11,8 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     FACTOR_COLUMNS,
     OBJECT_IDS,
     ConditionManifest,
+    _object_configs,
+    _render_map,
     build_condition_manifests,
     build_condition_specs,
     build_factor_space,
@@ -43,6 +45,35 @@ def _design_config(
             "render_batch_size": 8,
         },
     }
+
+
+def test_render_map_applies_frozen_common_lighting() -> None:
+    config = _design_config(master_count=2, counts=(2, 1, 1), image_size=8)
+    config["render"].update(
+        {
+            "ambient": 0.8,
+            "diffuse": 0.2,
+            "light_energy": 300.0,
+            "light_position": [2.0, -3.0, 4.0],
+        }
+    )
+    objects = _object_configs(config)
+
+    render_map = _render_map(config, objects["stepped_monument"], build_factor_space("low"))
+
+    assert render_map.synthetic_render.ambient == 0.8
+    assert render_map.synthetic_render.diffuse == 0.2
+    assert render_map.synthetic_render.light_energy == 300.0
+    assert render_map.synthetic_render.light_position == (2.0, -3.0, 4.0)
+
+
+def test_object_material_can_be_calibrated_per_fixed_class() -> None:
+    config = _design_config(master_count=2, counts=(2, 1, 1), image_size=8)
+    config["objects"][0].update({"oklch_lightness": 0.76607792, "oklch_chroma": 0.15916399})
+
+    objects = _object_configs(config)
+
+    assert objects["stepped_monument"]["base_color"] != objects["crooked_arch"]["base_color"]
 
 
 def test_factorial_conditions_cover_every_object_dimension_frequency_cell() -> None:
@@ -158,8 +189,6 @@ def test_pool_and_condition_reruns_refuse_overwrite_without_partial_files(
         build_condition_manifests(tmp_path, 0, cells, counts=(2, 1, 1))
 
     manifests_after = {
-        path.name: path.read_bytes()
-        for path in condition_root.iterdir()
-        if path.is_file()
+        path.name: path.read_bytes() for path in condition_root.iterdir() if path.is_file()
     }
     assert manifests_after == manifests_before

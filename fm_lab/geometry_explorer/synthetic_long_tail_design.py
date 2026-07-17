@@ -269,9 +269,7 @@ def build_condition_manifests(
 
     by_cell = {(cell.object_id, cell.dimension_id): cell for cell in pool_cells}
     expected_cells = {
-        (object_id, dimension_id)
-        for object_id in OBJECT_IDS
-        for dimension_id in DIMENSION_IDS
+        (object_id, dimension_id) for object_id in OBJECT_IDS for dimension_id in DIMENSION_IDS
     }
     if set(by_cell) != expected_cells:
         raise ValueError("pool_cells must contain exactly the nine object-dimension cells.")
@@ -332,9 +330,7 @@ def _condition_spec(
     class_counts: tuple[int, int, int],
 ) -> ConditionManifest:
     geometry_name = f"geometry_{geometry_index}"
-    frequency_name = (
-        "balanced" if frequency_index is None else f"frequency_{frequency_index}"
-    )
+    frequency_name = "balanced" if frequency_index is None else f"frequency_{frequency_index}"
     classes = tuple(
         ConditionClass(
             class_id=class_id,
@@ -378,8 +374,8 @@ def _object_configs(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "scale": float(by_id[object_id].get("scale", 1.0)),
             "marker": False,
             "base_color": oklch_to_srgb(
-                lightness,
-                chroma,
+                float(by_id[object_id].get("oklch_lightness", lightness)),
+                float(by_id[object_id].get("oklch_chroma", chroma)),
                 float(by_id[object_id]["hue_degrees"]),
             ),
         }
@@ -403,6 +399,14 @@ def _render_map(
             antialias=int(render.get("supersample", 3)) > 1,
             object_config=object_config,
             camera_config={"radius": float(render.get("camera_distance", 4.0))},
+            light_config={
+                "position": tuple(
+                    float(value) for value in render.get("light_position", (3.0, -4.0, 5.0))
+                ),
+                "energy": float(render.get("light_energy", 400.0)),
+                "ambient": float(render.get("ambient", 0.35)),
+                "diffuse": float(render.get("diffuse", 0.70)),
+            },
         ),
     )
 
