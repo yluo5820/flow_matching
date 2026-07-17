@@ -125,7 +125,6 @@ This synthetic renderer establishes internal causality, not natural-image genera
 
 ## Next decision
 
-Create a new renderer version with geometry explicitly optimized for matched nuisance
-statistics, then repeat calibration from scratch under a new artifact root. Do not
-weaken the 0.25 threshold post hoc and do not run the oracle or generative matrix from
-the failed renderer version.
+This v1 renderer remains failed and must not be used for training. The bounded redesign
+and revised scientific rationale are recorded in
+[`synthetic_long_tail_geometry_v2_report.md`](synthetic_long_tail_geometry_v2_report.md).

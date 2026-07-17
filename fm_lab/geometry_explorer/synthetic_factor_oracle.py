@@ -910,44 +910,80 @@ def _determinism_payload(device: torch.device) -> dict[str, Any]:
 
 
 def _is_production_profile(config: dict[str, Any], parsed: _OracleConfig) -> bool:
-    approved_objects = [
-        ("stepped_monument", 25.0, 1.0),
-        ("crooked_arch", 145.0, 1.0),
-        ("three_arm_vane", 265.0, 1.0),
-    ]
-    raw_objects = config.get("objects")
-    if not isinstance(raw_objects, list) or len(raw_objects) != len(approved_objects):
+    profile = str(config.get("renderer_profile", "original_v1"))
+    approved_objects = {
+        "original_v1": [
+            ("stepped_monument", 25.0, 1.0, 0.70, 0.12),
+            ("crooked_arch", 145.0, 1.0, 0.70, 0.12),
+            ("three_arm_vane", 265.0, 1.0, 0.70, 0.12),
+        ],
+        "calibrated_v2": [
+            ("stepped_monument", 61.9380951, 1.02712272, 0.75872787, 0.12976866),
+            ("crooked_arch", 143.54619021, 1.03138909, 0.74009267, 0.14495007),
+            ("three_arm_vane", 225.49885742, 1.49318782, 0.76711206, 0.13290756),
+        ],
+    }
+    if profile not in approved_objects:
         return False
+    raw_objects = config.get("objects")
+    if not isinstance(raw_objects, list) or len(raw_objects) != len(approved_objects[profile]):
+        return False
+    material = config.get("material", {})
     observed_objects = []
     try:
+        common_lightness = float(material.get("oklch_lightness"))
+        common_chroma = float(material.get("oklch_chroma"))
         for item in raw_objects:
             observed_objects.append(
-                (str(item["id"]), float(item["hue_degrees"]), float(item.get("scale", 1.0)))
+                (
+                    str(item["id"]),
+                    float(item["hue_degrees"]),
+                    float(item.get("scale", 1.0)),
+                    float(item.get("oklch_lightness", common_lightness)),
+                    float(item.get("oklch_chroma", common_chroma)),
+                )
             )
     except (KeyError, TypeError, ValueError):
         return False
-    material = config.get("material", {})
     render = config.get("render", {})
     try:
         canonical_material = (
-            float(material.get("oklch_lightness")) == 0.70
-            and float(material.get("oklch_chroma")) == 0.12
+            common_lightness == 0.70 and common_chroma == 0.12
         )
+        expected_camera = 4.0 if profile == "original_v1" else 3.9
+        expected_ambient = 0.35 if profile == "original_v1" else 0.6
+        expected_diffuse = 0.70 if profile == "original_v1" else 0.4
         canonical_render = (
             [float(value) for value in render.get("background", [])] == [1.0, 1.0, 1.0]
-            and float(render.get("camera_distance")) == 4.0
+            and float(render.get("camera_distance")) == expected_camera
             and [float(value) for value in render.get("elevation_bounds_degrees", [])]
             == [-30.0, 30.0]
             and int(render.get("supersample")) == 3
             and int(render.get("render_batch_size")) == 128
+            and float(render.get("ambient", 0.35)) == expected_ambient
+            and float(render.get("diffuse", 0.70)) == expected_diffuse
         )
     except (TypeError, ValueError):
         return False
+    calibrated_v2_gate = True
+    if profile == "calibrated_v2":
+        calibration = config.get("calibration", {})
+        try:
+            calibrated_v2_gate = (
+                float(calibration.get("finite_difference_epsilon", -1.0)) == 0.02
+                and int(calibration.get("renderer_seed_offset", -1)) == 9_200_003
+                and float(calibration.get("max_pullback_norm_ratio", -1.0)) == 4.25
+                and list(calibration.get("blocking_checks", []))
+                == ["object_separability", "renderer_rank", "factor_visibility"]
+            )
+        except (TypeError, ValueError):
+            return False
     return (
         int(config.get("image_size", -1)) == 32
-        and observed_objects == approved_objects
+        and observed_objects == approved_objects[profile]
         and canonical_material
         and canonical_render
+        and calibrated_v2_gate
         and parsed.train_per_object == 30_000
         and parsed.validation_per_object == 5_000
         and parsed.batch_size == 256

@@ -37,6 +37,12 @@ _STATISTIC_FIELDS = (
     "contrast_mean",
     "contrast_std",
 )
+_CHECK_NAMES = (
+    "object_separability",
+    "nuisance_matching",
+    "renderer_rank",
+    "factor_visibility",
+)
 
 
 @dataclass(frozen=True)
@@ -55,8 +61,9 @@ def renderer_gate(
     full_rank_fraction: float,
     pullback_norm_ratio: float,
     thresholds: RendererGateThresholds,
+    blocking_checks: tuple[str, ...] = _CHECK_NAMES,
 ) -> dict[str, Any]:
-    """Apply the four renderer acceptance checks without performing calibration."""
+    """Apply renderer checks and distinguish blocking checks from diagnostics."""
 
     checks = {
         "object_separability": object_accuracy >= thresholds.min_object_accuracy,
@@ -67,9 +74,13 @@ def renderer_gate(
         "renderer_rank": full_rank_fraction >= thresholds.min_full_rank_fraction,
         "factor_visibility": pullback_norm_ratio <= thresholds.max_pullback_norm_ratio,
     }
+    required = _validated_blocking_checks(blocking_checks)
+    diagnostic = tuple(name for name in _CHECK_NAMES if name not in required)
     return {
-        "passed": all(checks.values()),
+        "passed": all(checks[name] for name in required),
         "checks": checks,
+        "blocking_checks": list(required),
+        "diagnostic_checks": list(diagnostic),
         "object_accuracy": float(object_accuracy),
         "max_nuisance_standardized_difference": float(max_nuisance_difference),
         "full_rank_fraction": float(full_rank_fraction),
@@ -106,13 +117,21 @@ def calibrate_renderer(
         min_full_rank_fraction=float(calibration.get("full_rank_fraction", 0.95)),
         max_pullback_norm_ratio=float(calibration.get("max_pullback_norm_ratio", 4.0)),
     )
+    blocking_checks = _validated_blocking_checks(
+        tuple(calibration.get("blocking_checks", _CHECK_NAMES))
+    )
 
     object_configs = _object_configs(config)
     background = np.asarray(
         config.get("render", {}).get("background", (1.0, 1.0, 1.0)),
         dtype=np.float32,
     ).reshape(3)
-    base_seed = int(config["seed"]) + 9_000_000
+    renderer_seed_offset = int(
+        calibration.get("renderer_seed_offset", 9_000_000)
+    )
+    if renderer_seed_offset < 0:
+        raise ValueError("calibration.renderer_seed_offset must be non-negative.")
+    base_seed = int(config["seed"]) + renderer_seed_offset
     image_rows: list[np.ndarray] = []
     object_labels: list[int] = []
     point_labels: list[int] = []
@@ -203,12 +222,14 @@ def calibrate_renderer(
         full_rank_fraction=full_rank_fraction,
         pullback_norm_ratio=pullback_norm_ratio,
         thresholds=thresholds,
+        blocking_checks=blocking_checks,
     )
     result.update(
         {
             "relative_singular_threshold": thresholds.relative_singular_threshold,
             "median_pullback_norms": median_pullback_norms,
             "renderer_points_per_cell": points_per_cell,
+            "renderer_seed_offset": renderer_seed_offset,
             "artifacts": {
                 "renderer_gate": _GATE_FILENAME,
                 "class_statistics": _STATISTICS_FILENAME,
@@ -236,6 +257,20 @@ def calibrate_renderer(
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
     return result
+
+
+def _validated_blocking_checks(values: tuple[str, ...]) -> tuple[str, ...]:
+    if not values:
+        raise ValueError("calibration.blocking_checks must not be empty.")
+    normalized = tuple(str(value) for value in values)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("calibration.blocking_checks must not contain duplicates.")
+    unknown = sorted(set(normalized) - set(_CHECK_NAMES))
+    if unknown:
+        raise ValueError(
+            "Unknown renderer blocking checks: " + ", ".join(unknown)
+        )
+    return normalized
 
 
 def _as_values(values: Any, count: int) -> list[Any]:

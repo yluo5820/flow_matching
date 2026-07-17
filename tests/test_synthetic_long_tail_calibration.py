@@ -47,6 +47,43 @@ def test_renderer_gate_reports_each_threshold_failure_independently(
     }
 
 
+def test_renderer_gate_can_report_nuisance_matching_as_nonblocking_diagnostic() -> None:
+    result = renderer_gate(
+        object_accuracy=1.0,
+        max_nuisance_difference=1.0,
+        full_rank_fraction=0.99,
+        pullback_norm_ratio=3.9,
+        thresholds=RendererGateThresholds(),
+        blocking_checks=(
+            "object_separability",
+            "renderer_rank",
+            "factor_visibility",
+        ),
+    )
+
+    assert result["passed"] is True
+    assert result["checks"]["nuisance_matching"] is False
+    assert result["diagnostic_checks"] == ["nuisance_matching"]
+
+
+@pytest.mark.parametrize(
+    "blocking_checks",
+    [(), ("renderer_rank", "renderer_rank"), ("unknown",)],
+)
+def test_renderer_gate_rejects_invalid_blocking_check_lists(
+    blocking_checks: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="blocking_checks|blocking checks"):
+        renderer_gate(
+            object_accuracy=1.0,
+            max_nuisance_difference=0.0,
+            full_rank_fraction=1.0,
+            pullback_norm_ratio=1.0,
+            thresholds=RendererGateThresholds(),
+            blocking_checks=blocking_checks,
+        )
+
+
 def calibration_config() -> dict[str, Any]:
     return {
         "seed": 17,
@@ -74,6 +111,14 @@ def calibration_config() -> dict[str, Any]:
             "max_pullback_norm_ratio": 1.0e9,
         },
     }
+
+
+def test_calibration_rejects_negative_renderer_seed_offset(tmp_path: Path) -> None:
+    config = calibration_config()
+    config["calibration"]["renderer_seed_offset"] = -1
+
+    with pytest.raises(ValueError, match="renderer_seed_offset"):
+        calibrate_renderer(config, tmp_path / "calibration")
 
 
 def _nuisance_rows(object_means: tuple[float, float, float]) -> list[dict[str, Any]]:

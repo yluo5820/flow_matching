@@ -20,6 +20,7 @@ from fm_lab.geometry_explorer.synthetic_factor_oracle import (
     oracle_loss,
     train_factor_oracle,
 )
+from fm_lab.utils.config import load_config
 
 
 def _config(**oracle_overrides: Any) -> dict[str, Any]:
@@ -234,6 +235,17 @@ def test_production_profile_requires_every_frozen_scientific_setting() -> None:
     assert oracle_module._is_production_profile(config, oracle_module._parse_config(config))
 
     config["render"]["background"] = [0.99, 1.0, 1.0]
+    assert not oracle_module._is_production_profile(config, oracle_module._parse_config(config))
+
+
+def test_calibrated_v2_is_an_explicit_production_profile() -> None:
+    config = load_config(
+        Path("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+    )
+
+    assert oracle_module._is_production_profile(config, oracle_module._parse_config(config))
+
+    config["objects"][2]["scale"] = 1.49
     assert not oracle_module._is_production_profile(config, oracle_module._parse_config(config))
 
 

@@ -524,7 +524,9 @@ class SyntheticLongTailRunner:
         self.config_path = Path(config_path).expanduser().resolve()
         self.config = load_config(self.config_path)
         self.output_root = Path(self.config["output_root"]).expanduser().resolve()
-        self.run_root = Path("runs/synthetic_long_tail_geometry").resolve()
+        self.run_root = Path(
+            self.config.get("run_root", "runs/synthetic_long_tail_geometry")
+        ).expanduser().resolve()
         self.ledger = RunLedger(self.output_root / "run_ledger.json")
         self.base_config_path = self.config_path.parent / "base_train.yaml"
         if not self.base_config_path.is_file():
@@ -733,11 +735,15 @@ class SyntheticLongTailRunner:
                 "calibration": _calibration_snapshot(self.output_root),
                 "conditions": _condition_snapshot(self.output_root),
             }
+        report_filename = str(
+            self.config.get(
+                "report_filename", "synthetic_long_tail_geometry_report.md"
+            )
+        )
+        if Path(report_filename).name != report_filename:
+            raise ValueError("report_filename must be a plain filename.")
         destination = (
-            self.config_path.parents[2]
-            / "docs"
-            / "research"
-            / "synthetic_long_tail_geometry_report.md"
+            self.config_path.parents[2] / "docs" / "research" / report_filename
         )
         path = render_research_report(
             summary,

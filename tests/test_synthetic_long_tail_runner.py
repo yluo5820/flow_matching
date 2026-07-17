@@ -9,6 +9,7 @@ import pytest
 from fm_lab.experiments.synthetic_long_tail_geometry import (
     RunLedger,
     StageBlockedError,
+    SyntheticLongTailRunner,
     build_matrix_commands,
     require_gate,
 )
@@ -30,6 +31,15 @@ def test_matrix_dry_run_lists_exactly_36_training_commands(tmp_path: Path) -> No
     assert len({command.replicate for command in commands}) == 3
     assert all(command.argv("cpu")[0] == sys.executable for command in commands)
     assert len({command.run_dir for command in commands}) == 36
+
+
+def test_v2_config_uses_isolated_artifact_and_training_roots() -> None:
+    runner = SyntheticLongTailRunner(
+        "configs/synthetic_long_tail_geometry/experiment_v2.yaml"
+    )
+
+    assert runner.output_root.name == "synthetic_long_tail_geometry_v2"
+    assert runner.run_root.name == "synthetic_long_tail_geometry_v2"
 
 
 def test_failed_gate_blocks_training(tmp_path: Path) -> None:

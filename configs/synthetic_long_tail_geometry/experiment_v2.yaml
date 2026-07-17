@@ -1,0 +1,64 @@
+experiment: synthetic_long_tail_geometry_v2
+renderer_profile: calibrated_v2
+seed: 17072026
+output_root: outputs/synthetic_long_tail_geometry_v2
+run_root: runs/synthetic_long_tail_geometry_v2
+report_filename: synthetic_long_tail_geometry_v2_report.md
+image_size: 32
+replicates: 3
+master_count: 5000
+counts: [5000, 500, 50]
+objects:
+  - id: stepped_monument
+    hue_degrees: 61.9380951
+    scale: 1.02712272
+    oklch_lightness: 0.75872787
+    oklch_chroma: 0.12976866
+  - id: crooked_arch
+    hue_degrees: 143.54619021
+    scale: 1.03138909
+    oklch_lightness: 0.74009267
+    oklch_chroma: 0.14495007
+  - id: three_arm_vane
+    hue_degrees: 225.49885742
+    scale: 1.49318782
+    oklch_lightness: 0.76711206
+    oklch_chroma: 0.13290756
+material:
+  oklch_lightness: 0.70
+  oklch_chroma: 0.12
+render:
+  background: [1.0, 1.0, 1.0]
+  camera_distance: 3.9
+  elevation_bounds_degrees: [-30.0, 30.0]
+  supersample: 3
+  render_batch_size: 128
+  ambient: 0.6
+  diffuse: 0.4
+calibration:
+  renderer_points_per_cell: 256
+  renderer_seed_offset: 9200003
+  finite_difference_epsilon: 0.02
+  relative_singular_threshold: 0.02
+  full_rank_fraction: 0.95
+  max_pullback_norm_ratio: 4.25
+  max_nuisance_standardized_difference: 0.25
+  blocking_checks:
+    - object_separability
+    - renderer_rank
+    - factor_visibility
+oracle:
+  training_samples_per_object: 30000
+  validation_samples_per_object: 5000
+  batch_size: 256
+  steps: 20000
+  learning_rate: 0.001
+  min_object_accuracy: 0.99
+  max_normalized_factor_mae: 0.02
+evaluation:
+  samples_per_class: 5000
+  geometry_queries_per_class: 256
+  joint_metric_samples: 1000
+  fm_directions: 16
+  fm_nfe: 32
+  bootstrap_draws: 10000
