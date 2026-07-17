@@ -73,9 +73,7 @@ class ContinuousEndpointTransferModifier(Protocol):
         """Return a serializable modifier description."""
 
 
-ContinuousModifier: TypeAlias = (
-    ContinuousObjectiveModifier | ContinuousEndpointTransferModifier
-)
+ContinuousModifier: TypeAlias = ContinuousObjectiveModifier | ContinuousEndpointTransferModifier
 
 
 @dataclass
@@ -97,9 +95,7 @@ class CBDMModifier:
             raise ValueError("CBDM class_counts must all be positive.")
         self.target_distribution = self.target_distribution.lower()
         if self.target_distribution not in {"train", "sqrt", "uniform"}:
-            raise ValueError(
-                "CBDM target_distribution must be 'train', 'sqrt', or 'uniform'."
-            )
+            raise ValueError("CBDM target_distribution must be 'train', 'sqrt', or 'uniform'.")
         self.tau = float(self.tau)
         self.gamma = float(self.gamma)
         if (
@@ -157,12 +153,8 @@ class CBDMModifier:
         )
         base_value = context.base_prediction.convert(self.comparison_space)
         auxiliary_value = auxiliary_prediction.convert(self.comparison_space)
-        regularizer_distance = (
-            (base_value - auxiliary_value.detach()).square().flatten(1).mean(1)
-        )
-        commitment_distance = (
-            (base_value.detach() - auxiliary_value).square().flatten(1).mean(1)
-        )
+        regularizer_distance = (base_value - auxiliary_value.detach()).square().flatten(1).mean(1)
+        commitment_distance = (base_value.detach() - auxiliary_value).square().flatten(1).mean(1)
         weight = self.tau * self.time_weight(context.t).to(dtype=base_value.dtype)
         regularizer = (weight * regularizer_distance).mean()
         commitment = self.gamma * (weight * commitment_distance).mean()
@@ -191,8 +183,6 @@ class CMModifier:
     consistency_weight: float = 1.0
     diversity_weight: float = 0.2
     comparison_space: str = "target"
-    diversity_mode: str = "unbounded"
-    diversity_margin: float | None = None
     name: str = "cm"
 
     def __post_init__(self) -> None:
@@ -211,17 +201,6 @@ class CMModifier:
                 "CM consistency and diversity weights must be finite and non-negative."
             )
         self.comparison_space = normalize_prediction_kind(self.comparison_space).value
-        self.diversity_mode = str(self.diversity_mode).lower()
-        if self.diversity_mode not in {"unbounded", "bounded"}:
-            raise ValueError("CM diversity_mode must be 'unbounded' or 'bounded'.")
-        if self.diversity_mode == "bounded":
-            if self.diversity_margin is None:
-                raise ValueError("CM bounded diversity requires diversity_margin.")
-            self.diversity_margin = float(self.diversity_margin)
-            if not math.isfinite(self.diversity_margin) or self.diversity_margin <= 0:
-                raise ValueError("CM diversity_margin must be finite and positive.")
-        elif self.diversity_margin is not None:
-            self.diversity_margin = float(self.diversity_margin)
         counts = torch.tensor(self.class_counts, dtype=torch.float64)
         probabilities = counts / counts.sum()
         inverse_probabilities = probabilities.reciprocal()
@@ -238,9 +217,7 @@ class CMModifier:
         self.class_groups: dict[str, tuple[int, ...]] = {}
         offset = 0
         for group_name, group_size in zip(group_names, group_sizes, strict=True):
-            self.class_groups[group_name] = tuple(
-                ranked_classes[offset : offset + group_size]
-            )
+            self.class_groups[group_name] = tuple(ranked_classes[offset : offset + group_size])
             offset += group_size
 
     @staticmethod
@@ -305,16 +282,12 @@ class CMModifier:
         )
         labels = context.original_class_labels
         num_classes = len(self.class_counts)
-        consistency = num_classes * (
-            probabilities[labels] * self.consistency_weight * distance
-        ).mean()
-        diversity_distance = distance
-        if self.diversity_mode == "bounded":
-            assert self.diversity_margin is not None
-            diversity_distance = distance.clamp_max(self.diversity_margin)
-        diversity = -num_classes * (
-            inverse_probabilities[labels] * self.diversity_weight * diversity_distance
-        ).mean()
+        consistency = (
+            num_classes * (probabilities[labels] * self.consistency_weight * distance).mean()
+        )
+        diversity = (
+            -num_classes * (inverse_probabilities[labels] * self.diversity_weight * distance).mean()
+        )
         loss = consistency + diversity
         metrics = {
             "cm.consistency": float(consistency.detach().cpu()),
@@ -325,14 +298,7 @@ class CMModifier:
         }
         base_loss = context.base_loss_per_sample.detach().mean()
         ratio_denom = base_loss.clamp_min(torch.finfo(base_loss.dtype).eps)
-        metrics["cm.loss_to_base_ratio"] = float(
-            (loss.detach() / ratio_denom).cpu()
-        )
-        if self.diversity_mode == "bounded":
-            assert self.diversity_margin is not None
-            metrics["cm.diversity_saturation"] = float(
-                (distance.detach() >= self.diversity_margin).float().mean().cpu()
-            )
+        metrics["cm.loss_to_base_ratio"] = float((loss.detach() / ratio_denom).cpu())
         metrics.update(self.group_distance_metrics(distance=distance, labels=labels))
         return loss, metrics
 
@@ -342,8 +308,6 @@ class CMModifier:
             "consistency_weight": self.consistency_weight,
             "diversity_weight": self.diversity_weight,
             "comparison_space": self.comparison_space,
-            "diversity_mode": self.diversity_mode,
-            "diversity_margin": self.diversity_margin,
             "class_probabilities": self.class_probabilities.tolist(),
             "inverse_class_probabilities": self.inverse_class_probabilities.tolist(),
             "class_counts": list(self.class_counts),
@@ -540,8 +504,7 @@ def build_continuous_modifiers(
         seen.add(name)
         if name not in {"cbdm", "oc", "cm"}:
             raise ValueError(
-                f"Unsupported continuous modifier: {name}. "
-                "Supported values are cbdm, oc, and cm."
+                f"Unsupported continuous modifier: {name}. Supported values are cbdm, oc, and cm."
             )
         normalized_configs.append((name, config))
 
@@ -585,8 +548,6 @@ def build_continuous_modifiers(
                 consistency_weight=float(config.get("consistency_weight", 1.0)),
                 diversity_weight=float(config.get("diversity_weight", 0.2)),
                 comparison_space=str(config.get("comparison_space", "target")),
-                diversity_mode=str(config.get("diversity_mode", "unbounded")),
-                diversity_margin=config.get("diversity_margin"),
             )
         )
     return tuple(modifiers)

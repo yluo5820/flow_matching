@@ -272,52 +272,14 @@ def test_cm_reports_loss_relative_to_base_objective() -> None:
     assert metrics["cm.loss_to_base_ratio"] == pytest.approx(1.0)
 
 
-def test_cm_bounded_diversity_saturates_at_configured_margin() -> None:
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "model_output": "target",
-            "loss_space": "velocity",
-            "modifiers": [
-                {
-                    "name": "cm",
-                    "consistency_weight": 0.0,
-                    "diversity_weight": 1.0,
-                    "comparison_space": "target",
-                    "diversity_mode": "bounded",
-                    "diversity_margin": 1.0,
-                }
-            ],
-        },
-        class_counts=[1, 1],
-    )
+def test_cm_defaults_match_released_core_weighting() -> None:
+    modifier = CMModifier(class_counts=[100, 10])
 
-    _, metrics = objective(
-        model=CapacityTablePrediction(),
-        path=LinearPath(),
-        x0=torch.zeros(2, 1),
-        x1=torch.ones(2, 1),
-        t=torch.full((2,), 0.5),
-        class_labels=torch.tensor([0, 1]),
-        original_class_labels=torch.tensor([0, 1]),
-    )
-
-    assert metrics["cm.distance.mean"] == pytest.approx(4.0)
-    assert metrics["cm.diversity"] == pytest.approx(-1.0)
-    assert metrics["cm.diversity_saturation"] == pytest.approx(1.0)
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        {"name": "cm", "diversity_mode": "other"},
-        {"name": "cm", "diversity_mode": "bounded"},
-        {"name": "cm", "diversity_mode": "bounded", "diversity_margin": 0.0},
-    ],
-)
-def test_cm_bounded_diversity_validates_configuration(config: dict[str, object]) -> None:
-    with pytest.raises(ValueError, match="diversity"):
-        build_continuous_modifiers([config], [100, 10])
+    assert modifier.consistency_weight == 1.0
+    assert modifier.diversity_weight == 0.2
+    assert modifier.comparison_space == "target"
+    assert "diversity_mode" not in modifier.metadata()
+    assert "diversity_margin" not in modifier.metadata()
 
 
 def test_oc_cut_t_uses_noisy_source_to_clean_target_direction() -> None:
@@ -592,9 +554,7 @@ def test_flow_matching_objective_composes_cbdm_in_declared_comparison_space() ->
     assert metrics["cbdm.regularizer"] == pytest.approx(0.8)
     assert metrics["cbdm.commitment"] == pytest.approx(0.2)
     assert metrics["loss"] == pytest.approx(
-        metrics["base.loss"]
-        + metrics["cbdm.regularizer"]
-        + metrics["cbdm.commitment"]
+        metrics["base.loss"] + metrics["cbdm.regularizer"] + metrics["cbdm.commitment"]
     )
     assert objective.metadata()["modifiers"] == [
         {

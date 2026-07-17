@@ -186,9 +186,7 @@ def test_fashion_mnist_lt_ir100_config_builds_conditional_components(monkeypatch
 
 
 def test_stage0_config_uses_ordinary_flow_matching_without_capacity() -> None:
-    config = load_config(
-        "configs/fashion_mnist_lt/fashion_mnist_lt_geometry_stage0.yaml"
-    )
+    config = load_config("configs/fashion_mnist_lt/fashion_mnist_lt_geometry_stage0.yaml")
 
     assert config["objective"].get("modifiers", []) == []
     assert not config["model"].get("capacity", {}).get("enabled", False)
@@ -232,6 +230,7 @@ FASHION_MNIST_CONTINUOUS_CONFIGS = (
     "fashion_mnist_lt_ir100_x_vloss_oc.yaml",
     "fashion_mnist_lt_ir100_x_vloss_cm.yaml",
 )
+
 
 def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     configs = [
@@ -331,56 +330,9 @@ def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> N
         )
 
 
-def test_bounded_lambda10_cm_config_changes_only_identity_and_cm_modifier() -> None:
-    canonical = load_config(
-        "configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml"
-    )
-    bounded = load_config(
-        "configs/fashion_mnist_lt/"
-        "fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10.yaml"
-    )
-
-    assert bounded["experiment"] == {
-        "name": "fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10",
-        "seed": 0,
-        "output_dir": "runs/fashion_mnist_lt_ir100_x_vloss_cm_bounded_lambda10",
-    }
-    assert bounded["objective"]["modifiers"] == [
-        {
-            "name": "cm",
-            "consistency_weight": 10.0,
-            "diversity_weight": 10.0,
-            "comparison_space": "target",
-            "diversity_mode": "bounded",
-            "diversity_margin": 0.001,
-        }
-    ]
-    for field in (
-        "data",
-        "source",
-        "coupling",
-        "path",
-        "model",
-        "conditioning",
-        "training",
-        "solvers",
-        "sampling",
-    ):
-        assert bounded[field] == canonical[field]
-    assert {
-        key: value for key, value in bounded["objective"].items() if key != "modifiers"
-    } == {
-        key: value for key, value in canonical["objective"].items() if key != "modifiers"
-    }
-
-
 def test_balanced_fashion_mnist_x_vloss_changes_only_dataset_and_identity() -> None:
-    long_tail = load_config(
-        "configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml"
-    )
-    balanced = load_config(
-        "configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml"
-    )
+    long_tail = load_config("configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss.yaml")
+    balanced = load_config("configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml")
 
     assert balanced["experiment"] == {
         "name": "fashion_mnist_balanced_x_vloss",
@@ -430,9 +382,7 @@ def test_shipped_training_configs_use_canonical_objective_schema() -> None:
 
 def _nested_keys(value) -> set[str]:
     if isinstance(value, dict):
-        return set(value) | {
-            key for nested in value.values() for key in _nested_keys(nested)
-        }
+        return set(value) | {key for nested in value.values() for key in _nested_keys(nested)}
     if isinstance(value, list):
         return {key for nested in value for key in _nested_keys(nested)}
     return set()
@@ -471,9 +421,7 @@ def test_mnist_image_unet_configs_build_matching_components_without_loading_data
 
 
 def test_geometry_explorer_model_configs_build_core_components_without_data() -> None:
-    config_paths = sorted(
-        Path("configs/geometry_explorer/datasets").glob("*/*/models/*.yaml")
-    )
+    config_paths = sorted(Path("configs/geometry_explorer/datasets").glob("*/*/models/*.yaml"))
     assert config_paths
 
     for config_path in config_paths:
