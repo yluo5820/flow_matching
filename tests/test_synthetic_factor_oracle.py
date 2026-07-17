@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -245,6 +246,31 @@ def test_training_refuses_overwrite_without_mutating_artifacts(tmp_path: Path) -
         train_factor_oracle(_config(), output_dir, "cpu")
 
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == before
+
+
+def test_training_rejects_broken_final_symlink_before_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "oracle"
+    redirected = tmp_path / "redirected"
+    output_dir.symlink_to(redirected, target_is_directory=True)
+    original_target = os.readlink(output_dir)
+
+    def unexpected_parse(config: dict[str, Any]) -> Any:
+        del config
+        pytest.fail("broken output symlink must be rejected before config parsing")
+
+    monkeypatch.setattr(oracle_module, "_parse_config", unexpected_parse)
+    with pytest.raises(FileExistsError, match="Oracle destination already exists"):
+        train_factor_oracle(_config(), output_dir, "cpu")
+
+    assert output_dir.is_symlink()
+    assert os.readlink(output_dir) == original_target
+    assert not redirected.exists()
+    assert not (redirected / "factor_oracle.pt").exists()
+    assert not (redirected / "oracle_gate.json").exists()
+    assert not list(tmp_path.glob(".oracle-*"))
 
 
 def test_training_refuses_publication_race_and_cleans_staging(

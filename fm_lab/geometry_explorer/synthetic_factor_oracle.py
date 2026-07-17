@@ -230,7 +230,8 @@ def train_factor_oracle(
 ) -> dict[str, Any]:
     """Train and validate on independently sampled high-dimensional renders."""
 
-    destination = Path(output_dir).expanduser().resolve()
+    requested_destination = Path(output_dir).expanduser()
+    destination = requested_destination.parent.resolve() / requested_destination.name
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"Oracle destination already exists: {destination}")
     parsed = _parse_config(config)
