@@ -32,6 +32,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Run an isolated balanced learning-curve budget instead of the configured pilot.",
     )
+    frequency_pilots = subparsers.add_parser("frequency-pilots")
+    _device(frequency_pilots)
+    _dry_run(frequency_pilots)
+    frequency_pilots.add_argument(
+        "--training-steps",
+        type=int,
+        required=True,
+        help="Training budget for the nine imbalanced frequency-rotation conditions.",
+    )
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -73,6 +82,12 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
         return runner.pilot(device=args.device, dry_run=args.dry_run)
     if args.stage == "balanced-pilots":
         return runner.balanced_pilots(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
+        )
+    if args.stage == "frequency-pilots":
+        return runner.frequency_pilots(
             device=args.device,
             dry_run=args.dry_run,
             training_steps=args.training_steps,

@@ -213,6 +213,37 @@ def test_pilot_writer_preserves_balanced_rotation_identity(tmp_path: Path) -> No
     assert config_path.with_suffix(".sha256").is_file()
 
 
+def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    matrix_paths = write_condition_training_configs(**training_kwargs(manifests, tmp_path))
+    source_path = next(path for path in matrix_paths if path.stem == "g1_f2")
+    output_root = tmp_path / "frequency-configs"
+    run_root = tmp_path / "frequency-runs"
+
+    config_path = write_pilot_training_config(
+        source_config_path=source_path,
+        output_root=output_root,
+        run_root=run_root,
+        pilot={
+            "training_steps": 100,
+            "batch_size": 64,
+            "warmup_steps": 10,
+            "log_every": 5,
+            "samples_per_class": 3,
+            "nfe": 8,
+            "sample_batch_size": 3,
+            "n_trajectories": 3,
+        },
+        require_balanced=False,
+    )
+    config = load_config(config_path)
+
+    assert config_path == output_root / "replicate_00/g1_f2.yaml"
+    assert config["experiment"]["output_dir"] == str(run_root / "replicate_00/g1_f2")
+    assert config["training"]["steps"] == 100
+    assert config["data"]["condition_manifest"].endswith("g1_f2.json")
+
+
 def test_writer_rejects_traversal_wrong_tree_and_non_32_manifest_before_publish(
     tmp_path: Path,
 ) -> None:

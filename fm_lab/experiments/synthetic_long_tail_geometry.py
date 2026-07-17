@@ -367,14 +367,18 @@ def write_pilot_training_config(
     output_root: str | Path,
     run_root: str | Path,
     pilot: dict[str, Any],
+    require_balanced: bool = True,
 ) -> Path:
-    """Publish a reduced, immutable balanced-pilot config derived from the matrix config."""
+    """Publish an immutable reduced-budget config derived from a matrix config."""
 
     source_path = Path(source_config_path).expanduser().resolve()
     source = load_config(source_path)
     plan = _read_condition_plan(source["data"]["condition_manifest"])
-    if plan.replicate != 0 or not plan.condition_id.endswith("_balanced"):
-        raise ValueError("Pilot source must be a replicate-0 balanced condition.")
+    if not isinstance(require_balanced, bool):
+        raise ValueError("require_balanced must be a boolean.")
+    if plan.replicate != 0 or (require_balanced and not plan.condition_id.endswith("_balanced")):
+        expected = "replicate-0 balanced" if require_balanced else "replicate-0"
+        raise ValueError(f"Reduced-budget source must be a {expected} condition.")
     steps = _positive_int("pilot.training_steps", pilot.get("training_steps"))
     batch_size = _positive_int("pilot.batch_size", pilot.get("batch_size"))
     warmup_steps = _nonnegative_int("pilot.warmup_steps", pilot.get("warmup_steps"))
@@ -965,6 +969,179 @@ class SyntheticLongTailRunner:
             )
         return summary
 
+    def frequency_pilots(
+        self,
+        *,
+        device: str,
+        training_steps: int,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Run the nine replicate-0 dimension-by-frequency rotation conditions."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        budget_id = f"steps_{steps:08d}"
+        pilot = copy.deepcopy(self.config["pilot"])
+        pilot["training_steps"] = steps
+        condition_ids = tuple(
+            f"g{geometry}_f{frequency}" for geometry in range(3) for frequency in range(3)
+        )
+        plans: dict[str, _ConditionPlan] = {}
+        commands = []
+        evaluations: dict[str, dict[str, Any]] = {}
+        for condition_id in condition_ids:
+            source_config_path = next(
+                path for path in self.config_paths()[0] if path.stem == condition_id
+            )
+            if not dry_run:
+                plans[condition_id] = _read_condition_plan(
+                    load_config(source_config_path)["data"]["condition_manifest"]
+                )
+            config_root = (
+                self.output_root
+                / "training_configs"
+                / "frequency_factorial"
+                / budget_id
+                / f"{condition_id}_set"
+            )
+            config_path = config_root / "replicate_00" / f"{condition_id}.yaml"
+            run_dir = (
+                self.run_root / "frequency_factorial" / budget_id / "replicate_00" / condition_id
+            )
+            if not dry_run and not config_path.is_file():
+                config_path = write_pilot_training_config(
+                    source_config_path=source_config_path,
+                    output_root=config_root,
+                    run_root=run_dir.parents[1],
+                    pilot=pilot,
+                    require_balanced=False,
+                )
+            command = TrainingCommand(
+                replicate=0,
+                condition_id=condition_id,
+                config_path=config_path,
+                run_dir=run_dir,
+            )
+            commands.append(command)
+            if dry_run:
+                continue
+
+            stage = f"frequency-factorial-{budget_id}"
+            entry_id = f"{stage}:replicate-00:{condition_id}"
+            config_hash = _training_config_hash(config_path)
+            if not self.ledger.is_complete(entry_id, config_hash=config_hash):
+                self._run(command, device=device, stage=stage, resume=False)
+            evaluation_dir = run_dir / "evaluation"
+            if not evaluation_dir.is_dir():
+                from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+                    evaluate_generated_distribution,
+                )
+
+                reduced_config = load_config(config_path)
+                count = int(pilot["samples_per_class"])
+                evaluation = evaluate_generated_distribution(
+                    generated_root=run_dir,
+                    oracle_checkpoint=self.output_root
+                    / "calibration"
+                    / "oracle"
+                    / "factor_oracle.pt",
+                    oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+                    output_dir=evaluation_dir,
+                    device=device,
+                    samples_per_class=count,
+                    reference_samples_per_class=count,
+                    seed=int(self.config["seed"]) + 8_000_000,
+                    generated_seed=int(reduced_config["sampling"]["seed"]),
+                    source_revision=_source_revision(),
+                    clip_generated_to_value_range=True,
+                    condition_manifest=reduced_config["data"]["condition_manifest"],
+                    inference_batch_size=min(256, count),
+                )
+                self.ledger.complete(
+                    f"frequency-factorial-evaluation:{budget_id}:{condition_id}",
+                    {"evaluation": str(evaluation_dir / "factor_metrics.json")},
+                    metadata={
+                        "stage": "frequency-factorial-evaluation",
+                        "condition": condition_id,
+                        "training_steps": steps,
+                    },
+                )
+            else:
+                evaluation = json.loads(
+                    (evaluation_dir / "factor_metrics.json").read_text(encoding="utf-8")
+                )
+            evaluations[condition_id] = evaluation
+
+        if dry_run:
+            return {
+                "training_steps": steps,
+                "commands": [self._command_record(command, device) for command in commands],
+            }
+
+        balanced_evaluations, balanced_plans = self._balanced_evaluations_for_budget(steps)
+        evaluations.update(balanced_evaluations)
+        plans.update(balanced_plans)
+        summary = _frequency_factorial_summary(
+            evaluations=evaluations,
+            condition_counts={key: value.class_counts for key, value in plans.items()},
+            training_steps=steps,
+        )
+        summary_path = self.output_root / "analysis" / "frequency_factorial" / f"{budget_id}.json"
+        summary_entry = f"frequency-factorial-summary:{budget_id}"
+        if summary_path.is_file():
+            existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if existing_summary != summary:
+                raise FileExistsError(
+                    f"Refusing to replace a different frequency summary: {summary_path}"
+                )
+        else:
+            _write_json_atomic(summary, summary_path)
+        if not self.ledger.is_complete(summary_entry):
+            self.ledger.complete(
+                summary_entry,
+                {"summary": str(summary_path)},
+                metadata={"stage": "frequency-factorial-summary", "training_steps": steps},
+            )
+        return summary
+
+    def _balanced_evaluations_for_budget(
+        self, training_steps: int
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, _ConditionPlan]]:
+        configured_steps = int(self.config["pilot"]["training_steps"])
+        budget_id = f"steps_{training_steps:08d}"
+        evaluations = {}
+        plans = {}
+        for geometry in range(3):
+            condition_id = f"g{geometry}_balanced"
+            if training_steps == configured_steps:
+                run_dir = (
+                    self.run_root / "pilot" / "replicate_00" / condition_id
+                    if geometry == 0
+                    else self.run_root / "balanced_pilots" / "replicate_00" / condition_id
+                )
+            else:
+                run_dir = (
+                    self.run_root
+                    / "balanced_learning_curve"
+                    / budget_id
+                    / "replicate_00"
+                    / condition_id
+                )
+            metrics_path = run_dir / "evaluation" / "factor_metrics.json"
+            if not metrics_path.is_file():
+                raise FileNotFoundError(
+                    "Balanced controls must be completed at the same training budget: "
+                    f"{metrics_path}"
+                )
+            source_config_path = next(
+                path for path in self.config_paths()[0] if path.stem == condition_id
+            )
+            plans[condition_id] = _read_condition_plan(
+                load_config(source_config_path)["data"]["condition_manifest"]
+            )
+            evaluations[condition_id] = json.loads(metrics_path.read_text(encoding="utf-8"))
+        return evaluations, plans
+
     def smoke(
         self,
         *,
@@ -1263,6 +1440,146 @@ def _balanced_pilot_rotation_summary(
             condition_id: evaluation["provenance"]["generated_value_clipping"]
             for condition_id, evaluation in sorted(evaluations.items())
         },
+    }
+
+
+def _frequency_factorial_summary(
+    *,
+    evaluations: dict[str, dict[str, Any]],
+    condition_counts: dict[str, tuple[int, int, int]],
+    training_steps: int,
+) -> dict[str, Any]:
+    expected = {
+        f"g{geometry}_{frequency}"
+        for geometry in range(3)
+        for frequency in ("balanced", "f0", "f1", "f2")
+    }
+    if set(evaluations) != expected or set(condition_counts) != expected:
+        raise ValueError("Frequency summary requires all 12 replicate-0 factorial conditions.")
+    steps = _positive_int("training_steps", training_steps)
+    metric_names = (
+        "class_leakage_rate",
+        "off_renderer_rate",
+        "joint_valid_rate",
+        "active_multivariate_energy_distance",
+        "oracle_feature_fid",
+    )
+    records = []
+    for condition_id, evaluation in sorted(evaluations.items()):
+        counts = condition_counts[condition_id]
+        if len(counts) != 3:
+            raise ValueError(f"Condition {condition_id} must contain exactly three class counts.")
+        is_balanced = condition_id.endswith("_balanced")
+        if is_balanced:
+            if len(set(counts)) != 1:
+                raise ValueError("Balanced factorial controls must have equal class counts.")
+            roles = {class_id: "balanced" for class_id in range(3)}
+        else:
+            ordered_counts = sorted(set(counts), reverse=True)
+            if len(ordered_counts) != 3:
+                raise ValueError("Imbalanced factorial conditions need three distinct counts.")
+            role_by_count = dict(zip(ordered_counts, ("head", "medium", "tail"), strict=True))
+            roles = {class_id: role_by_count[count] for class_id, count in enumerate(counts)}
+        if len(evaluation.get("classes", ())) != 3:
+            raise ValueError(f"Condition {condition_id} must contain three class evaluations.")
+        for item in evaluation["classes"]:
+            class_id = int(item["requested_class"])
+            if class_id not in range(3):
+                raise ValueError(f"Condition {condition_id} contains an invalid class ID.")
+            all_metrics = item["all_requested"]["metrics"]
+            records.append(
+                {
+                    "condition_id": condition_id,
+                    "geometry_rotation": int(condition_id[1]),
+                    "frequency_role": roles[class_id],
+                    "class_id": class_id,
+                    "object_id": item["object_id"],
+                    "target_dimension_id": item["target_dimension_id"],
+                    "true_dimension": int(item["true_dimension"]),
+                    "count": int(counts[class_id]),
+                    **{name: float(value) for name, value in item["validity"].items()},
+                    "active_multivariate_energy_distance": float(
+                        all_metrics["active_factors"]["multivariate_energy_distance"]
+                    ),
+                    "oracle_feature_fid": float(all_metrics["oracle_feature_fid"]),
+                }
+            )
+    if len(records) != 36:
+        raise ValueError("Frequency summary requires exactly 36 class-level records.")
+
+    def mean_metrics(group: list[dict[str, Any]]) -> dict[str, float]:
+        return {
+            name: float(statistics.mean(float(item[name]) for item in group))
+            for name in metric_names
+        }
+
+    roles = ("balanced", "head", "medium", "tail")
+    means_by_dimension_and_role = {}
+    for dimension in (1, 3, 5):
+        means_by_dimension_and_role[str(dimension)] = {}
+        for role in roles:
+            group = [
+                item
+                for item in records
+                if item["true_dimension"] == dimension and item["frequency_role"] == role
+            ]
+            if len(group) != 3:
+                raise ValueError(
+                    "Each dimension-by-frequency role must contain all three object rotations."
+                )
+            means_by_dimension_and_role[str(dimension)][role] = mean_metrics(group)
+
+    paired_changes = []
+    for object_id, dimension in sorted(
+        {(str(item["object_id"]), int(item["true_dimension"])) for item in records}
+    ):
+        block = [
+            item
+            for item in records
+            if item["object_id"] == object_id and item["true_dimension"] == dimension
+        ]
+        by_role = {str(item["frequency_role"]): item for item in block}
+        if set(by_role) != set(roles):
+            raise ValueError("Each object-dimension block must contain all four frequency roles.")
+        baseline = by_role["balanced"]
+        paired_changes.append(
+            {
+                "object_id": object_id,
+                "true_dimension": dimension,
+                "changes_from_balanced": {
+                    role: {
+                        name: float(by_role[role][name]) - float(baseline[name])
+                        for name in metric_names
+                    }
+                    for role in roles[1:]
+                },
+            }
+        )
+
+    mean_changes = {}
+    for dimension in (1, 3, 5):
+        blocks = [item for item in paired_changes if item["true_dimension"] == dimension]
+        mean_changes[str(dimension)] = {
+            role: {
+                name: float(
+                    statistics.mean(item["changes_from_balanced"][role][name] for item in blocks)
+                )
+                for name in metric_names
+            }
+            for role in roles[1:]
+        }
+
+    return {
+        "schema_version": 1,
+        "design": (
+            "replicate-0 3x3 object-counterbalanced intrinsic-dimension and class-frequency "
+            "rotations, with balanced controls"
+        ),
+        "training_steps": steps,
+        "records": records,
+        "means_by_true_dimension_and_frequency_role": means_by_dimension_and_role,
+        "paired_changes_from_balanced": paired_changes,
+        "mean_changes_from_balanced_by_true_dimension": mean_changes,
     }
 
 

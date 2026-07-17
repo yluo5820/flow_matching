@@ -13,6 +13,7 @@ from fm_lab.experiments.synthetic_long_tail_geometry import (
     StageBlockedError,
     SyntheticLongTailRunner,
     _balanced_pilot_gate,
+    _frequency_factorial_summary,
     build_matrix_commands,
     require_gate,
 )
@@ -77,6 +78,85 @@ def test_balanced_learning_curve_rejects_invalid_budget(training_steps: object) 
             dry_run=True,
             training_steps=training_steps,  # type: ignore[arg-type]
         )
+
+
+def test_frequency_factorial_dry_run_lists_nine_isolated_conditions() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.frequency_pilots(device="cpu", dry_run=True, training_steps=5_000)
+
+    assert result["training_steps"] == 5_000
+    assert len(result["commands"]) == 9
+    assert {item["condition_id"] for item in result["commands"]} == {
+        f"g{geometry}_f{frequency}" for geometry in range(3) for frequency in range(3)
+    }
+    assert all(
+        "frequency_factorial/steps_00005000" in item["run_dir"] for item in result["commands"]
+    )
+
+
+def test_frequency_factorial_summary_computes_paired_frequency_changes() -> None:
+    objects = ("stepped_monument", "crooked_arch", "three_arm_vane")
+    dimensions = ((5, 3, 1), (3, 1, 5), (1, 5, 3))
+    dimension_ids = {1: "low", 3: "medium", 5: "high"}
+    count_rotations = {
+        "balanced": (5_000, 5_000, 5_000),
+        "f0": (5_000, 500, 50),
+        "f1": (500, 50, 5_000),
+        "f2": (50, 5_000, 500),
+    }
+    role_offset = {"balanced": 0.0, "head": 0.01, "medium": 0.02, "tail": 0.03}
+    evaluations = {}
+    condition_counts = {}
+    for geometry in range(3):
+        for frequency, counts in count_rotations.items():
+            condition_id = f"g{geometry}_{frequency}"
+            condition_counts[condition_id] = counts
+            if frequency == "balanced":
+                roles = ("balanced",) * 3
+            else:
+                roles = tuple({5_000: "head", 500: "medium", 50: "tail"}[n] for n in counts)
+            classes = []
+            for class_id, (object_id, dimension, role) in enumerate(
+                zip(objects, dimensions[geometry], roles, strict=True)
+            ):
+                error = dimension / 10.0 + role_offset[role]
+                classes.append(
+                    {
+                        "requested_class": class_id,
+                        "object_id": object_id,
+                        "target_dimension_id": dimension_ids[dimension],
+                        "true_dimension": dimension,
+                        "validity": {
+                            "class_leakage_rate": 0.0,
+                            "off_renderer_rate": error,
+                            "joint_valid_rate": 1.0 - error,
+                        },
+                        "all_requested": {
+                            "metrics": {
+                                "active_factors": {
+                                    "multivariate_energy_distance": error,
+                                },
+                                "oracle_feature_fid": error,
+                            }
+                        },
+                    }
+                )
+            evaluations[condition_id] = {"classes": classes}
+
+    summary = _frequency_factorial_summary(
+        evaluations=evaluations,
+        condition_counts=condition_counts,
+        training_steps=5_000,
+    )
+
+    assert len(summary["records"]) == 36
+    assert summary["means_by_true_dimension_and_frequency_role"]["5"]["tail"][
+        "off_renderer_rate"
+    ] == pytest.approx(0.53)
+    assert summary["mean_changes_from_balanced_by_true_dimension"]["5"]["tail"][
+        "off_renderer_rate"
+    ] == pytest.approx(0.03)
 
 
 def test_balanced_pilot_gate_checks_learning_and_each_class(tmp_path: Path) -> None:
