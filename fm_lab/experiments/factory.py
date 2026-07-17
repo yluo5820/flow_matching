@@ -31,6 +31,7 @@ from fm_lab.data import (
     PlanarDisk,
     SphericalShell,
     SwissRoll,
+    SyntheticLongTailImages,
     Torus,
     TrefoilKnot,
     TwoMoons,
@@ -64,6 +65,15 @@ from fm_lab.utils.checkpoints import load_checkpoint
 def build_target(config: dict[str, Any]):
     data_config = config.get("data", {})
     name = data_config.get("name", "two_moons").lower()
+    if name == "synthetic_long_tail_geometry":
+        manifest = data_config.get("condition_manifest")
+        if not manifest:
+            raise ValueError("data.condition_manifest is required.")
+        return SyntheticLongTailImages(
+            condition_manifest=manifest,
+            normalize=str(data_config.get("normalize", "minus_one_one")),
+            dequantize=bool(data_config.get("dequantize", False)),
+        )
     if name in {"cifar10_lt", "cifar100_lt", "imbalanced_cifar10", "imbalanced_cifar100"}:
         dataset = "cifar10" if "10" in name and "100" not in name else "cifar100"
         default_root = f"data/{dataset}"
