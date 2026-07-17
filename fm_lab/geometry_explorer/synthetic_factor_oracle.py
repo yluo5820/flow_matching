@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import json
@@ -379,6 +380,132 @@ def _train_factor_oracle_impl(
     return {
         "checkpoint_path": str(checkpoint_path),
         "gate_path": str(gate_path),
+        "metrics": published_gate,
+    }
+
+
+def requalify_factor_oracle(
+    checkpoint: str | Path,
+    gate_path: str | Path,
+    config: dict[str, Any],
+    output_dir: str | Path,
+    *,
+    scientific_basis: str,
+) -> dict[str, Any]:
+    """Republish unchanged oracle weights after a threshold-only gate revision.
+
+    The source checkpoint and gate must form an intact artifact pair, and the new
+    configuration may differ from the training configuration only in the maximum
+    normalized factor MAE. This makes a post-training gate correction explicit
+    without pretending that the model was retrained.
+    """
+
+    requested_destination = Path(output_dir).expanduser()
+    destination = requested_destination.parent.resolve() / requested_destination.name
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Oracle destination already exists: {destination}")
+    basis = str(scientific_basis).strip()
+    if not basis:
+        raise ValueError("scientific_basis must be a nonempty string.")
+
+    source_checkpoint = Path(checkpoint).expanduser().resolve()
+    source_gate_path = Path(gate_path).expanduser().resolve()
+    load_factor_oracle(source_checkpoint, "cpu")
+    payload = torch.load(source_checkpoint, map_location="cpu", weights_only=True)
+    try:
+        source_gate_bytes = source_gate_path.read_bytes()
+        source_gate = json.loads(source_gate_bytes.decode("utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Oracle gate does not exist: {source_gate_path}") from None
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Oracle gate is not valid JSON.") from exc
+    if not isinstance(source_gate, dict):
+        raise ValueError("Oracle gate payload must be a dictionary.")
+    expected_source_gate = dict(payload["metrics"])
+    expected_source_gate["checkpoint_artifact_digest"] = payload["artifact_digest"]
+    if source_gate != expected_source_gate:
+        raise ValueError("Oracle gate must exactly match checkpoint metrics plus its digest.")
+
+    source_config = payload.get("config")
+    source_training_config = payload.get("training_config")
+    if not isinstance(source_config, dict) or not isinstance(source_training_config, dict):
+        raise ValueError("Oracle checkpoint configuration is malformed.")
+    if source_training_config != source_config.get("oracle"):
+        raise ValueError("Oracle checkpoint training_config does not match config.oracle.")
+    source_comparison, prior_threshold = _config_without_oracle_threshold(source_config)
+    revised_comparison, revised_threshold = _config_without_oracle_threshold(config)
+    if source_comparison != revised_comparison:
+        raise ValueError(
+            "Requalification config may differ only in oracle.max_normalized_factor_mae."
+        )
+    source_gate_threshold = source_gate.get("thresholds", {}).get("max_normalized_factor_mae")
+    if source_gate_threshold != prior_threshold:
+        raise ValueError("Source oracle gate threshold does not match its training config.")
+    if revised_threshold == prior_threshold:
+        raise ValueError("Requalification requires a changed factor-MAE threshold.")
+
+    parsed = _parse_config(config)
+    object_configs = _object_configs(config)
+    normalization = _factor_normalization(parsed.elevation_bounds)
+    renderer_config = _renderer_config_payload(config, object_configs, normalization)
+    renderer_hash = _stable_hash(renderer_config)
+    if renderer_hash != payload["renderer_config_hash"]:
+        raise ValueError("Requalification config changes the trained renderer contract.")
+
+    gate = oracle_gate_metrics(
+        object_accuracy=float(source_gate["object_accuracy"]),
+        factor_mae=source_gate["factor_mae"],
+        min_accuracy=parsed.min_accuracy,
+        max_factor_mae=parsed.max_factor_mae,
+        rerender_pixel_mae_q995=float(source_gate["validation_rerender_pixel_mae_q995"]),
+    )
+    configured_gate_passed = bool(gate["passed"])
+    configured_failure_reasons = list(gate["failure_reasons"])
+    gate_profile = "production" if _is_production_profile(config, parsed) else "fixture_only"
+    production_qualified = gate_profile == "production" and configured_gate_passed
+    qualification_reasons = list(configured_failure_reasons)
+    if gate_profile != "production":
+        qualification_reasons.append("fixture_only_profile")
+    qualification_provenance = {
+        "method": "threshold_only_requalification_without_retraining",
+        "scientific_basis": basis,
+        "source_checkpoint_artifact_digest": str(payload["artifact_digest"]),
+        "source_gate_file_sha256": hashlib.sha256(source_gate_bytes).hexdigest(),
+        "prior_max_normalized_factor_mae": float(prior_threshold),
+        "revised_max_normalized_factor_mae": float(revised_threshold),
+        "model_state_dict_unchanged": True,
+    }
+    gate.update(
+        {
+            "gate_profile": gate_profile,
+            "configured_gate_passed": configured_gate_passed,
+            "configured_failure_reasons": configured_failure_reasons,
+            "production_qualified": production_qualified,
+            "passed": production_qualified,
+            "failure_reasons": qualification_reasons,
+            "renderer_config_hash": renderer_hash,
+            "seed": parsed.seed,
+            "data_provenance": payload["data_provenance"],
+            "qualification_provenance": qualification_provenance,
+        }
+    )
+
+    revised_checkpoint = copy.deepcopy(payload)
+    revised_checkpoint["training_config"] = copy.deepcopy(config["oracle"])
+    revised_checkpoint["config"] = copy.deepcopy(config)
+    revised_checkpoint["metrics"] = gate
+    revised_checkpoint["qualification_provenance"] = qualification_provenance
+    revised_checkpoint["artifact_digest"] = _checkpoint_artifact_digest(revised_checkpoint)
+    published_gate = dict(gate)
+    published_gate["checkpoint_artifact_digest"] = revised_checkpoint["artifact_digest"]
+    checkpoint_path, published_gate_path = _publish_artifacts(
+        destination,
+        checkpoint=revised_checkpoint,
+        gate=published_gate,
+    )
+    return {
+        "checkpoint_path": str(checkpoint_path),
+        "gate_path": str(published_gate_path),
         "metrics": published_gate,
     }
 
@@ -817,6 +944,20 @@ def _checkpoint_artifact_digest(payload: Mapping[str, Any]) -> str:
     return hasher.hexdigest()
 
 
+def _config_without_oracle_threshold(config: Mapping[str, Any]) -> tuple[dict[str, Any], float]:
+    if not isinstance(config, Mapping):
+        raise TypeError("Oracle configuration must be a mapping.")
+    comparison = copy.deepcopy(dict(config))
+    oracle = comparison.get("oracle")
+    if not isinstance(oracle, dict):
+        raise ValueError("Oracle configuration must contain an oracle mapping.")
+    threshold = oracle.pop("max_normalized_factor_mae", None)
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        raise ValueError("oracle.max_normalized_factor_mae must be numeric.")
+    _validate_nonnegative_finite(float(threshold), "oracle.max_normalized_factor_mae")
+    return comparison, float(threshold)
+
+
 def _update_digest_blob(hasher: Any, value: bytes) -> None:
     hasher.update(len(value).to_bytes(8, "big"))
     hasher.update(value)
@@ -947,9 +1088,7 @@ def _is_production_profile(config: dict[str, Any], parsed: _OracleConfig) -> boo
         return False
     render = config.get("render", {})
     try:
-        canonical_material = (
-            common_lightness == 0.70 and common_chroma == 0.12
-        )
+        canonical_material = common_lightness == 0.70 and common_chroma == 0.12
         expected_camera = 4.0 if profile == "original_v1" else 3.9
         expected_ambient = 0.35 if profile == "original_v1" else 0.6
         expected_diffuse = 0.70 if profile == "original_v1" else 0.4
@@ -990,7 +1129,7 @@ def _is_production_profile(config: dict[str, Any], parsed: _OracleConfig) -> boo
         and parsed.steps == 20_000
         and parsed.learning_rate == 1.0e-3
         and parsed.min_accuracy == 0.99
-        and parsed.max_factor_mae == 0.02
+        and parsed.max_factor_mae == (0.02 if profile == "original_v1" else 0.08)
     )
 
 

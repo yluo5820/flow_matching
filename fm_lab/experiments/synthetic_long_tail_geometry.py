@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import fcntl
 import hashlib
 import json
@@ -10,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -359,6 +361,78 @@ def write_condition_training_configs(
     return tuple(output_path / path for path in relative_paths)
 
 
+def write_pilot_training_config(
+    *,
+    source_config_path: str | Path,
+    output_root: str | Path,
+    run_root: str | Path,
+    pilot: dict[str, Any],
+) -> Path:
+    """Publish a reduced, immutable balanced-pilot config derived from the matrix config."""
+
+    source_path = Path(source_config_path).expanduser().resolve()
+    source = load_config(source_path)
+    plan = _read_condition_plan(source["data"]["condition_manifest"])
+    if plan.replicate != 0 or not plan.condition_id.endswith("_balanced"):
+        raise ValueError("Pilot source must be a replicate-0 balanced condition.")
+    steps = _positive_int("pilot.training_steps", pilot.get("training_steps"))
+    batch_size = _positive_int("pilot.batch_size", pilot.get("batch_size"))
+    warmup_steps = _nonnegative_int("pilot.warmup_steps", pilot.get("warmup_steps"))
+    log_every = _positive_int("pilot.log_every", pilot.get("log_every"))
+    samples_per_class = _positive_int("pilot.samples_per_class", pilot.get("samples_per_class"))
+    nfe = _positive_int("pilot.nfe", pilot.get("nfe"))
+    sample_batch_size = _positive_int("pilot.sample_batch_size", pilot.get("sample_batch_size"))
+    n_trajectories = _positive_int("pilot.n_trajectories", pilot.get("n_trajectories"))
+    if warmup_steps > steps:
+        raise ValueError("pilot.warmup_steps cannot exceed pilot.training_steps.")
+
+    config = copy.deepcopy(source)
+    config["experiment"]["name"] = f"{config['experiment']['name']}_pilot"
+    config["experiment"]["output_dir"] = str(Path(run_root) / "replicate_00" / plan.condition_id)
+    config["training"].update(
+        {
+            "steps": steps,
+            "batch_size": batch_size,
+            "warmup_steps": warmup_steps,
+            "log_every": log_every,
+            "checkpoint_steps": [steps],
+        }
+    )
+    config["sampling"].update(
+        {
+            "n_samples": samples_per_class * len(plan.class_counts),
+            "n_trajectories": n_trajectories,
+            "nfe": nfe,
+            "sample_batch_size": sample_batch_size,
+        }
+    )
+
+    destination = Path(output_root).expanduser()
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Pilot config destination already exists: {destination}")
+    relative_path = Path("replicate_00") / f"{plan.condition_id}.yaml"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=".pilot-config-", dir=destination.parent))
+    published = False
+    try:
+        config_path = staging_root / relative_path
+        save_config(config, config_path)
+        config_path.with_suffix(".sha256").write_text(
+            f"{_config_hash(config, plan.manifest_digest)}\n", encoding="utf-8"
+        )
+        os.symlink(
+            os.path.relpath(staging_root, start=destination.parent),
+            destination,
+            target_is_directory=True,
+        )
+        published = True
+    except BaseException:
+        if not published:
+            shutil.rmtree(staging_root, ignore_errors=True)
+        raise
+    return destination / relative_path
+
+
 def _condition_plans(manifests: Iterable[str | Path]) -> tuple[_ConditionPlan, ...]:
     plans = tuple(_read_condition_plan(path) for path in manifests)
     if len(plans) != len(_CANONICAL_CONDITION_IDS):
@@ -524,9 +598,11 @@ class SyntheticLongTailRunner:
         self.config_path = Path(config_path).expanduser().resolve()
         self.config = load_config(self.config_path)
         self.output_root = Path(self.config["output_root"]).expanduser().resolve()
-        self.run_root = Path(
-            self.config.get("run_root", "runs/synthetic_long_tail_geometry")
-        ).expanduser().resolve()
+        self.run_root = (
+            Path(self.config.get("run_root", "runs/synthetic_long_tail_geometry"))
+            .expanduser()
+            .resolve()
+        )
         self.ledger = RunLedger(self.output_root / "run_ledger.json")
         self.base_config_path = self.config_path.parent / "base_train.yaml"
         if not self.base_config_path.is_file():
@@ -616,12 +692,19 @@ class SyntheticLongTailRunner:
             stage="renderer_calibration",
         )
         oracle_dir = self.output_root / "calibration" / "oracle"
-        result = train_factor_oracle(self.config, oracle_dir, device)
         oracle_gate = oracle_dir / "oracle_gate.json"
+        if oracle_dir.exists() or oracle_dir.is_symlink():
+            require_gate(oracle_gate, stage="factor_oracle")
+            result = {
+                "checkpoint_path": str(oracle_dir / "factor_oracle.pt"),
+                "gate_path": str(oracle_gate),
+                "metrics": json.loads(oracle_gate.read_text(encoding="utf-8")),
+            }
+        else:
+            result = train_factor_oracle(self.config, oracle_dir, device)
         require_gate(oracle_gate, stage="factor_oracle")
         metric_dir = self.output_root / "calibration" / "metric_controls"
         metric = calibrate_metric_controls(
-            config=self.config,
             oracle_checkpoint=oracle_dir / "factor_oracle.pt",
             oracle_gate=oracle_gate,
             output_dir=metric_dir,
@@ -630,7 +713,7 @@ class SyntheticLongTailRunner:
             seed=int(self.config["seed"]) + 7_000_000,
             source_revision=_source_revision(),
         )
-        metric_passed = metric["ordering"]["passed"] is True
+        metric_passed = metric["control_ordering"]["passed"] is True
         metric_gate = {
             "passed": metric_passed,
             "reasons": [] if metric_passed else ["metric ordering"],
@@ -652,7 +735,18 @@ class SyntheticLongTailRunner:
 
     def pilot(self, *, device: str, dry_run: bool = False) -> tuple[TrainingCommand, ...]:
         self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
-        config_path = next(path for path in self.config_paths()[0] if path.stem == "g0_balanced")
+        source_config_path = next(
+            path for path in self.config_paths()[0] if path.stem == "g0_balanced"
+        )
+        pilot_config_root = self.output_root / "training_configs" / "pilot_set"
+        config_path = pilot_config_root / "replicate_00" / "g0_balanced.yaml"
+        if not dry_run and not config_path.is_file():
+            config_path = write_pilot_training_config(
+                source_config_path=source_config_path,
+                output_root=pilot_config_root,
+                run_root=self.run_root / "pilot",
+                pilot=self.config["pilot"],
+            )
         command = TrainingCommand(
             replicate=0,
             condition_id="g0_balanced",
@@ -660,8 +754,147 @@ class SyntheticLongTailRunner:
             run_dir=self.run_root / "pilot" / "replicate_00" / "g0_balanced",
         )
         if not dry_run:
-            self._run(command, device=device, stage="pilot", resume=False)
+            pilot_entry = "pilot:replicate-00:g0_balanced"
+            config_hash = _training_config_hash(config_path)
+            if not self.ledger.is_complete(pilot_entry, config_hash=config_hash):
+                self._run(command, device=device, stage="pilot", resume=False)
+            from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+                evaluate_generated_distribution,
+            )
+
+            samples_per_class = int(self.config["pilot"]["samples_per_class"])
+            evaluation_dir = command.run_dir / "evaluation"
+            evaluation = evaluate_generated_distribution(
+                generated_root=command.run_dir,
+                oracle_checkpoint=self.output_root / "calibration" / "oracle" / "factor_oracle.pt",
+                oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+                output_dir=evaluation_dir,
+                device=device,
+                samples_per_class=samples_per_class,
+                reference_samples_per_class=samples_per_class,
+                seed=int(self.config["seed"]) + 8_000_000,
+                generated_seed=int(load_config(config_path)["sampling"]["seed"]),
+                source_revision=_source_revision(),
+                clip_generated_to_value_range=True,
+                condition_manifest=load_config(config_path)["data"]["condition_manifest"],
+                inference_batch_size=min(256, samples_per_class),
+            )
+            pilot_gate = _balanced_pilot_gate(
+                run_dir=command.run_dir,
+                evaluation=evaluation,
+                pilot=self.config["pilot"],
+            )
+            pilot_gate_path = self.output_root / "calibration" / "pilot_gate.json"
+            _write_json_atomic(pilot_gate, pilot_gate_path)
+            self.ledger.complete(
+                "pilot-evaluation-condition-reference",
+                {
+                    "gate": str(pilot_gate_path),
+                    "evaluation": str(evaluation_dir / "factor_metrics.json"),
+                },
+                metadata={"stage": "pilot-evaluation"},
+            )
+            require_gate(pilot_gate_path, stage="balanced_pilot")
         return (command,)
+
+    def balanced_pilots(self, *, device: str, dry_run: bool = False) -> dict[str, Any]:
+        """Run all three balanced dimension rotations at the reduced pilot budget."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        commands = []
+        evaluations: dict[str, dict[str, Any]] = {}
+        for geometry in range(3):
+            condition_id = f"g{geometry}_balanced"
+            source_config_path = next(
+                path for path in self.config_paths()[0] if path.stem == condition_id
+            )
+            pilot_config_root = (
+                self.output_root / "training_configs" / "pilot_set"
+                if geometry == 0
+                else self.output_root / "training_configs" / f"pilot_{condition_id}_set"
+            )
+            config_path = pilot_config_root / "replicate_00" / f"{condition_id}.yaml"
+            legacy_config_path = pilot_config_root / "replicate_00" / "g0_balanced.yaml"
+            if geometry > 0 and not config_path.is_file() and legacy_config_path.is_file():
+                config_path = legacy_config_path
+            run_dir = (
+                self.run_root / "pilot" / "replicate_00" / condition_id
+                if geometry == 0
+                else self.run_root / "balanced_pilots" / "replicate_00" / condition_id
+            )
+            if not dry_run and not config_path.is_file():
+                config_path = write_pilot_training_config(
+                    source_config_path=source_config_path,
+                    output_root=pilot_config_root,
+                    run_root=run_dir.parents[1],
+                    pilot=self.config["pilot"],
+                )
+            command = TrainingCommand(
+                replicate=0,
+                condition_id=condition_id,
+                config_path=config_path,
+                run_dir=run_dir,
+            )
+            commands.append(command)
+            if dry_run:
+                continue
+
+            stage = "pilot" if geometry == 0 else "balanced-pilot"
+            entry_id = f"{stage}:replicate-00:{condition_id}"
+            config_hash = _training_config_hash(config_path)
+            if not self.ledger.is_complete(entry_id, config_hash=config_hash):
+                self._run(command, device=device, stage=stage, resume=False)
+            evaluation_dir = run_dir / "evaluation"
+            if not evaluation_dir.is_dir():
+                from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+                    evaluate_generated_distribution,
+                )
+
+                pilot_config = load_config(config_path)
+                count = int(self.config["pilot"]["samples_per_class"])
+                evaluation = evaluate_generated_distribution(
+                    generated_root=run_dir,
+                    oracle_checkpoint=self.output_root
+                    / "calibration"
+                    / "oracle"
+                    / "factor_oracle.pt",
+                    oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+                    output_dir=evaluation_dir,
+                    device=device,
+                    samples_per_class=count,
+                    reference_samples_per_class=count,
+                    seed=int(self.config["seed"]) + 8_000_000,
+                    generated_seed=int(pilot_config["sampling"]["seed"]),
+                    source_revision=_source_revision(),
+                    clip_generated_to_value_range=True,
+                    condition_manifest=pilot_config["data"]["condition_manifest"],
+                    inference_batch_size=min(256, count),
+                )
+                self.ledger.complete(
+                    f"balanced-pilot-evaluation-active-factors:{condition_id}",
+                    {"evaluation": str(evaluation_dir / "factor_metrics.json")},
+                    metadata={
+                        "stage": "balanced-pilot-evaluation",
+                        "condition": condition_id,
+                    },
+                )
+            else:
+                evaluation = json.loads(
+                    (evaluation_dir / "factor_metrics.json").read_text(encoding="utf-8")
+                )
+            evaluations[condition_id] = evaluation
+
+        if dry_run:
+            return {"commands": [self._command_record(command, device) for command in commands]}
+        summary = _balanced_pilot_rotation_summary(evaluations)
+        summary_path = self.output_root / "analysis" / "balanced_pilot_rotations.json"
+        _write_json_atomic(summary, summary_path)
+        self.ledger.complete(
+            "balanced-pilot-rotations-active-factors",
+            {"summary": str(summary_path)},
+            metadata={"stage": "balanced-pilot-rotations"},
+        )
+        return summary
 
     def smoke(
         self,
@@ -736,15 +969,11 @@ class SyntheticLongTailRunner:
                 "conditions": _condition_snapshot(self.output_root),
             }
         report_filename = str(
-            self.config.get(
-                "report_filename", "synthetic_long_tail_geometry_report.md"
-            )
+            self.config.get("report_filename", "synthetic_long_tail_geometry_report.md")
         )
         if Path(report_filename).name != report_filename:
             raise ValueError("report_filename must be a plain filename.")
-        destination = (
-            self.config_path.parents[2] / "docs" / "research" / report_filename
-        )
+        destination = self.config_path.parents[2] / "docs" / "research" / report_filename
         path = render_research_report(
             summary,
             {"schema_version": 1, "entries": self.ledger.entries()},
@@ -828,6 +1057,144 @@ def _training_config_hash(path: Path) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", value):
         raise ValueError(f"Training config hash sidecar is malformed: {sidecar}")
     return value
+
+
+def _balanced_pilot_gate(
+    *,
+    run_dir: Path,
+    evaluation: dict[str, Any],
+    pilot: dict[str, Any],
+) -> dict[str, Any]:
+    metrics_path = run_dir / "metrics.json"
+    history_path = run_dir / "diagnostics" / "training_history.csv"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    with history_path.open(encoding="utf-8", newline="") as handle:
+        history = list(csv.DictReader(handle))
+    losses = [float(row["loss"]) for row in history]
+    if not losses or not all(math.isfinite(loss) for loss in losses):
+        raise ValueError("Pilot training history must contain finite losses.")
+    window = min(3, len(losses))
+    initial_loss = float(statistics.median(losses[:window]))
+    final_loss = float(statistics.median(losses[-window:]))
+    loss_ratio = final_loss / initial_loss if initial_loss > 0.0 else math.inf
+
+    expected_steps = _positive_int("pilot.training_steps", pilot.get("training_steps"))
+    max_loss_ratio = float(pilot["max_final_to_initial_loss_ratio"])
+    max_leakage = float(pilot["max_class_leakage_rate"])
+    max_off_renderer = float(pilot["max_off_renderer_rate"])
+    min_joint_valid = float(pilot["min_joint_valid_rate"])
+    thresholds = (max_loss_ratio, max_leakage, max_off_renderer, min_joint_valid)
+    if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in thresholds):
+        raise ValueError("Pilot gate thresholds must be finite values in [0, 1].")
+
+    checks: dict[str, Any] = {
+        "training_complete": int(metrics.get("trained_steps", -1)) == expected_steps,
+        "loss_decreased": loss_ratio <= max_loss_ratio,
+        "classes": {},
+    }
+    reasons = []
+    if not checks["training_complete"]:
+        reasons.append("training_incomplete")
+    if not checks["loss_decreased"]:
+        reasons.append("loss_did_not_decrease")
+    for item in evaluation.get("classes", []):
+        class_id = int(item["requested_class"])
+        validity = item["validity"]
+        class_checks = {
+            "class_leakage": float(validity["class_leakage_rate"]) <= max_leakage,
+            "off_renderer": float(validity["off_renderer_rate"]) <= max_off_renderer,
+            "joint_valid": float(validity["joint_valid_rate"]) >= min_joint_valid,
+        }
+        checks["classes"][str(class_id)] = class_checks
+        reasons.extend(
+            f"class_{class_id}:{name}" for name, passed in class_checks.items() if not passed
+        )
+    if len(checks["classes"]) != 3:
+        reasons.append("missing_class_evaluation")
+
+    return {
+        "passed": not reasons,
+        "reasons": reasons,
+        "checks": checks,
+        "loss": {
+            "initial_window_median": initial_loss,
+            "final_window_median": final_loss,
+            "final_to_initial_ratio": loss_ratio,
+            "history_points": len(losses),
+        },
+        "thresholds": {
+            "training_steps": expected_steps,
+            "max_final_to_initial_loss_ratio": max_loss_ratio,
+            "max_class_leakage_rate": max_leakage,
+            "max_off_renderer_rate": max_off_renderer,
+            "min_joint_valid_rate": min_joint_valid,
+        },
+        "class_validity": {
+            str(item["requested_class"]): item["validity"] for item in evaluation["classes"]
+        },
+        "artifacts": {
+            "run_metrics": str(metrics_path),
+            "training_history": str(history_path),
+            "factor_metrics": str(run_dir / "evaluation" / "factor_metrics.json"),
+        },
+    }
+
+
+def _balanced_pilot_rotation_summary(
+    evaluations: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if set(evaluations) != {"g0_balanced", "g1_balanced", "g2_balanced"}:
+        raise ValueError("Balanced pilot summary requires all three geometry rotations.")
+    records = []
+    for condition_id, evaluation in sorted(evaluations.items()):
+        for item in evaluation["classes"]:
+            all_metrics = item["all_requested"]["metrics"]
+            records.append(
+                {
+                    "condition_id": condition_id,
+                    "class_id": int(item["requested_class"]),
+                    "object_id": item["object_id"],
+                    "target_dimension_id": item["target_dimension_id"],
+                    "true_dimension": int(item["true_dimension"]),
+                    **{name: float(value) for name, value in item["validity"].items()},
+                    "multivariate_energy_distance": float(
+                        all_metrics["multivariate_energy_distance"]
+                    ),
+                    "active_multivariate_energy_distance": float(
+                        all_metrics["active_factors"]["multivariate_energy_distance"]
+                    ),
+                    "oracle_feature_fid": float(all_metrics["oracle_feature_fid"]),
+                }
+            )
+
+    def grouped(field: str) -> dict[str, dict[str, float]]:
+        result = {}
+        for key in sorted({str(record[field]) for record in records}):
+            group = [record for record in records if str(record[field]) == key]
+            result[key] = {
+                metric: float(statistics.mean(float(item[metric]) for item in group))
+                for metric in (
+                    "class_leakage_rate",
+                    "off_renderer_rate",
+                    "joint_valid_rate",
+                    "multivariate_energy_distance",
+                    "active_multivariate_energy_distance",
+                    "oracle_feature_fid",
+                )
+            }
+        return result
+
+    return {
+        "schema_version": 1,
+        "design": "three balanced frequency conditions with dimension rotated across objects",
+        "records": records,
+        "means_by_true_dimension": grouped("true_dimension"),
+        "means_by_object": grouped("object_id"),
+        "generated_value_clipping": {
+            condition_id: evaluation["provenance"]["generated_value_clipping"]
+            for condition_id, evaluation in sorted(evaluations.items())
+        },
+    }
 
 
 def _entry_id(value: str) -> str:

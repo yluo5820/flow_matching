@@ -11,6 +11,7 @@ from fm_lab.experiments.factory import build_model, build_source, build_target
 from fm_lab.experiments.synthetic_long_tail_geometry import (
     matched_pass_step,
     write_condition_training_configs,
+    write_pilot_training_config,
 )
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     build_condition_manifests,
@@ -161,9 +162,12 @@ def test_writer_preserves_absolute_run_root_and_validates_full_matrix_before_pub
     manifests = write_tiny_factorial_manifests(tmp_path)
     kwargs = training_kwargs(manifests, tmp_path)
     paths = write_condition_training_configs(**(kwargs | {"run_root": "/scratch/study-runs"}))
-    assert load_config(next(path for path in paths if path.stem == "g0_f0"))["experiment"][
-        "output_dir"
-    ] == "/scratch/study-runs/replicate_00/g0_f0"
+    assert (
+        load_config(next(path for path in paths if path.stem == "g0_f0"))["experiment"][
+            "output_dir"
+        ]
+        == "/scratch/study-runs/replicate_00/g0_f0"
+    )
 
     for malformed_manifests, output_name in (
         (manifests[:-1], "missing"),
@@ -174,6 +178,39 @@ def test_writer_preserves_absolute_run_root_and_validates_full_matrix_before_pub
                 **training_kwargs(malformed_manifests, tmp_path, output_name=output_name)
             )
         assert not (tmp_path / output_name).exists()
+
+
+def test_pilot_writer_preserves_balanced_rotation_identity(tmp_path: Path) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    matrix_paths = write_condition_training_configs(**training_kwargs(manifests, tmp_path))
+    source_path = next(path for path in matrix_paths if path.stem == "g2_balanced")
+    output_root = tmp_path / "pilot-configs"
+    run_root = tmp_path / "pilot-runs"
+
+    config_path = write_pilot_training_config(
+        source_config_path=source_path,
+        output_root=output_root,
+        run_root=run_root,
+        pilot={
+            "training_steps": 100,
+            "batch_size": 64,
+            "warmup_steps": 10,
+            "log_every": 5,
+            "samples_per_class": 3,
+            "nfe": 8,
+            "sample_batch_size": 3,
+            "n_trajectories": 3,
+        },
+    )
+    config = load_config(config_path)
+
+    assert config_path == output_root / "replicate_00/g2_balanced.yaml"
+    assert config["experiment"]["output_dir"] == str(run_root / "replicate_00/g2_balanced")
+    assert config["training"]["steps"] == 100
+    assert config["training"]["batch_size"] == 64
+    assert config["training"]["checkpoint_steps"] == [100]
+    assert config["sampling"]["n_samples"] == 9
+    assert config_path.with_suffix(".sha256").is_file()
 
 
 def test_writer_rejects_traversal_wrong_tree_and_non_32_manifest_before_publish(
@@ -313,8 +350,7 @@ def test_writer_publishes_complete_immutable_symlink_root(tmp_path: Path) -> Non
     assert output_root.is_symlink()
     assert len(paths) == 12
     assert all(
-        path.is_file()
-        and load_config(path)["data"]["name"] == "synthetic_long_tail_geometry"
+        path.is_file() and load_config(path)["data"]["name"] == "synthetic_long_tail_geometry"
         for path in paths
     )
     with pytest.raises(FileExistsError):
@@ -331,9 +367,11 @@ def test_writer_hashes_manifest_provenance_and_accepts_each_replicate(tmp_path: 
             | {"run_root": "runs/synthetic-long-tail"}
         )
     )
-    first_hash = next(path for path in first_paths if path.stem == "g0_f0").with_suffix(
-        ".sha256"
-    ).read_text(encoding="utf-8")
+    first_hash = (
+        next(path for path in first_paths if path.stem == "g0_f0")
+        .with_suffix(".sha256")
+        .read_text(encoding="utf-8")
+    )
 
     equivalent_manifests = write_tiny_factorial_manifests(tmp_path / "equivalent-root")
     equivalent_paths = write_condition_training_configs(
@@ -342,9 +380,11 @@ def test_writer_hashes_manifest_provenance_and_accepts_each_replicate(tmp_path: 
             | {"run_root": "runs/synthetic-long-tail"}
         )
     )
-    equivalent_hash = next(
-        path for path in equivalent_paths if path.stem == "g0_f0"
-    ).with_suffix(".sha256").read_text(encoding="utf-8")
+    equivalent_hash = (
+        next(path for path in equivalent_paths if path.stem == "g0_f0")
+        .with_suffix(".sha256")
+        .read_text(encoding="utf-8")
+    )
     assert equivalent_hash == first_hash
 
     for manifest_path in manifests:
@@ -357,9 +397,11 @@ def test_writer_hashes_manifest_provenance_and_accepts_each_replicate(tmp_path: 
             | {"run_root": "runs/synthetic-long-tail"}
         )
     )
-    changed_hash = next(path for path in changed_paths if path.stem == "g0_f0").with_suffix(
-        ".sha256"
-    ).read_text(encoding="utf-8")
+    changed_hash = (
+        next(path for path in changed_paths if path.stem == "g0_f0")
+        .with_suffix(".sha256")
+        .read_text(encoding="utf-8")
+    )
     assert changed_hash != first_hash
 
     all_paths = set(first_paths)

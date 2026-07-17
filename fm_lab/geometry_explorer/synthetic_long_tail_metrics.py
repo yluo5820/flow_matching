@@ -34,7 +34,10 @@ from fm_lab.geometry_explorer.synthetic_factor_oracle import (
 )
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     OBJECT_IDS,
+    ConditionManifest,
+    _as_hwc_batch,
     _render_map,
+    build_factor_space,
     canonical_factor_rows,
 )
 from fm_lab.utils.logging import write_json
@@ -43,6 +46,11 @@ _FACTOR_METRICS_FILENAME = "factor_metrics.json"
 _CLASS_METRICS_FILENAME = "factor_metrics_by_class.csv"
 _CONTROL_METRICS_FILENAME = "metric_controls.json"
 _CONTROL_CLASS_FILENAME = "metric_controls_by_class.csv"
+_ACTIVE_FACTORS_BY_DIMENSION = {
+    "high": FACTOR_NAMES,
+    "medium": ("tx", "ty", "tz"),
+    "low": ("tz",),
+}
 _CLASS_CSV_FIELDS = (
     "requested_class",
     "object_id",
@@ -237,6 +245,8 @@ def evaluate_generated_distribution(
     required_gate_profile: str = "production",
     source_revision: str = "unknown",
     sample_value_range: tuple[float, float] = (-1.0, 1.0),
+    clip_generated_to_value_range: bool = False,
+    condition_manifest: str | Path | None = None,
     inference_batch_size: int = 256,
 ) -> dict[str, Any]:
     """Evaluate generated samples against independent renderer references.
@@ -262,6 +272,29 @@ def evaluate_generated_distribution(
     requested_labels = _load_requested_labels(labels_snapshot, count)
     if len(samples) != len(requested_labels):
         raise ValueError("generated samples and requested labels must have matching lengths.")
+    if not isinstance(clip_generated_to_value_range, bool):
+        raise TypeError("clip_generated_to_value_range must be boolean.")
+    if not isinstance(sample_value_range, tuple) or len(sample_value_range) != 2:
+        raise TypeError("sample_value_range must be a two-item tuple.")
+    value_low, value_high = (float(sample_value_range[0]), float(sample_value_range[1]))
+    if not np.isfinite(value_low) or not np.isfinite(value_high) or value_high <= value_low:
+        raise ValueError("sample_value_range must be finite and increasing.")
+    below_range = samples < value_low
+    above_range = samples > value_high
+    clipping_diagnostics = {
+        "applied": clip_generated_to_value_range,
+        "observed_min": float(samples.min()),
+        "observed_max": float(samples.max()),
+        "below_range_fraction": float(np.mean(below_range)),
+        "above_range_fraction": float(np.mean(above_range)),
+        "clipped_pixel_fraction": float(np.mean(below_range | above_range)),
+        "mean_absolute_clipping": float(
+            np.mean(np.abs(samples - np.clip(samples, value_low, value_high)))
+        ),
+    }
+    samples_for_evaluation = (
+        np.clip(samples, value_low, value_high) if clip_generated_to_value_range else samples
+    )
 
     payload, gate, model, oracle_provenance = _validated_oracle(
         oracle_checkpoint,
@@ -271,7 +304,7 @@ def evaluate_generated_distribution(
     )
     parsed = _parse_config(payload["config"])
     images = _normalize_generated_images(
-        samples,
+        samples_for_evaluation,
         image_size=parsed.image_size,
         value_range=sample_value_range,
     )
@@ -290,22 +323,35 @@ def evaluate_generated_distribution(
         parsed=parsed,
     )
     threshold = float(gate["off_renderer_threshold"])
-    reference_data = _render_independent_dataset(
-        payload["config"],
-        object_configs=object_configs,
-        factor=factor,
-        count_per_object=reference_count,
-        split_seed=reference_seed,
-        parsed=parsed,
-    )
-    reference_images = reference_data.images.astype(np.float32) / 255.0
+    condition_reference: dict[str, Any] | None = None
+    if condition_manifest is None:
+        reference_data = _render_independent_dataset(
+            payload["config"],
+            object_configs=object_configs,
+            factor=factor,
+            count_per_object=reference_count,
+            split_seed=reference_seed,
+            parsed=parsed,
+        )
+        reference_images_uint8 = reference_data.images
+        reference_class = np.asarray(reference_data.class_ids, dtype=np.int64)
+        reference_source = "independently_sampled_high_dimensional_renderer"
+    else:
+        reference_images_uint8, reference_class, condition_reference = _render_condition_reference(
+            payload["config"],
+            condition_manifest=condition_manifest,
+            object_configs=object_configs,
+            count_per_class=reference_count,
+            seed=reference_seed,
+        )
+        reference_source = "independently_sampled_condition_specific_renderer"
+    reference_images = reference_images_uint8.astype(np.float32) / 255.0
     reference_prediction = _infer(
         model,
         reference_images,
         device=device,
         batch_size=batch_size,
     )
-    reference_class = np.asarray(reference_data.class_ids, dtype=np.int64)
     class_results = []
     for class_id, object_id in enumerate(OBJECT_IDS):
         generated_mask = requested_labels == class_id
@@ -325,6 +371,19 @@ def evaluate_generated_distribution(
             reference_prediction,
             reference_mask,
             seed=reference_seed + class_id * 100,
+        )
+        active_factor_names = (
+            tuple(condition_reference["classes"][str(class_id)]["active_factor_names"])
+            if condition_reference is not None
+            else FACTOR_NAMES
+        )
+        all_metrics["active_factors"] = _active_factor_metric_bundle(
+            generated_prediction,
+            generated_mask,
+            reference_prediction,
+            reference_mask,
+            factor_names=active_factor_names,
+            seed=reference_seed + class_id * 100 + 2,
         )
         joint_count = int(np.count_nonzero(joint_mask))
         joint_result = (
@@ -346,19 +405,29 @@ def evaluate_generated_distribution(
                 ),
             }
         )
-        class_results.append(
-            {
-                "requested_class": class_id,
-                "object_id": object_id,
-                "validity": validity,
-                "all_requested": {
-                    "sample_count": int(np.count_nonzero(generated_mask)),
-                    "status": "ok",
-                    "metrics": all_metrics,
-                },
-                "joint_valid": joint_result,
-            }
-        )
+        if joint_result["metrics"] is not None:
+            joint_result["metrics"]["active_factors"] = _active_factor_metric_bundle(
+                generated_prediction,
+                joint_mask,
+                reference_prediction,
+                reference_mask,
+                factor_names=active_factor_names,
+                seed=reference_seed + class_id * 100 + 3,
+            )
+        class_result = {
+            "requested_class": class_id,
+            "object_id": object_id,
+            "validity": validity,
+            "all_requested": {
+                "sample_count": int(np.count_nonzero(generated_mask)),
+                "status": "ok",
+                "metrics": all_metrics,
+            },
+            "joint_valid": joint_result,
+        }
+        if condition_reference is not None:
+            class_result.update(condition_reference["classes"][str(class_id)])
+        class_results.append(class_result)
 
     provenance = {
         "generated_seed": sample_seed,
@@ -377,9 +446,11 @@ def evaluate_generated_distribution(
         "oracle_data_provenance": payload["data_provenance"],
         "factor_normalization": payload["factor_normalization"],
         "renderer_config_hash": str(payload["renderer_config_hash"]),
-        "reference_source": "independently_sampled_high_dimensional_renderer",
+        "reference_source": reference_source,
+        "condition_reference": condition_reference,
         "master_pool_reads": 0,
         "sample_value_range": [float(sample_value_range[0]), float(sample_value_range[1])],
+        "generated_value_clipping": clipping_diagnostics,
         "oracle_input_range": [0.0, 1.0],
     }
     result: dict[str, Any] = {
@@ -540,6 +611,73 @@ def calibrate_metric_controls(
         fields=fields,
     )
     return result
+
+
+def _render_condition_reference(
+    config: dict[str, Any],
+    *,
+    condition_manifest: str | Path,
+    object_configs: Mapping[str, dict[str, Any]],
+    count_per_class: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    manifest_path = Path(condition_manifest).expanduser().resolve()
+    snapshot = _snapshot_file(manifest_path, "condition manifest")
+    try:
+        manifest = ConditionManifest.read(snapshot["path"])
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid condition manifest: {manifest_path}") from exc
+    if _sha256_file(manifest_path) != snapshot["sha256"]:
+        raise ValueError(f"Condition manifest changed while being read: {manifest_path}")
+    if manifest.image_shape != (3, int(config["image_size"]), int(config["image_size"])):
+        raise ValueError("Condition manifest image_shape does not match the oracle renderer.")
+    by_class = {item.class_id: item for item in manifest.classes}
+    if set(by_class) != set(range(len(OBJECT_IDS))) or len(by_class) != len(OBJECT_IDS):
+        raise ValueError("Condition manifest must contain exactly classes 0, 1, and 2.")
+
+    images = []
+    class_ids = []
+    class_metadata = {}
+    image_size = int(config["image_size"])
+    render_batch_size = int(config.get("render", {}).get("render_batch_size", 128))
+    for class_id, object_id in enumerate(OBJECT_IDS):
+        item = by_class[class_id]
+        if item.object_id != object_id:
+            raise ValueError("Condition manifest class-to-object mapping is incompatible.")
+        factor = build_factor_space(item.dimension_id)
+        if factor.dim != item.true_dimension:
+            raise ValueError("Condition manifest true_dimension is inconsistent.")
+        class_seed = seed + class_id * 1_000
+        values = sample_values(factor.sample(count_per_class, seed=class_seed))
+        rendered = _as_hwc_batch(
+            _render_map(config, object_configs[object_id], factor).render_batch(
+                values,
+                batch_size=render_batch_size,
+            ),
+            image_size=image_size,
+        )
+        images.append(
+            np.rint(np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0).astype(np.uint8)
+        )
+        class_ids.append(np.full(count_per_class, class_id, dtype=np.int64))
+        class_metadata[str(class_id)] = {
+            "target_dimension_id": item.dimension_id,
+            "true_dimension": int(item.true_dimension),
+            "active_factor_names": list(_ACTIVE_FACTORS_BY_DIMENSION[item.dimension_id]),
+            "reference_seed": class_seed,
+        }
+    return (
+        np.concatenate(images, axis=0),
+        np.concatenate(class_ids, axis=0),
+        {
+            "condition_id": manifest.condition_id,
+            "geometry_mapping": manifest.geometry_mapping,
+            "frequency_mapping": manifest.frequency_mapping,
+            "manifest_path": str(manifest_path),
+            "manifest_sha256": snapshot["sha256"],
+            "classes": class_metadata,
+        },
+    )
 
 
 def _destination(output_dir: str | Path, label: str) -> Path:
@@ -794,9 +932,10 @@ def _factor_arrays(prediction: Mapping[str, np.ndarray]) -> dict[str, np.ndarray
 def _factor_metrics(
     generated: Mapping[str, np.ndarray],
     reference: Mapping[str, np.ndarray],
+    factor_names: Sequence[str] = FACTOR_NAMES,
 ) -> dict[str, dict[str, float]]:
     result = {}
-    for name in FACTOR_NAMES:
+    for name in factor_names:
         if name == "azimuth":
             generated_angles = _circular_angles(generated[name])
             reference_angles = _circular_angles(reference[name])
@@ -841,6 +980,54 @@ def _metric_bundle(
             generated["features"][generated_mask], reference["features"][reference_mask]
         ),
     }
+
+
+def _active_factor_metric_bundle(
+    generated: Mapping[str, np.ndarray],
+    generated_mask: np.ndarray,
+    reference: Mapping[str, np.ndarray],
+    reference_mask: np.ndarray,
+    *,
+    factor_names: Sequence[str],
+    seed: int,
+) -> dict[str, Any]:
+    names = tuple(str(name) for name in factor_names)
+    if (
+        not names
+        or len(set(names)) != len(names)
+        or any(name not in FACTOR_NAMES for name in names)
+    ):
+        raise ValueError("factor_names must be a nonempty unique subset of FACTOR_NAMES.")
+    generated_all = _factor_arrays(generated)
+    reference_all = _factor_arrays(reference)
+    generated_factors = {name: generated_all[name][generated_mask] for name in names}
+    reference_factors = {name: reference_all[name][reference_mask] for name in names}
+    generated_joint = _selected_factor_matrix(generated_factors, names)
+    reference_joint = _selected_factor_matrix(reference_factors, names)
+    return {
+        "factor_names": list(names),
+        "factor_metrics": _factor_metrics(
+            generated_factors,
+            reference_factors,
+            factor_names=names,
+        ),
+        "multivariate_energy_distance": multivariate_energy_distance(
+            generated_joint,
+            reference_joint,
+            seed=seed,
+        ),
+    }
+
+
+def _selected_factor_matrix(
+    factors: Mapping[str, np.ndarray],
+    factor_names: Sequence[str],
+) -> np.ndarray:
+    columns = []
+    for name in factor_names:
+        values = np.asarray(factors[name], dtype=np.float64)
+        columns.append(values if values.ndim == 2 else values[:, None])
+    return np.concatenate(columns, axis=1).astype(np.float64, copy=False)
 
 
 def _joint_factor_matrix(factors: Mapping[str, np.ndarray]) -> np.ndarray:

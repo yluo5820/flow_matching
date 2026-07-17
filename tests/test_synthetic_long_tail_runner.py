@@ -6,13 +6,17 @@ from pathlib import Path
 
 import pytest
 
+import fm_lab.geometry_explorer.synthetic_factor_oracle as oracle_module
+import fm_lab.geometry_explorer.synthetic_long_tail_metrics as metrics_module
 from fm_lab.experiments.synthetic_long_tail_geometry import (
     RunLedger,
     StageBlockedError,
     SyntheticLongTailRunner,
+    _balanced_pilot_gate,
     build_matrix_commands,
     require_gate,
 )
+from fm_lab.utils.config import load_config
 
 
 def test_matrix_dry_run_lists_exactly_36_training_commands(tmp_path: Path) -> None:
@@ -34,12 +38,113 @@ def test_matrix_dry_run_lists_exactly_36_training_commands(tmp_path: Path) -> No
 
 
 def test_v2_config_uses_isolated_artifact_and_training_roots() -> None:
-    runner = SyntheticLongTailRunner(
-        "configs/synthetic_long_tail_geometry/experiment_v2.yaml"
-    )
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
 
     assert runner.output_root.name == "synthetic_long_tail_geometry_v2"
     assert runner.run_root.name == "synthetic_long_tail_geometry_v2"
+    assert runner.config["pilot"]["training_steps"] == 1000
+    assert runner.config["pilot"]["batch_size"] == 64
+
+
+def test_balanced_pilot_gate_checks_learning_and_each_class(tmp_path: Path) -> None:
+    run_dir = tmp_path / "pilot"
+    (run_dir / "diagnostics").mkdir(parents=True)
+    (run_dir / "metrics.json").write_text(json.dumps({"trained_steps": 100}), encoding="utf-8")
+    (run_dir / "diagnostics" / "training_history.csv").write_text(
+        "step,loss\n1,1.0\n20,0.9\n40,0.8\n60,0.6\n80,0.5\n100,0.4\n",
+        encoding="utf-8",
+    )
+    evaluation = {
+        "classes": [
+            {
+                "requested_class": class_id,
+                "validity": {
+                    "class_leakage_rate": 0.05,
+                    "off_renderer_rate": 0.1,
+                    "joint_valid_rate": 0.85,
+                },
+            }
+            for class_id in range(3)
+        ]
+    }
+    pilot = {
+        "training_steps": 100,
+        "max_final_to_initial_loss_ratio": 0.8,
+        "max_class_leakage_rate": 0.25,
+        "max_off_renderer_rate": 0.5,
+        "min_joint_valid_rate": 0.4,
+    }
+
+    passed = _balanced_pilot_gate(run_dir=run_dir, evaluation=evaluation, pilot=pilot)
+    assert passed["passed"] is True
+    assert passed["loss"]["final_to_initial_ratio"] < 0.8
+
+    evaluation["classes"][2]["validity"]["class_leakage_rate"] = 0.5
+    failed = _balanced_pilot_gate(run_dir=run_dir, evaluation=evaluation, pilot=pilot)
+    assert failed["passed"] is False
+    assert failed["reasons"] == ["class_2:class_leakage"]
+
+
+def test_train_oracle_reuses_qualified_checkpoint_and_reads_control_ordering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+    config["output_root"] = str(tmp_path / "outputs")
+    config["run_root"] = str(tmp_path / "runs")
+    config["evaluation"]["samples_per_class"] = 3
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+    runner.config = config
+    runner.output_root = tmp_path / "outputs"
+    runner.run_root = tmp_path / "runs"
+    runner.ledger = RunLedger(runner.output_root / "run_ledger.json")
+    calibration = tmp_path / "outputs" / "calibration"
+    oracle_dir = calibration / "oracle"
+    oracle_dir.mkdir(parents=True)
+    (calibration / "renderer").mkdir()
+    (calibration / "renderer" / "renderer_gate.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
+    )
+    (oracle_dir / "oracle_gate.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+    (oracle_dir / "factor_oracle.pt").write_bytes(b"existing checkpoint")
+
+    def unexpected_training(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        pytest.fail("an existing qualified oracle must not be retrained")
+
+    observed: dict[str, object] = {}
+
+    def fake_controls(
+        *,
+        oracle_checkpoint: Path,
+        oracle_gate: Path,
+        output_dir: Path,
+        device: str,
+        samples_per_class: int,
+        seed: int,
+        source_revision: str,
+    ) -> dict[str, object]:
+        observed.update(
+            checkpoint=oracle_checkpoint,
+            gate=oracle_gate,
+            output_dir=output_dir,
+            device=device,
+            samples_per_class=samples_per_class,
+            seed=seed,
+            source_revision=source_revision,
+        )
+        return {"control_ordering": {"passed": True}}
+
+    monkeypatch.setattr(oracle_module, "train_factor_oracle", unexpected_training)
+    monkeypatch.setattr(metrics_module, "calibrate_metric_controls", fake_controls)
+
+    result = runner.train_oracle(device="cpu")
+
+    assert result["metric_controls"]["control_ordering"]["passed"] is True
+    assert observed["checkpoint"] == oracle_dir / "factor_oracle.pt"
+    assert observed["samples_per_class"] == 3
+    metric_gate = json.loads((calibration / "metric_gate.json").read_text(encoding="utf-8"))
+    assert metric_gate["passed"] is True
 
 
 def test_failed_gate_blocks_training(tmp_path: Path) -> None:

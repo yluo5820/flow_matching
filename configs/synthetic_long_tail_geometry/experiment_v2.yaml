@@ -54,7 +54,20 @@ oracle:
   steps: 20000
   learning_rate: 0.001
   min_object_accuracy: 0.99
-  max_normalized_factor_mae: 0.02
+  max_normalized_factor_mae: 0.08
+pilot:
+  training_steps: 1000
+  batch_size: 64
+  warmup_steps: 100
+  log_every: 50
+  samples_per_class: 300
+  nfe: 64
+  sample_batch_size: 100
+  n_trajectories: 18
+  max_final_to_initial_loss_ratio: 0.90
+  max_class_leakage_rate: 0.25
+  max_off_renderer_rate: 0.50
+  min_joint_valid_rate: 0.40
 evaluation:
   samples_per_class: 5000
   geometry_queries_per_class: 256

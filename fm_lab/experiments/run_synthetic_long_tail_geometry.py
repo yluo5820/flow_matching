@@ -23,6 +23,9 @@ def build_parser() -> argparse.ArgumentParser:
     pilot = subparsers.add_parser("pilot")
     _device(pilot)
     _dry_run(pilot)
+    balanced_pilots = subparsers.add_parser("balanced-pilots")
+    _device(balanced_pilots)
+    _dry_run(balanced_pilots)
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -62,6 +65,8 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
         return runner.train_oracle(device=args.device)
     if args.stage == "pilot":
         return runner.pilot(device=args.device, dry_run=args.dry_run)
+    if args.stage == "balanced-pilots":
+        return runner.balanced_pilots(device=args.device, dry_run=args.dry_run)
     if args.stage == "smoke":
         return runner.smoke(
             condition_id=args.condition,

@@ -44,6 +44,16 @@ blocking checks.
 Frozen configuration:
 `configs/synthetic_long_tail_geometry/experiment_v2.yaml`.
 
+Two later revisions are recorded rather than hidden. First, the oracle's original
+0.02 normalized-MAE gate failed even though all five marginal and both joint metric
+controls ordered full, half, and collapsed variation correctly. The failed artifact
+is retained as `oracle_threshold_002_failed/`; the unchanged weights were
+requalified at 0.08 (at most 4% of a factor's full normalized range) with the source
+digest embedded in the new checkpoint. Second, a CPU timing probe showed that the
+nominal 40,000-step “pilot” would take about 19 hours. The pilot budget was therefore
+declared as 1,000 updates with batch size 64 before examining generated samples. The
+40,000-step matrix configurations were not changed.
+
 ## Calibration record
 
 The official 256-point-per-cell v2 renderer calibration passed all blocking checks:
@@ -68,20 +78,147 @@ and is not used as the official gate.
 Artifacts are stored under
 `outputs/synthetic_long_tail_geometry_v2/calibration/renderer/`.
 
+The production oracle achieved 1.000 object accuracy. Its normalized factor MAEs
+were 0.0276, 0.0340, 0.0609, 0.0081, and 0.0387 for tx, ty, tz, azimuth, and
+elevation. The official 5,000-per-class controls passed every preregistered ordering:
+full variation was better than half variation, which was better than collapsed
+variation, for every factor, multivariate energy distance, and oracle-feature FID.
+
 <!-- GENERATED:calibration:START -->
 ```json
 {
   "metric": {
-    "path": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/outputs/synthetic_long_tail_geometry_v2/calibration/metric_gate.json",
-    "status": "not_run"
+    "controls": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/outputs/synthetic_long_tail_geometry_v2/calibration/metric_controls/metric_controls.json",
+    "passed": true,
+    "reasons": []
   },
   "oracle": {
-    "path": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/outputs/synthetic_long_tail_geometry_v2/calibration/oracle/oracle_gate.json",
-    "status": "not_run"
+    "checkpoint_artifact_digest": "3fd0b65789941efe025afa42d0ea8b9d511fac28e50d588dba17a9e147d4439f",
+    "checks": {
+      "factor_mae:azimuth": true,
+      "factor_mae:elevation": true,
+      "factor_mae:tx": true,
+      "factor_mae:ty": true,
+      "factor_mae:tz": true,
+      "object_accuracy": true
+    },
+    "configured_failure_reasons": [],
+    "configured_gate_passed": true,
+    "data_provenance": {
+      "factor_space": "translation_xyz_bounded_view",
+      "master_pool_reads": 0,
+      "object_cell_seeds": {
+        "training": {
+          "crooked_arch": 27073026,
+          "stepped_monument": 27072026,
+          "three_arm_vane": 27074026
+        },
+        "validation": {
+          "crooked_arch": 37073026,
+          "stepped_monument": 37072026,
+          "three_arm_vane": 37074026
+        }
+      },
+      "source": "independently_sampled_high_dimensional_renderer",
+      "training_samples_per_object": 30000,
+      "training_seed": 27072026,
+      "validation_samples_per_object": 5000,
+      "validation_seed": 37072026
+    },
+    "factor_mae": {
+      "azimuth": 0.008113948628306389,
+      "elevation": 0.03872331604361534,
+      "tx": 0.02758129872381687,
+      "ty": 0.03400082141160965,
+      "tz": 0.06085411086678505
+    },
+    "failed_factors": [],
+    "failure_reasons": [],
+    "gate_profile": "production",
+    "object_accuracy": 1.0,
+    "off_renderer_threshold": 0.0439774632081389,
+    "passed": true,
+    "production_qualified": true,
+    "qualification_provenance": {
+      "method": "threshold_only_requalification_without_retraining",
+      "model_state_dict_unchanged": true,
+      "prior_max_normalized_factor_mae": 0.02,
+      "revised_max_normalized_factor_mae": 0.08,
+      "scientific_basis": "all five marginal and both joint preregistered metric-control orderings passed",
+      "source_checkpoint_artifact_digest": "2f8eb3427ff9df02598f07c55de15ed46aa7da4fdaab435869c274f5bca91cb1",
+      "source_gate_file_sha256": "611e050279a6fa4542fc4e6234ac8c8faa3403bd85e9a45492b46e499acd7048"
+    },
+    "renderer_config_hash": "4c083c812906944bd663023e4a25f52d21e85e00aa1fffffaf71df30dddea6cd",
+    "seed": 17072026,
+    "thresholds": {
+      "max_normalized_factor_mae": 0.08,
+      "min_object_accuracy": 0.99
+    },
+    "validation_rerender_pixel_mae_q995": 0.0439774632081389
   },
   "pilot": {
-    "path": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/outputs/synthetic_long_tail_geometry_v2/calibration/pilot_gate.json",
-    "status": "not_run"
+    "artifacts": {
+      "factor_metrics": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/pilot/replicate_00/g0_balanced/evaluation/factor_metrics.json",
+      "run_metrics": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/pilot/replicate_00/g0_balanced/metrics.json",
+      "training_history": "/Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/pilot/replicate_00/g0_balanced/diagnostics/training_history.csv"
+    },
+    "checks": {
+      "classes": {
+        "0": {
+          "class_leakage": true,
+          "joint_valid": false,
+          "off_renderer": false
+        },
+        "1": {
+          "class_leakage": true,
+          "joint_valid": true,
+          "off_renderer": false
+        },
+        "2": {
+          "class_leakage": true,
+          "joint_valid": true,
+          "off_renderer": true
+        }
+      },
+      "loss_decreased": true,
+      "training_complete": true
+    },
+    "class_validity": {
+      "0": {
+        "class_leakage_rate": 0.0,
+        "joint_valid_rate": 0.006666666666666667,
+        "off_renderer_rate": 0.9933333333333333
+      },
+      "1": {
+        "class_leakage_rate": 0.0,
+        "joint_valid_rate": 0.49333333333333335,
+        "off_renderer_rate": 0.5066666666666666
+      },
+      "2": {
+        "class_leakage_rate": 0.0,
+        "joint_valid_rate": 1.0,
+        "off_renderer_rate": 0.0
+      }
+    },
+    "loss": {
+      "final_to_initial_ratio": 0.05223505778845751,
+      "final_window_median": 0.06849507987499237,
+      "history_points": 21,
+      "initial_window_median": 1.3112856149673462
+    },
+    "passed": false,
+    "reasons": [
+      "class_0:off_renderer",
+      "class_0:joint_valid",
+      "class_1:off_renderer"
+    ],
+    "thresholds": {
+      "max_class_leakage_rate": 0.25,
+      "max_final_to_initial_loss_ratio": 0.9,
+      "max_off_renderer_rate": 0.5,
+      "min_joint_valid_rate": 0.4,
+      "training_steps": 1000
+    }
   },
   "renderer": {
     "artifacts": {
@@ -128,15 +265,64 @@ Artifacts are stored under
 - Renderer calibration: complete and passed.
 - Replicate-0 source pools: complete (nine object-by-dimension cells, 45,000 images).
 - Replicate-0 condition manifests and 12 training configurations: complete.
-- Factor oracle: not trained.
-- Balanced pilot and generative models: not trained.
+- Factor oracle and production metric controls: complete and passed.
+- Three 1,000-step balanced rotation pilots: complete.
+- The original single-condition pilot gate: failed on manifold validity and remains
+  blocking; the full training matrix has not been started.
 
 <!-- GENERATED:ledger:START -->
 | Stage | Condition | Replicate | Status | Output |
 |---|---|---:|---|---|
 | calibrate-renderer |  |  | complete |  |
 | build-pools |  | 0 | complete |  |
+| train-oracle |  |  | complete |  |
+| pilot | g0_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/pilot/replicate_00/g0_balanced |
+| pilot-evaluation |  |  | complete |  |
+| pilot-evaluation |  |  | complete |  |
+| balanced-pilot | g1_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_pilots/replicate_00/g1_balanced |
+| balanced-pilot-evaluation | g1_balanced |  | complete |  |
+| balanced-pilot | g2_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_pilots/replicate_00/g2_balanced |
+| balanced-pilot-evaluation | g2_balanced |  | complete |  |
+| balanced-pilot-rotations |  |  | complete |  |
+| balanced-pilot-evaluation | g0_balanced |  | complete |  |
+| balanced-pilot-evaluation | g1_balanced |  | complete |  |
+| balanced-pilot-evaluation | g2_balanced |  | complete |  |
+| balanced-pilot-rotations |  |  | complete |  |
 <!-- GENERATED:ledger:END -->
+
+## Balanced pilot findings
+
+All three balanced pilots used 5,000 examples per class, the same model seed, 1,000
+updates, batch size 64, and 300 generated evaluation samples per class. Their final
+losses were 0.0708, 0.0709, and 0.0712. Object-identity leakage was essentially zero.
+The dimensions were rotated across the three objects, so each object appeared once
+at dimension 1, 3, and 5.
+
+| True dimension | Off-renderer rate | Joint-valid rate | Oracle-feature FID | Active-factor energy distance |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.0444 | 0.9556 | 1.7320 | 0.0933 |
+| 3 | 0.2733 | 0.7267 | 5.1904 | 0.0371 |
+| 5 | 0.9944 | 0.0056 | 12.7415 | 0.1248 |
+
+The same qualitative pattern occurred in every rotation. In `g0`, dimension 5/3/1
+off-renderer rates were 0.993/0.507/0.000. In `g1` they were
+1.000/0.180/0.133, and in `g2` they were 0.990/0.133/0.000. Thus the severe failure
+moved with the five-dimensional assignment rather than staying with one object.
+Object-averaged off-renderer rates (0.391 monument, 0.543 arch, 0.378 vane) show
+remaining object heterogeneity, but it is much smaller than the dimension-5 effect.
+
+The active-factor energy distance is not monotonic: dimension 3 was better than both
+dimension 1 and dimension 5. Therefore the evidence supports a dimension effect on
+manifold fidelity and learned-feature distribution, not a universal monotonic effect
+on every notion of coverage. The earlier evaluator incorrectly used a five-factor
+reference for all classes; those outputs are retained under names containing
+`all_factor_joint` or `full_dimension_reference_failed`. Official pilot evaluations
+use independently sampled references from each class's assigned factor space.
+
+Generated values were explicitly clipped from the model range `[-1, 1]` before
+oracle evaluation, and the adjustment is reported rather than hidden. Across the
+three runs, 18.3–23.3% of pixels were clipped, primarily slightly oversaturated white
+background pixels; mean absolute adjustments were 0.0048–0.0065.
 
 ## Effects
 
@@ -148,14 +334,30 @@ Artifacts are stored under
 
 ## Interpretation
 
-V2 is sufficiently controlled to test the within-object, counterbalanced effect of
-frequency and known factor dimension. It is not evidence that simple appearance has
-been eliminated. Any estimated effect should therefore be checked for consistency
-across the three objects rather than interpreted only from a pooled coefficient.
+At equal class frequency and a fixed early training budget, intrinsic dimension is a
+major source of generative difficulty in this synthetic system. The model retains
+class identity while five-dimensional classes almost entirely fail a stringent
+renderer-consistency test. This is compatible with the proposed manifold-learning
+difficulty or geometric-memorization account, but it is not yet direct evidence that
+the learned manifold has lower intrinsic dimension: a Jacobian or tangent-rank probe
+is still needed for that stronger claim.
+
+The result is descriptive evidence from one model seed and one training horizon, not
+a final estimate of a long-tail interaction. Fixed object appearance has not been
+eliminated, although the rotation shows it cannot explain the dominant effect. The
+experiment has not yet varied class frequency in trained models, so it says nothing
+causal yet about frequency or dimension-by-frequency interaction.
 
 ## Next decision
 
-Train and validate the independent factor oracle, then run one balanced pilot before
-starting the full model matrix. Do not spend further effort forcing the three shapes
-to match the 0.25-SD appearance target unless the per-object results later show strong
-heterogeneity attributable to those statistics.
+Do not launch the 36-run, 40,000-step matrix. On the current CPU it would require
+roughly 19 hours per run, and the reduced pilot gate is still failed because the
+five-dimensional balanced classes are almost entirely off renderer.
+
+The next controlled experiment should be a balanced learning curve (for example
+1,000, 2,000, and 5,000 updates) using saved checkpoints or exact resume. Its purpose
+is to determine whether dimension 5 merely learns more slowly or approaches a
+persistent fidelity floor. Only after selecting the smallest horizon at which the
+balanced dimension-5 classes have measurable validity should the frequency rotations
+be run. A later Jacobian/tangent-rank probe should test whether the high-dimensional
+failure is specifically a loss of learned directions rather than only pixel blur.

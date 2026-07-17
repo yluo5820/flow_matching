@@ -407,6 +407,86 @@ def test_evaluator_rejects_forged_external_gate_even_with_matching_checkpoint_di
     assert not (tmp_path / "evaluation").exists()
 
 
+def test_evaluator_can_explicitly_clip_and_report_generated_range_overshoot(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    oracle = train_factor_oracle(config, tmp_path / "oracle", "cpu")
+    generated_root = tmp_path / "generated"
+    _write_real_generated_samples(config, generated_root, count_per_class=1)
+    samples_path = generated_root / "samples" / "euler_nfe64.npy"
+    samples = np.load(samples_path, allow_pickle=False)
+    samples[0, 0] = 1.1
+    np.save(samples_path, samples)
+    condition_manifest = tmp_path / "g0_balanced.json"
+    condition_manifest.write_text(
+        json.dumps(
+            {
+                "condition_id": "g0_balanced",
+                "replicate": 0,
+                "geometry_mapping": "geometry_0",
+                "frequency_mapping": "balanced",
+                "image_shape": [3, 8, 8],
+                "classes": [
+                    {
+                        "class_id": class_id,
+                        "object_id": object_id,
+                        "dimension_id": dimension_id,
+                        "true_dimension": true_dimension,
+                        "count": 1,
+                        "image_path": "unused.npy",
+                        "factor_path": "unused.npy",
+                    }
+                    for class_id, (object_id, dimension_id, true_dimension) in enumerate(
+                        zip(OBJECT_IDS, ("high", "medium", "low"), (5, 3, 1), strict=True)
+                    )
+                ],
+                "config_hash": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="outside sample_value_range"):
+        evaluate_generated_distribution(
+            generated_root=generated_root,
+            oracle_checkpoint=oracle["checkpoint_path"],
+            oracle_gate=oracle["gate_path"],
+            output_dir=tmp_path / "strict-evaluation",
+            device="cpu",
+            samples_per_class=1,
+            reference_samples_per_class=1,
+            required_gate_profile="fixture_only",
+        )
+
+    result = evaluate_generated_distribution(
+        generated_root=generated_root,
+        oracle_checkpoint=oracle["checkpoint_path"],
+        oracle_gate=oracle["gate_path"],
+        output_dir=tmp_path / "clipped-evaluation",
+        device="cpu",
+        samples_per_class=1,
+        reference_samples_per_class=1,
+        required_gate_profile="fixture_only",
+        clip_generated_to_value_range=True,
+        condition_manifest=condition_manifest,
+    )
+    clipping = result["provenance"]["generated_value_clipping"]
+    assert clipping["applied"] is True
+    assert clipping["observed_max"] == pytest.approx(1.1)
+    assert clipping["clipped_pixel_fraction"] > 0.0
+    assert clipping["mean_absolute_clipping"] > 0.0
+    assert result["provenance"]["reference_source"] == (
+        "independently_sampled_condition_specific_renderer"
+    )
+    assert result["classes"][0]["true_dimension"] == 5
+    assert result["classes"][2]["target_dimension_id"] == "low"
+    assert result["classes"][2]["active_factor_names"] == ["tz"]
+    assert set(
+        result["classes"][2]["all_requested"]["metrics"]["active_factors"]["factor_metrics"]
+    ) == {"tz"}
+
+
 def test_evaluator_rejects_input_mutation_during_snapshot_before_oracle_work(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

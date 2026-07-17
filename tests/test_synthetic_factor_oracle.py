@@ -18,6 +18,7 @@ from fm_lab.geometry_explorer.synthetic_factor_oracle import (
     load_factor_oracle,
     oracle_gate_metrics,
     oracle_loss,
+    requalify_factor_oracle,
     train_factor_oracle,
 )
 from fm_lab.utils.config import load_config
@@ -239,14 +240,63 @@ def test_production_profile_requires_every_frozen_scientific_setting() -> None:
 
 
 def test_calibrated_v2_is_an_explicit_production_profile() -> None:
-    config = load_config(
-        Path("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
-    )
+    config = load_config(Path("configs/synthetic_long_tail_geometry/experiment_v2.yaml"))
 
     assert oracle_module._is_production_profile(config, oracle_module._parse_config(config))
 
     config["objects"][2]["scale"] = 1.49
     assert not oracle_module._is_production_profile(config, oracle_module._parse_config(config))
+
+
+def test_threshold_only_requalification_preserves_weights_and_records_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(oracle_module, "_is_production_profile", lambda config, parsed: True)
+    source_config = _config(max_normalized_factor_mae=0.0)
+    source = train_factor_oracle(source_config, tmp_path / "source", "cpu")
+    source_payload = torch.load(source["checkpoint_path"], map_location="cpu", weights_only=True)
+    revised_config = copy.deepcopy(source_config)
+    revised_config["oracle"]["max_normalized_factor_mae"] = 2.0
+
+    result = requalify_factor_oracle(
+        source["checkpoint_path"],
+        source["gate_path"],
+        revised_config,
+        tmp_path / "requalified",
+        scientific_basis="metric controls preserve the preregistered ordering",
+    )
+
+    revised_payload = torch.load(result["checkpoint_path"], map_location="cpu", weights_only=True)
+    assert result["metrics"]["production_qualified"] is True
+    assert result["metrics"]["passed"] is True
+    provenance = result["metrics"]["qualification_provenance"]
+    assert provenance["source_checkpoint_artifact_digest"] == source_payload["artifact_digest"]
+    assert provenance["prior_max_normalized_factor_mae"] == 0.0
+    assert provenance["revised_max_normalized_factor_mae"] == 2.0
+    assert provenance["model_state_dict_unchanged"] is True
+    assert all(
+        torch.equal(source_payload["model_state_dict"][name], tensor)
+        for name, tensor in revised_payload["model_state_dict"].items()
+    )
+    load_factor_oracle(result["checkpoint_path"], "cpu")
+
+
+def test_requalification_rejects_any_nonthreshold_config_change(tmp_path: Path) -> None:
+    source_config = _config(max_normalized_factor_mae=0.0)
+    source = train_factor_oracle(source_config, tmp_path / "source", "cpu")
+    revised_config = copy.deepcopy(source_config)
+    revised_config["oracle"]["max_normalized_factor_mae"] = 2.0
+    revised_config["render"]["camera_distance"] = 4.1
+
+    with pytest.raises(ValueError, match="may differ only"):
+        requalify_factor_oracle(
+            source["checkpoint_path"],
+            source["gate_path"],
+            revised_config,
+            tmp_path / "requalified",
+            scientific_basis="test",
+        )
 
 
 def test_training_refuses_overwrite_without_mutating_artifacts(tmp_path: Path) -> None:
