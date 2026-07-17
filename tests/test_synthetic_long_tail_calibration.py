@@ -9,6 +9,7 @@ import pytest
 
 from fm_lab.geometry_explorer.synthetic_long_tail_calibration import (
     RendererGateThresholds,
+    _max_nuisance_standardized_difference,
     calibrate_renderer,
     renderer_gate,
 )
@@ -75,6 +76,58 @@ def calibration_config() -> dict[str, Any]:
     }
 
 
+def _nuisance_rows(object_means: tuple[float, float, float]) -> list[dict[str, Any]]:
+    rows = []
+    for object_id, mean in zip(
+        ("stepped_monument", "crooked_arch", "three_arm_vane"),
+        object_means,
+        strict=True,
+    ):
+        for dimension_id in ("high", "medium", "low"):
+            row: dict[str, Any] = {
+                "object_id": object_id,
+                "dimension_id": dimension_id,
+            }
+            for metric in ("foreground_occupancy", "luminance", "contrast"):
+                row[f"{metric}_mean"] = mean
+                row[f"{metric}_std"] = 1.0
+            rows.append(row)
+    return rows
+
+
+def test_nuisance_statistic_detects_cross_object_mismatch_after_dimension_averaging() -> None:
+    difference = _max_nuisance_standardized_difference(
+        _nuisance_rows((0.0, 10.0, 20.0))
+    )
+    result = renderer_gate(
+        object_accuracy=1.0,
+        max_nuisance_difference=difference,
+        full_rank_fraction=1.0,
+        pullback_norm_ratio=1.0,
+        thresholds=RendererGateThresholds(),
+    )
+
+    assert difference == pytest.approx(20.0)
+    assert result["passed"] is False
+    assert result["checks"]["nuisance_matching"] is False
+
+
+def test_nuisance_statistic_accepts_objects_with_matched_dimension_averages() -> None:
+    difference = _max_nuisance_standardized_difference(
+        _nuisance_rows((3.0, 3.0, 3.0))
+    )
+    result = renderer_gate(
+        object_accuracy=1.0,
+        max_nuisance_difference=difference,
+        full_rank_fraction=1.0,
+        pullback_norm_ratio=1.0,
+        thresholds=RendererGateThresholds(),
+    )
+
+    assert difference == pytest.approx(0.0)
+    assert result["passed"] is True
+
+
 def test_calibration_writes_real_statistics_without_mutating_pools(tmp_path: Path) -> None:
     config = calibration_config()
     cells = build_master_pools(config, tmp_path / "dataset", replicate=0)
@@ -119,3 +172,25 @@ def test_calibration_writes_real_statistics_without_mutating_pools(tmp_path: Pat
         expected_images, expected_factors = pool_snapshots[cell.cell_id]
         np.testing.assert_array_equal(np.load(cell.image_path), expected_images)
         np.testing.assert_array_equal(np.load(cell.factor_path), expected_factors)
+
+
+def test_calibration_rerun_refuses_overwrite_and_preserves_every_artifact(
+    tmp_path: Path,
+) -> None:
+    config = calibration_config()
+    output_dir = tmp_path / "calibration"
+    first = calibrate_renderer(config, output_dir)
+    artifacts_before = {
+        name: (output_dir / name).read_bytes()
+        for name in first["artifacts"].values()
+    }
+
+    with pytest.raises(FileExistsError, match="Calibration destination already exists"):
+        calibrate_renderer(config, output_dir)
+
+    artifacts_after = {
+        path.name: path.read_bytes()
+        for path in output_dir.iterdir()
+        if path.is_file()
+    }
+    assert artifacts_after == artifacts_before

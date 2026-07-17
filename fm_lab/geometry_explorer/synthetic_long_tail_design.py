@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -146,7 +148,7 @@ def build_condition_specs(
                 replicate=replicate,
                 geometry_index=geometry_index,
                 dimensions=dimensions,
-                frequency_name="balanced",
+                frequency_index=None,
                 class_counts=(balanced_count,) * len(OBJECT_IDS),
             )
         )
@@ -156,7 +158,7 @@ def build_condition_specs(
                     replicate=replicate,
                     geometry_index=geometry_index,
                     dimensions=dimensions,
-                    frequency_name=f"frequency_{frequency_index}",
+                    frequency_index=frequency_index,
                     class_counts=class_counts,
                 )
             )
@@ -181,67 +183,78 @@ def build_master_pools(
         raise ValueError("render.render_batch_size must be positive.")
 
     object_configs = _object_configs(config)
-    replicate_root = Path(root) / f"replicate_{replicate:03d}"
+    replicate_root = Path(root).resolve() / f"replicate_{replicate:02d}"
+    pool_root = replicate_root / "pools"
+    _refuse_existing(pool_root, kind="Pool")
+    replicate_root.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=".pools-", dir=replicate_root))
     cells = []
-    for object_index, object_id in enumerate(OBJECT_IDS):
-        object_config = object_configs[object_id]
-        for dimension_index, dimension_id in enumerate(DIMENSION_IDS):
-            seed = (
-                base_seed
-                + int(replicate) * 100_000
-                + object_index * 1_000
-                + dimension_index * 10
-            )
-            factor = build_factor_space(dimension_id)
-            values = sample_values(factor.sample(master_count, seed=seed))
-            cell_dir = replicate_root / "pools" / object_id / dimension_id
-            cell_dir.mkdir(parents=True, exist_ok=True)
-            image_path = (cell_dir / "images.npy").resolve()
-            factor_path = (cell_dir / "factors.npy").resolve()
-            images = np.lib.format.open_memmap(
-                image_path,
-                mode="w+",
-                dtype=np.uint8,
-                shape=(master_count, 3, image_size, image_size),
-            )
-            factors = np.lib.format.open_memmap(
-                factor_path,
-                mode="w+",
-                dtype=np.float32,
-                shape=(master_count, len(FACTOR_COLUMNS)),
-            )
-            render_map = _render_map(config, object_config, factor)
-            for start in range(0, master_count, render_batch_size):
-                stop = min(master_count, start + render_batch_size)
-                rendered = _as_hwc_batch(
-                    render_map.render_batch(
-                        values[start:stop],
-                        batch_size=render_batch_size,
-                    ),
-                    image_size=image_size,
+    try:
+        for object_index, object_id in enumerate(OBJECT_IDS):
+            object_config = object_configs[object_id]
+            for dimension_index, dimension_id in enumerate(DIMENSION_IDS):
+                seed = (
+                    base_seed
+                    + int(replicate) * 100_000
+                    + object_index * 1_000
+                    + dimension_index * 10
                 )
-                images[start:stop] = np.rint(
-                    np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0
-                ).astype(np.uint8)
-                factors[start:stop] = canonical_factor_rows(factor, values[start:stop])
-            images.flush()
-            factors.flush()
-            cells.append(
-                PoolCellManifest(
-                    cell_id=f"{object_id}__{dimension_id}",
-                    replicate=int(replicate),
-                    object_id=object_id,
-                    dimension_id=dimension_id,
-                    true_dimension=int(factor.dim),
-                    count=master_count,
-                    image_shape=(3, image_size, image_size),
-                    factor_columns=FACTOR_COLUMNS,
-                    image_path=str(image_path),
-                    factor_path=str(factor_path),
-                    seed=seed,
-                    config_hash=config_hash,
+                factor = build_factor_space(dimension_id)
+                values = sample_values(factor.sample(master_count, seed=seed))
+                cell_dir = staging_root / object_id / dimension_id
+                cell_dir.mkdir(parents=True, exist_ok=True)
+                staging_image_path = cell_dir / "images.npy"
+                staging_factor_path = cell_dir / "factors.npy"
+                images = np.lib.format.open_memmap(
+                    staging_image_path,
+                    mode="w+",
+                    dtype=np.uint8,
+                    shape=(master_count, 3, image_size, image_size),
                 )
-            )
+                factors = np.lib.format.open_memmap(
+                    staging_factor_path,
+                    mode="w+",
+                    dtype=np.float32,
+                    shape=(master_count, len(FACTOR_COLUMNS)),
+                )
+                render_map = _render_map(config, object_config, factor)
+                for start in range(0, master_count, render_batch_size):
+                    stop = min(master_count, start + render_batch_size)
+                    rendered = _as_hwc_batch(
+                        render_map.render_batch(
+                            values[start:stop],
+                            batch_size=render_batch_size,
+                        ),
+                        image_size=image_size,
+                    )
+                    images[start:stop] = np.rint(
+                        np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0
+                    ).astype(np.uint8)
+                    factors[start:stop] = canonical_factor_rows(factor, values[start:stop])
+                images.flush()
+                factors.flush()
+                del images, factors
+                final_cell_dir = pool_root / object_id / dimension_id
+                cells.append(
+                    PoolCellManifest(
+                        cell_id=f"{object_id}__{dimension_id}",
+                        replicate=int(replicate),
+                        object_id=object_id,
+                        dimension_id=dimension_id,
+                        true_dimension=int(factor.dim),
+                        count=master_count,
+                        image_shape=(3, image_size, image_size),
+                        factor_columns=FACTOR_COLUMNS,
+                        image_path=str(final_cell_dir / "images.npy"),
+                        factor_path=str(final_cell_dir / "factors.npy"),
+                        seed=seed,
+                        config_hash=config_hash,
+                    )
+                )
+        staging_root.replace(pool_root)
+    except BaseException:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise
     return tuple(cells)
 
 
@@ -267,8 +280,9 @@ def build_condition_manifests(
     if max(counts) > min(cell.count for cell in pool_cells):
         raise ValueError("Condition counts cannot exceed the shared master pool count.")
 
-    manifest_dir = Path(root) / f"replicate_{replicate:03d}" / "conditions"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
+    replicate_root = Path(root).resolve() / f"replicate_{replicate:02d}"
+    manifest_dir = replicate_root / "conditions"
+    _refuse_existing(manifest_dir, kind="Condition")
     config_hashes = {cell.config_hash for cell in pool_cells}
     if len(config_hashes) != 1:
         raise ValueError("All pool cells must share one config hash.")
@@ -278,26 +292,35 @@ def build_condition_manifests(
         raise ValueError("All pool cells must share one image shape.")
     image_shape = next(iter(image_shapes))
 
-    paths = []
-    for spec in build_condition_specs(replicate, counts=counts):
-        classes = []
-        for entry in spec.classes:
-            cell = by_cell[(entry.object_id, entry.dimension_id)]
-            classes.append(
-                replace(
-                    entry,
-                    image_path=os.path.relpath(cell.image_path, manifest_dir),
-                    factor_path=os.path.relpath(cell.factor_path, manifest_dir),
+    replicate_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=".conditions-", dir=replicate_root))
+    filenames = []
+    try:
+        for spec in build_condition_specs(replicate, counts=counts):
+            classes = []
+            for entry in spec.classes:
+                cell = by_cell[(entry.object_id, entry.dimension_id)]
+                classes.append(
+                    replace(
+                        entry,
+                        image_path=os.path.relpath(cell.image_path, manifest_dir),
+                        factor_path=os.path.relpath(cell.factor_path, manifest_dir),
+                    )
                 )
+            manifest = replace(
+                spec,
+                image_shape=image_shape,
+                classes=tuple(classes),
+                config_hash=config_hash,
             )
-        manifest = replace(
-            spec,
-            image_shape=image_shape,
-            classes=tuple(classes),
-            config_hash=config_hash,
-        )
-        paths.append(manifest.write(manifest_dir / f"{manifest.condition_id}.json"))
-    return tuple(paths)
+            filename = f"{manifest.condition_id}.json"
+            manifest.write(staging_dir / filename)
+            filenames.append(filename)
+        staging_dir.replace(manifest_dir)
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    return tuple(manifest_dir / filename for filename in filenames)
 
 
 def _condition_spec(
@@ -305,10 +328,13 @@ def _condition_spec(
     replicate: int,
     geometry_index: int,
     dimensions: tuple[str, str, str],
-    frequency_name: str,
+    frequency_index: int | None,
     class_counts: tuple[int, int, int],
 ) -> ConditionManifest:
     geometry_name = f"geometry_{geometry_index}"
+    frequency_name = (
+        "balanced" if frequency_index is None else f"frequency_{frequency_index}"
+    )
     classes = tuple(
         ConditionClass(
             class_id=class_id,
@@ -323,7 +349,11 @@ def _condition_spec(
             zip(OBJECT_IDS, dimensions, class_counts, strict=True)
         )
     )
-    condition_id = f"replicate_{replicate:03d}__{geometry_name}__{frequency_name}"
+    condition_id = (
+        f"g{geometry_index}_balanced"
+        if frequency_index is None
+        else f"g{geometry_index}_f{frequency_index}"
+    )
     return ConditionManifest(
         condition_id=condition_id,
         replicate=int(replicate),
@@ -389,3 +419,8 @@ def _as_hwc_batch(rendered: np.ndarray, *, image_size: int) -> np.ndarray:
 def _config_hash(config: dict[str, Any]) -> str:
     payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _refuse_existing(path: Path, *, kind: str) -> None:
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"{kind} destination already exists: {path}")

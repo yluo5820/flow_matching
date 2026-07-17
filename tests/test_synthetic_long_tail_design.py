@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     DIMENSION_IDS,
@@ -79,6 +80,22 @@ def test_tiny_master_pool_is_uint8_and_condition_views_are_nested(tmp_path: Path
     paths = build_condition_manifests(tmp_path, 0, cells, counts=(20, 5, 2))
     assert len(cells) == 9
     assert len(paths) == 12
+    assert {path.name for path in paths} == {
+        "g0_balanced.json",
+        "g0_f0.json",
+        "g0_f1.json",
+        "g0_f2.json",
+        "g1_balanced.json",
+        "g1_f0.json",
+        "g1_f1.json",
+        "g1_f2.json",
+        "g2_balanced.json",
+        "g2_f0.json",
+        "g2_f1.json",
+        "g2_f2.json",
+    }
+    assert {path.parent for path in paths} == {tmp_path / "replicate_00" / "conditions"}
+    assert all("replicate_00/pools" in cell.image_path for cell in cells)
 
     image_array = np.load(Path(cells[0].image_path), mmap_mode="r")
     factor_array = np.load(Path(cells[0].factor_path), mmap_mode="r")
@@ -89,6 +106,7 @@ def test_tiny_master_pool_is_uint8_and_condition_views_are_nested(tmp_path: Path
 
     for path in paths:
         manifest = ConditionManifest.read(path)
+        assert manifest.condition_id == path.stem
         for entry in manifest.classes:
             assert entry.index_start == 0
             assert entry.count in {20, 5, 2}
@@ -108,3 +126,40 @@ def test_pool_seeds_are_deterministic_and_cell_specific(tmp_path: Path) -> None:
     for left, right in zip(first, second, strict=True):
         np.testing.assert_array_equal(np.load(left.image_path), np.load(right.image_path))
         np.testing.assert_array_equal(np.load(left.factor_path), np.load(right.factor_path))
+
+
+def test_pool_and_condition_reruns_refuse_overwrite_without_partial_files(
+    tmp_path: Path,
+) -> None:
+    config = _design_config(master_count=2, counts=(2, 1, 1), image_size=8)
+    cells = build_master_pools(config, tmp_path, replicate=0)
+    pool_root = tmp_path / "replicate_00" / "pools"
+    pool_files_before = {
+        path.relative_to(pool_root): path.read_bytes()
+        for path in pool_root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(FileExistsError, match="Pool destination already exists"):
+        build_master_pools(config, tmp_path, replicate=0)
+
+    pool_files_after = {
+        path.relative_to(pool_root): path.read_bytes()
+        for path in pool_root.rglob("*")
+        if path.is_file()
+    }
+    assert pool_files_after == pool_files_before
+
+    paths = build_condition_manifests(tmp_path, 0, cells, counts=(2, 1, 1))
+    condition_root = tmp_path / "replicate_00" / "conditions"
+    manifests_before = {path.name: path.read_bytes() for path in paths}
+
+    with pytest.raises(FileExistsError, match="Condition destination already exists"):
+        build_condition_manifests(tmp_path, 0, cells, counts=(2, 1, 1))
+
+    manifests_after = {
+        path.name: path.read_bytes()
+        for path in condition_root.iterdir()
+        if path.is_file()
+    }
+    assert manifests_after == manifests_before

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import itertools
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -81,6 +83,11 @@ def calibrate_renderer(
 ) -> dict[str, Any]:
     """Render independent reference points, compute diagnostics, and write gate artifacts."""
 
+    destination = Path(output_dir).resolve()
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            f"Calibration destination already exists: {destination}"
+        )
     calibration = config.get("calibration", {})
     points_per_cell = int(calibration.get("renderer_points_per_cell", 256))
     if points_per_cell <= 0:
@@ -127,7 +134,7 @@ def calibrate_renderer(
             values = factor.sample(points_per_cell, seed=seed).values
             values = _as_values(values, points_per_cell)
             images = np.asarray([render_map.render(value) for value in values], dtype=np.float32)
-            cell_statistics, per_image_statistics = _cell_statistics(
+            cell_statistics, _ = _cell_statistics(
                 images,
                 background=background,
             )
@@ -172,13 +179,6 @@ def calibrate_renderer(
                     strict=True,
                 ):
                     pullback_norms[label].append(float(norm))
-            statistics[-1].update(
-                {
-                    f"{name}_mean": float(np.mean(values_for_statistic))
-                    for name, values_for_statistic in per_image_statistics.items()
-                }
-            )
-
     object_accuracy = _raw_pixel_object_accuracy(
         np.asarray(image_rows, dtype=np.float32),
         np.asarray(object_labels, dtype=np.int64),
@@ -217,17 +217,24 @@ def calibrate_renderer(
         }
     )
 
-    destination = Path(output_dir)
-    destination.mkdir(parents=True, exist_ok=True)
-    _write_statistics(statistics, destination / _STATISTICS_FILENAME)
-    np.savez_compressed(
-        destination / _SINGULAR_VALUES_FILENAME,
-        values=np.asarray(singular_rows, dtype=np.float32),
-        dimensions=np.asarray(singular_dimensions, dtype=np.int16),
-        cell_ids=np.asarray(singular_cell_ids),
-        point_indices=np.asarray(singular_point_ids, dtype=np.int32),
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
     )
-    write_json(result, destination / _GATE_FILENAME)
+    try:
+        _write_statistics(statistics, staging_dir / _STATISTICS_FILENAME)
+        np.savez_compressed(
+            staging_dir / _SINGULAR_VALUES_FILENAME,
+            values=np.asarray(singular_rows, dtype=np.float32),
+            dimensions=np.asarray(singular_dimensions, dtype=np.int16),
+            cell_ids=np.asarray(singular_cell_ids),
+            point_indices=np.asarray(singular_point_ids, dtype=np.int32),
+        )
+        write_json(result, staging_dir / _GATE_FILENAME)
+        staging_dir.replace(destination)
+    except BaseException:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
     return result
 
 
@@ -337,24 +344,38 @@ def _raw_pixel_object_accuracy(
 def _max_nuisance_standardized_difference(
     statistics: list[dict[str, Any]],
 ) -> float:
+    """Return the worst cross-object SMD, equally averaging dimension strata.
+
+    Each object pair is compared within each matching latent-dimension stratum.
+    The three absolute standardized mean differences are then averaged with
+    equal weight, preventing dimension prevalence from confounding the object
+    comparison or opposite-signed strata from cancelling.
+    """
+
     maximum = 0.0
     by_cell = {
         (str(row["object_id"]), str(row["dimension_id"])): row
         for row in statistics
     }
-    for object_id in OBJECT_IDS:
-        for first, second in itertools.combinations(DIMENSION_IDS, 2):
-            left = by_cell[(object_id, first)]
-            right = by_cell[(object_id, second)]
-            for metric in ("foreground_occupancy", "luminance", "contrast"):
+    for first_object, second_object in itertools.combinations(OBJECT_IDS, 2):
+        for metric in ("foreground_occupancy", "luminance", "contrast"):
+            dimension_differences = []
+            for dimension_id in DIMENSION_IDS:
+                left = by_cell[(first_object, dimension_id)]
+                right = by_cell[(second_object, dimension_id)]
                 pooled = np.sqrt(
-                    (float(left[f"{metric}_std"]) ** 2 + float(right[f"{metric}_std"]) ** 2)
+                    (
+                        float(left[f"{metric}_std"]) ** 2
+                        + float(right[f"{metric}_std"]) ** 2
+                    )
                     / 2.0
                 )
                 difference = abs(
-                    float(left[f"{metric}_mean"]) - float(right[f"{metric}_mean"])
+                    float(left[f"{metric}_mean"])
+                    - float(right[f"{metric}_mean"])
                 ) / max(float(pooled), 1.0e-6)
-                maximum = max(maximum, difference)
+                dimension_differences.append(difference)
+            maximum = max(maximum, float(np.mean(dimension_differences)))
     return float(maximum)
 
 
