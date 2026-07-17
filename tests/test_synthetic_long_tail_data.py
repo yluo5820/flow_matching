@@ -9,9 +9,15 @@ import torch
 
 from fm_lab.data import SyntheticLongTailImages
 from fm_lab.experiments.factory import build_target
+from fm_lab.geometry_explorer.latent_factors import sample_values
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+    FACTOR_COLUMNS,
+    GEOMETRY_MAPPINGS,
+    OBJECT_IDS,
     build_condition_manifests,
+    build_factor_space,
     build_master_pools,
+    canonical_factor_rows,
 )
 from fm_lab.training.trainer import _sample_target_with_optional_labels
 
@@ -39,35 +45,51 @@ def write_tiny_condition(
     return next(path for path in manifests if path.stem == "g0_f0")
 
 
-def write_indexed_manifest(root: Path) -> Path:
+def write_indexed_manifest(root: Path, *, index_start: int = 0) -> Path:
     """Create a small hand-authored manifest for loader-contract failures."""
 
-    condition_dir = root / "conditions"
+    replicate_root = root / "replicate_00"
+    condition_dir = replicate_root / "conditions"
     condition_dir.mkdir(parents=True)
     classes = []
-    for class_id in range(3):
-        image_path = condition_dir / f"class_{class_id}.npy"
+    for class_id, (object_id, dimension_id) in enumerate(
+        zip(OBJECT_IDS, GEOMETRY_MAPPINGS[0], strict=True)
+    ):
+        pool_dir = replicate_root / "pools" / object_id / dimension_id
+        pool_dir.mkdir(parents=True)
+        image_path = pool_dir / "images.npy"
+        factor_path = pool_dir / "factors.npy"
         np.save(
             image_path,
             np.full((4, 3, 4, 4), class_id, dtype=np.uint8),
         )
+        factor = build_factor_space(dimension_id)
+        factor_template = canonical_factor_rows(
+            factor,
+            sample_values(factor.sample(1, seed=class_id)),
+        )
+        np.save(factor_path, np.repeat(factor_template, 4, axis=0))
         classes.append(
             {
                 "class_id": class_id,
-                "object_id": f"object_{class_id}",
-                "dimension_id": "low",
-                "true_dimension": 1,
+                "object_id": object_id,
+                "dimension_id": dimension_id,
+                "true_dimension": factor.dim,
                 "count": 2,
-                "image_path": image_path.name,
-                "factor_path": "unused.npy",
-                "index_start": 0,
+                "image_path": str(
+                    Path("..") / "pools" / object_id / dimension_id / "images.npy"
+                ),
+                "factor_path": str(
+                    Path("..") / "pools" / object_id / dimension_id / "factors.npy"
+                ),
+                "index_start": index_start,
             }
         )
-    manifest_path = condition_dir / "condition.json"
+    manifest_path = condition_dir / "g0_f0.json"
     manifest_path.write_text(
         json.dumps(
             {
-                "condition_id": "condition",
+                "condition_id": "g0_f0",
                 "replicate": 0,
                 "geometry_mapping": "geometry_0",
                 "frequency_mapping": "frequency_0",
@@ -89,6 +111,7 @@ def test_synthetic_target_loads_indexed_prefixes(tmp_path: Path) -> None:
     assert target.image_shape == (3, 16, 16)
     assert target.class_counts == (20, 5, 2)
     assert all(isinstance(array, np.memmap) for array in target._arrays)
+    assert all(not array.flags.writeable for array in target._arrays)
     images, labels, source_ids = target.all_samples_with_labels()
     repeated_images, repeated_labels, repeated_source_ids = target.all_samples_with_labels()
     assert images.shape == (27, 3 * 16 * 16)
@@ -164,6 +187,76 @@ def test_synthetic_target_normalizes_and_dequantizes_selected_rows(tmp_path: Pat
     assert not torch.equal(dequantized, normalized)
 
 
+def test_synthetic_target_uses_nonzero_index_starts_for_stable_source_ids(
+    tmp_path: Path,
+) -> None:
+    target = SyntheticLongTailImages(write_indexed_manifest(tmp_path, index_start=1))
+
+    _, labels, source_ids = target.all_samples_with_labels()
+
+    expected_ids = np.asarray(
+        [
+            1,
+            2,
+            (1 << 48) | 1,
+            (1 << 48) | 2,
+            (2 << 48) | 1,
+            (2 << 48) | 2,
+        ],
+        dtype=np.int64,
+    )
+    assert labels.tolist() == [0, 0, 1, 1, 2, 2]
+    assert np.array_equal(source_ids, expected_ids)
+
+
+def test_synthetic_target_metadata_and_log_prob(tmp_path: Path) -> None:
+    manifest_path = write_indexed_manifest(tmp_path)
+    target = SyntheticLongTailImages(manifest_path, normalize="zero_one", dequantize=True)
+
+    assert target.log_prob(torch.zeros(2, target.dim)) is None
+    assert target.metadata() == {
+        "name": "synthetic_long_tail_geometry",
+        "condition_id": "g0_f0",
+        "condition_manifest": str(manifest_path.resolve()),
+        "dim": 3 * 4 * 4,
+        "image_shape": [3, 4, 4],
+        "class_counts": [2, 2, 2],
+        "normalize": "zero_one",
+        "dequantize": True,
+        "config_hash": "test",
+    }
+
+
+def test_synthetic_target_materializes_only_selected_pool_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = SyntheticLongTailImages(write_indexed_manifest(tmp_path, index_start=1))
+
+    class TrackingArray:
+        def __init__(self, source: np.memmap) -> None:
+            self.source = source
+            self.reads: list[tuple[int, ...]] = []
+
+        def __getitem__(self, indices: np.ndarray) -> np.ndarray:
+            self.reads.append(tuple(int(index) for index in indices))
+            return self.source[indices]
+
+    arrays = tuple(TrackingArray(array) for array in target._arrays)
+    target._arrays = arrays  # type: ignore[assignment]
+    monkeypatch.setattr(
+        np.random,
+        "randint",
+        lambda low, high, size: np.asarray([0, 5], dtype=np.int64),
+    )
+
+    target.sample_with_labels(2)
+
+    assert arrays[0].reads == [(1,)]
+    assert arrays[1].reads == []
+    assert arrays[2].reads == [(2,)]
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
@@ -203,6 +296,114 @@ def test_synthetic_target_rejects_invalid_manifest_or_array_contract(
 def test_synthetic_target_rejects_invalid_normalization_at_load_time(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported image normalization"):
         SyntheticLongTailImages(write_indexed_manifest(tmp_path), normalize="bad")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("replicate", True),
+        ("image_shape.0", 3.9),
+        ("classes.0.class_id", 0.0),
+        ("classes.0.true_dimension", True),
+        ("classes.0.count", 2.5),
+        ("classes.0.index_start", False),
+    ],
+)
+def test_synthetic_target_rejects_non_integral_or_boolean_json_values(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    manifest_path = write_indexed_manifest(tmp_path)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if field.startswith("image_shape"):
+        raw["image_shape"][0] = value
+    elif field.startswith("classes"):
+        _, class_index, key = field.split(".")
+        raw["classes"][int(class_index)][key] = value
+    else:
+        raw[field] = value
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="integer"):
+        SyntheticLongTailImages(manifest_path)
+
+
+def test_synthetic_target_rejects_non_finite_json_numbers(tmp_path: Path) -> None:
+    manifest_path = write_indexed_manifest(tmp_path)
+    raw = manifest_path.read_text(encoding="utf-8").replace('"count": 2', '"count": NaN', 1)
+    manifest_path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-finite"):
+        SyntheticLongTailImages(manifest_path)
+
+
+@pytest.mark.parametrize("n", [True, 1.5, 0, -1])
+def test_synthetic_target_rejects_non_positive_or_non_integral_sample_sizes(
+    tmp_path: Path,
+    n: object,
+) -> None:
+    target = SyntheticLongTailImages(write_indexed_manifest(tmp_path))
+
+    with pytest.raises(ValueError, match="positive non-bool integer"):
+        target.sample(n)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="positive non-bool integer"):
+        target.sample_with_labels(n)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ("condition_mapping", "condition_id"),
+        ("frequency_mapping", "condition_id"),
+        ("object_id", "object_id"),
+        ("dimension_id", "dimension_id"),
+        ("true_dimension", "true_dimension"),
+        ("swapped_image_path", "image path"),
+        ("swapped_factor_path", "factor path"),
+        ("factor_dtype", "factor array must have dtype float32"),
+        ("factor_shape", "factor array shape"),
+        ("factor_length", "factor array length"),
+        ("factor_pattern", "finite/NaN pattern"),
+    ],
+)
+def test_synthetic_target_rejects_semantically_corrupt_task3_manifest(
+    tmp_path: Path,
+    mutation: str,
+    match: str,
+) -> None:
+    manifest_path = write_indexed_manifest(tmp_path)
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first = raw["classes"][0]
+    if mutation == "condition_mapping":
+        raw["geometry_mapping"] = "geometry_1"
+    elif mutation == "frequency_mapping":
+        raw["frequency_mapping"] = "frequency_1"
+    elif mutation == "object_id":
+        first["object_id"] = OBJECT_IDS[1]
+    elif mutation == "dimension_id":
+        first["dimension_id"] = "low"
+    elif mutation == "true_dimension":
+        first["true_dimension"] = 1
+    elif mutation == "swapped_image_path":
+        first["image_path"] = raw["classes"][1]["image_path"]
+    elif mutation == "swapped_factor_path":
+        first["factor_path"] = raw["classes"][1]["factor_path"]
+    elif mutation == "factor_dtype":
+        np.save(manifest_path.parent / first["factor_path"], np.zeros((4, 5)))
+    elif mutation == "factor_shape":
+        np.save(manifest_path.parent / first["factor_path"], np.zeros((4, 4), dtype=np.float32))
+    elif mutation == "factor_length":
+        np.save(manifest_path.parent / first["factor_path"], np.zeros((3, 5), dtype=np.float32))
+    elif mutation == "factor_pattern":
+        np.save(
+            manifest_path.parent / first["factor_path"],
+            np.full((4, len(FACTOR_COLUMNS)), np.nan, dtype=np.float32),
+        )
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        SyntheticLongTailImages(manifest_path)
 
 
 def test_synthetic_target_factory_requires_condition_manifest() -> None:
