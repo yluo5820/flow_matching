@@ -1,0 +1,47 @@
+experiment: synthetic_long_tail_geometry
+seed: 17072026
+output_root: outputs/synthetic_long_tail_geometry
+image_size: 32
+replicates: 3
+master_count: 5000
+counts: [5000, 500, 50]
+objects:
+  - id: stepped_monument
+    hue_degrees: 25.0
+    scale: 1.0
+  - id: crooked_arch
+    hue_degrees: 145.0
+    scale: 1.0
+  - id: three_arm_vane
+    hue_degrees: 265.0
+    scale: 1.0
+material:
+  oklch_lightness: 0.70
+  oklch_chroma: 0.12
+render:
+  background: [1.0, 1.0, 1.0]
+  camera_distance: 4.0
+  elevation_bounds_degrees: [-30.0, 30.0]
+  supersample: 3
+  render_batch_size: 128
+calibration:
+  renderer_points_per_cell: 256
+  relative_singular_threshold: 0.02
+  full_rank_fraction: 0.95
+  max_pullback_norm_ratio: 4.0
+  max_nuisance_standardized_difference: 0.25
+oracle:
+  training_samples_per_object: 30000
+  validation_samples_per_object: 5000
+  batch_size: 256
+  steps: 20000
+  learning_rate: 0.001
+  min_object_accuracy: 0.99
+  max_normalized_factor_mae: 0.02
+evaluation:
+  samples_per_class: 5000
+  geometry_queries_per_class: 256
+  joint_metric_samples: 1000
+  fm_directions: 16
+  fm_nfe: 32
+  bootstrap_draws: 10000
