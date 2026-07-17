@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import json
 import math
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from numbers import Integral
 from pathlib import Path
 from typing import Any
@@ -28,6 +32,245 @@ _CANONICAL_CONDITION_IDS = frozenset(
     for geometry in range(3)
     for frequency in ("balanced", "f0", "f1", "f2")
 )
+
+
+class StageBlockedError(RuntimeError):
+    """Raised when a preregistered scientific gate blocks a downstream stage."""
+
+
+@dataclass(frozen=True)
+class TrainingCommand:
+    replicate: int
+    condition_id: str
+    config_path: Path
+    run_dir: Path
+
+    def argv(self, device: str) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "fm_lab.experiments.run_train",
+            "--config",
+            str(self.config_path),
+            "--output-dir",
+            str(self.run_dir),
+            "--device",
+            str(device),
+        ]
+
+
+class RunLedger:
+    """Small atomic ledger whose terminal entries cannot be rewritten."""
+
+    def __init__(self, path: str | Path) -> None:
+        requested = Path(path).expanduser()
+        self.path = requested.parent.resolve() / requested.name
+        self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+
+    def entries(self) -> list[dict[str, Any]]:
+        with self._lock():
+            return list(self._read()["entries"])
+
+    def is_complete(self, entry_id: str, *, config_hash: str | None = None) -> bool:
+        entry = self._entry(entry_id)
+        return bool(
+            entry is not None
+            and entry.get("status") == "complete"
+            and (config_hash is None or entry.get("config_hash") == config_hash)
+        )
+
+    def start(self, entry_id: str, metadata: dict[str, Any] | None = None) -> None:
+        now = _timestamp()
+        entry = {
+            "id": _entry_id(entry_id),
+            "status": "running",
+            "started_at": now,
+            "ended_at": None,
+            "failure": None,
+            "artifacts": {},
+            **dict(metadata or {}),
+        }
+        self._insert_or_transition(entry_id, entry, allow_running_transition=False)
+
+    def complete(
+        self,
+        entry_id: str,
+        artifacts: dict[str, Any],
+        *,
+        config_hash: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = _timestamp()
+        entry = {
+            "id": _entry_id(entry_id),
+            "status": "complete",
+            "started_at": now,
+            "ended_at": now,
+            "failure": None,
+            "artifacts": dict(artifacts),
+            **dict(metadata or {}),
+        }
+        if config_hash is not None:
+            entry["config_hash"] = str(config_hash)
+        self._insert_or_transition(entry_id, entry, allow_running_transition=True)
+
+    def fail(
+        self,
+        entry_id: str,
+        failure: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = _timestamp()
+        entry = {
+            "id": _entry_id(entry_id),
+            "status": "failed",
+            "started_at": now,
+            "ended_at": now,
+            "failure": str(failure),
+            "artifacts": {},
+            **dict(metadata or {}),
+        }
+        self._insert_or_transition(entry_id, entry, allow_running_transition=True)
+
+    def _entry(self, entry_id: str) -> dict[str, Any] | None:
+        normalized = _entry_id(entry_id)
+        with self._lock():
+            return next(
+                (entry for entry in self._read()["entries"] if entry.get("id") == normalized),
+                None,
+            )
+
+    def _insert_or_transition(
+        self,
+        entry_id: str,
+        replacement: dict[str, Any],
+        *,
+        allow_running_transition: bool,
+    ) -> None:
+        normalized = _entry_id(entry_id)
+        with self._lock():
+            payload = self._read()
+            existing_index = next(
+                (
+                    index
+                    for index, entry in enumerate(payload["entries"])
+                    if entry.get("id") == normalized
+                ),
+                None,
+            )
+            if existing_index is not None:
+                existing = payload["entries"][existing_index]
+                if not allow_running_transition or existing.get("status") != "running":
+                    raise FileExistsError(f"Ledger entry already exists: {normalized}")
+                replacement["started_at"] = existing["started_at"]
+                payload["entries"][existing_index] = replacement
+            else:
+                payload["entries"].append(replacement)
+            self._write(payload)
+
+    def _read(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema_version": 1, "entries": []}
+        if self.path.is_symlink() or not self.path.is_file():
+            raise ValueError(f"Run ledger must be a regular file: {self.path}")
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Run ledger is invalid: {self.path}") from exc
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            raise ValueError("Run ledger schema_version must be 1.")
+        entries = payload.get("entries")
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            raise ValueError("Run ledger entries must be a list of objects.")
+        ids = [entry.get("id") for entry in entries]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Run ledger contains duplicate entry IDs.")
+        return payload
+
+    def _write(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_path = tempfile.mkstemp(prefix=f".{self.path.name}-", dir=self.path.parent)
+        temporary = Path(raw_path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _lock(self):
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+", encoding="utf-8")
+
+        class _LedgerLock:
+            def __enter__(self_nonlocal):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                return handle
+
+            def __exit__(self_nonlocal, exc_type, exc, traceback):
+                del self_nonlocal, exc_type, exc, traceback
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+
+        return _LedgerLock()
+
+
+def require_gate(path: str | Path, *, stage: str) -> dict[str, Any]:
+    """Load a gate and require a literal JSON boolean ``passed: true``."""
+
+    gate_path = Path(path).expanduser().resolve()
+    try:
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StageBlockedError(f"{stage} gate is missing or invalid: {gate_path}") from exc
+    if not isinstance(gate, dict):
+        raise StageBlockedError(f"{stage} gate must be a JSON object.")
+    if gate.get("passed") is not True:
+        reasons = gate.get("reasons", gate.get("failure_reasons", []))
+        detail = ", ".join(str(reason) for reason in reasons) if isinstance(reasons, list) else ""
+        if gate.get("passed") not in {True, False} or not isinstance(gate.get("passed"), bool):
+            detail = "passed must be literal true"
+        raise StageBlockedError(f"{stage} gate failed{': ' + detail if detail else ''}")
+    return gate
+
+
+def build_matrix_commands(
+    config_paths: dict[int, tuple[Path, ...]] | dict[int, list[Path]],
+    *,
+    run_root: Path,
+) -> tuple[TrainingCommand, ...]:
+    """Build one isolated training-process command for every matrix cell."""
+
+    commands = []
+    for replicate, paths in sorted(config_paths.items()):
+        if isinstance(replicate, bool) or not isinstance(replicate, int) or replicate < 0:
+            raise ValueError("replicate keys must be non-negative integers.")
+        for path in sorted((Path(value) for value in paths), key=lambda value: value.name):
+            condition_id = path.stem
+            commands.append(
+                TrainingCommand(
+                    replicate=replicate,
+                    condition_id=condition_id,
+                    config_path=path,
+                    run_dir=Path(run_root) / f"replicate_{replicate:02d}" / condition_id,
+                )
+            )
+    identities = {(command.replicate, command.condition_id) for command in commands}
+    if len(identities) != len(commands):
+        raise ValueError("config_paths contains duplicate replicate-condition identities.")
+    return tuple(commands)
+
+
+def run_training_command(command: TrainingCommand, *, device: str) -> None:
+    if command.run_dir.exists() or command.run_dir.is_symlink():
+        raise FileExistsError(f"Refusing to overwrite run directory: {command.run_dir}")
+    if not command.config_path.is_file():
+        raise FileNotFoundError(f"Training config does not exist: {command.config_path}")
+    subprocess.run(command.argv(device), check=True)
 
 
 @dataclass(frozen=True)
@@ -83,8 +326,7 @@ def write_condition_training_configs(
     if output_path.exists() or output_path.is_symlink():
         raise FileExistsError(f"Training config destination already exists: {output_path}")
     relative_paths = [
-        Path(f"replicate_{plan.replicate:02d}") / f"{plan.condition_id}.yaml"
-        for plan in plans
+        Path(f"replicate_{plan.replicate:02d}") / f"{plan.condition_id}.yaml" for plan in plans
     ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,10 +451,12 @@ def _condition_config(
         if plan.condition_id.endswith("_balanced")
         else _IMBALANCED_DATASET_SIZE
     )
-    checkpoint_steps = sorted({
-        total_steps,
-        matched_pass_step(total_steps, dataset_size, config["training"]["batch_size"]),
-    })
+    checkpoint_steps = sorted(
+        {
+            total_steps,
+            matched_pass_step(total_steps, dataset_size, config["training"]["batch_size"]),
+        }
+    )
     replicate_dir = f"replicate_{plan.replicate:02d}"
     config["experiment"] = {
         "name": f"synthetic_long_tail_geometry_{replicate_dir}_{plan.condition_id}",
@@ -271,3 +515,302 @@ def _nonnegative_int(name: str, value: object) -> int:
     if number < 0:
         raise ValueError(f"{name} must be non-negative.")
     return number
+
+
+class SyntheticLongTailRunner:
+    """Gated orchestration for the preregistered synthetic experiment."""
+
+    def __init__(self, config_path: str | Path) -> None:
+        self.config_path = Path(config_path).expanduser().resolve()
+        self.config = load_config(self.config_path)
+        self.output_root = Path(self.config["output_root"]).expanduser().resolve()
+        self.run_root = Path("runs/synthetic_long_tail_geometry").resolve()
+        self.ledger = RunLedger(self.output_root / "run_ledger.json")
+        self.base_config_path = self.config_path.parent / "base_train.yaml"
+        if not self.base_config_path.is_file():
+            raise FileNotFoundError(f"Base training config does not exist: {self.base_config_path}")
+
+    def plan(self) -> dict[str, Any]:
+        commands = build_matrix_commands(self.config_paths(), run_root=self.run_root / "matrix")
+        return {
+            "schema_version": 1,
+            "config": str(self.config_path),
+            "output_root": str(self.output_root),
+            "run_root": str(self.run_root),
+            "replicates": int(self.config["replicates"]),
+            "conditions_per_replicate": 12,
+            "training_commands": [self._command_record(command, "auto") for command in commands],
+        }
+
+    def config_paths(self) -> dict[int, tuple[Path, ...]]:
+        return {
+            replicate: tuple(
+                self._config_set_root(replicate)
+                / f"replicate_{replicate:02d}"
+                / f"{condition_id}.yaml"
+                for condition_id in sorted(_CANONICAL_CONDITION_IDS)
+            )
+            for replicate in range(int(self.config["replicates"]))
+        }
+
+    def build_pools(self, replicate: int) -> dict[str, Any]:
+        from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+            build_condition_manifests,
+            build_master_pools,
+        )
+
+        replicate = _nonnegative_int("replicate", replicate)
+        if replicate >= int(self.config["replicates"]):
+            raise ValueError("replicate is outside the configured experiment range.")
+        cells = build_master_pools(self.config, self.output_root, replicate)
+        manifests = build_condition_manifests(
+            self.output_root,
+            replicate,
+            cells,
+            counts=tuple(int(value) for value in self.config["counts"]),
+        )
+        base = load_config(self.base_config_path)
+        config_paths = write_condition_training_configs(
+            base_config_path=self.base_config_path,
+            condition_manifests=manifests,
+            output_root=self._config_set_root(replicate),
+            run_root=self.run_root / "matrix",
+            total_steps=int(base["training"]["steps"]),
+            batch_size=int(base["training"]["batch_size"]),
+            model_seed=int(self.config["seed"]) + replicate,
+        )
+        result = {
+            "replicate": replicate,
+            "pool_cells": len(cells),
+            "total_pool_images": sum(cell.count for cell in cells),
+            "condition_manifests": [str(path) for path in manifests],
+            "training_configs": [str(path) for path in config_paths],
+        }
+        self.ledger.complete(
+            f"build-pools:replicate-{replicate:02d}",
+            result,
+            metadata={"stage": "build-pools", "replicate": replicate},
+        )
+        return result
+
+    def calibrate_renderer(self) -> dict[str, Any]:
+        from fm_lab.geometry_explorer.synthetic_long_tail_calibration import calibrate_renderer
+
+        destination = self.output_root / "calibration" / "renderer"
+        result = calibrate_renderer(self.config, destination)
+        self.ledger.complete(
+            "calibrate-renderer",
+            {"gate": str(destination / "renderer_gate.json")},
+            metadata={"stage": "calibrate-renderer"},
+        )
+        return result
+
+    def train_oracle(self, *, device: str) -> dict[str, Any]:
+        from fm_lab.geometry_explorer.synthetic_factor_oracle import train_factor_oracle
+        from fm_lab.geometry_explorer.synthetic_long_tail_metrics import calibrate_metric_controls
+
+        require_gate(
+            self.output_root / "calibration" / "renderer" / "renderer_gate.json",
+            stage="renderer_calibration",
+        )
+        oracle_dir = self.output_root / "calibration" / "oracle"
+        result = train_factor_oracle(self.config, oracle_dir, device)
+        oracle_gate = oracle_dir / "oracle_gate.json"
+        require_gate(oracle_gate, stage="factor_oracle")
+        metric_dir = self.output_root / "calibration" / "metric_controls"
+        metric = calibrate_metric_controls(
+            config=self.config,
+            oracle_checkpoint=oracle_dir / "factor_oracle.pt",
+            oracle_gate=oracle_gate,
+            output_dir=metric_dir,
+            device=device,
+            samples_per_class=int(self.config["evaluation"]["samples_per_class"]),
+            seed=int(self.config["seed"]) + 7_000_000,
+            source_revision=_source_revision(),
+        )
+        metric_passed = metric["ordering"]["passed"] is True
+        metric_gate = {
+            "passed": metric_passed,
+            "reasons": [] if metric_passed else ["metric ordering"],
+            "controls": str(metric_dir / "metric_controls.json"),
+        }
+        metric_gate_path = self.output_root / "calibration" / "metric_gate.json"
+        _write_json_atomic(metric_gate, metric_gate_path)
+        require_gate(metric_gate_path, stage="metric_controls")
+        self.ledger.complete(
+            "train-oracle",
+            {
+                "checkpoint": result["checkpoint_path"],
+                "oracle_gate": result["gate_path"],
+                "metric_gate": str(metric_gate_path),
+            },
+            metadata={"stage": "train-oracle"},
+        )
+        return {"oracle": result, "metric_controls": metric}
+
+    def pilot(self, *, device: str, dry_run: bool = False) -> tuple[TrainingCommand, ...]:
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        config_path = next(path for path in self.config_paths()[0] if path.stem == "g0_balanced")
+        command = TrainingCommand(
+            replicate=0,
+            condition_id="g0_balanced",
+            config_path=config_path,
+            run_dir=self.run_root / "pilot" / "replicate_00" / "g0_balanced",
+        )
+        if not dry_run:
+            self._run(command, device=device, stage="pilot", resume=False)
+        return (command,)
+
+    def smoke(
+        self,
+        *,
+        condition_id: str,
+        replicate: int,
+        device: str,
+        dry_run: bool = False,
+    ) -> tuple[TrainingCommand, ...]:
+        self._require_pretraining_gates(include_pilot=True, dry_run=dry_run)
+        paths = self.config_paths()[replicate]
+        try:
+            config_path = next(path for path in paths if path.stem == condition_id)
+        except StopIteration as exc:
+            raise ValueError(f"Unknown condition_id: {condition_id}") from exc
+        command = TrainingCommand(
+            replicate=replicate,
+            condition_id=condition_id,
+            config_path=config_path,
+            run_dir=self.run_root / "smoke" / f"replicate_{replicate:02d}" / condition_id,
+        )
+        if not dry_run:
+            self._run(command, device=device, stage="smoke", resume=False)
+        return (command,)
+
+    def matrix(
+        self,
+        *,
+        device: str,
+        dry_run: bool = False,
+        resume: bool = False,
+    ) -> tuple[TrainingCommand, ...]:
+        self._require_pretraining_gates(include_pilot=True, dry_run=dry_run)
+        commands = build_matrix_commands(self.config_paths(), run_root=self.run_root / "matrix")
+        if not dry_run:
+            for command in commands:
+                self._run(command, device=device, stage="matrix", resume=resume)
+        return commands
+
+    def _run(
+        self,
+        command: TrainingCommand,
+        *,
+        device: str,
+        stage: str,
+        resume: bool,
+    ) -> None:
+        config_hash = _training_config_hash(command.config_path)
+        entry_id = f"{stage}:replicate-{command.replicate:02d}:{command.condition_id}"
+        if resume and self.ledger.is_complete(entry_id, config_hash=config_hash):
+            return
+        metadata = {
+            "stage": stage,
+            "condition": command.condition_id,
+            "replicate": command.replicate,
+            "config_hash": config_hash,
+            "command": command.argv(device),
+            "output_path": str(command.run_dir),
+        }
+        self.ledger.start(entry_id, metadata)
+        try:
+            run_training_command(command, device=device)
+        except BaseException as exc:
+            self.ledger.fail(entry_id, f"{type(exc).__name__}: {exc}", metadata=metadata)
+            raise
+        self.ledger.complete(
+            entry_id,
+            {"run_dir": str(command.run_dir)},
+            config_hash=config_hash,
+            metadata=metadata,
+        )
+
+    def _require_pretraining_gates(self, *, include_pilot: bool, dry_run: bool) -> None:
+        if dry_run:
+            return
+        require_gate(
+            self.output_root / "calibration" / "renderer" / "renderer_gate.json",
+            stage="renderer_calibration",
+        )
+        require_gate(
+            self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+            stage="factor_oracle",
+        )
+        require_gate(
+            self.output_root / "calibration" / "metric_gate.json",
+            stage="metric_controls",
+        )
+        if include_pilot:
+            require_gate(
+                self.output_root / "calibration" / "pilot_gate.json",
+                stage="balanced_pilot",
+            )
+
+    def _config_set_root(self, replicate: int) -> Path:
+        return self.output_root / "training_configs" / f"replicate_{replicate:02d}_set"
+
+    @staticmethod
+    def _command_record(command: TrainingCommand, device: str) -> dict[str, Any]:
+        return {
+            "replicate": command.replicate,
+            "condition_id": command.condition_id,
+            "config_path": str(command.config_path),
+            "run_dir": str(command.run_dir),
+            "argv": command.argv(device),
+        }
+
+
+def _training_config_hash(path: Path) -> str:
+    sidecar = path.with_suffix(".sha256")
+    if not sidecar.is_file():
+        raise FileNotFoundError(f"Training config hash sidecar does not exist: {sidecar}")
+    value = sidecar.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError(f"Training config hash sidecar is malformed: {sidecar}")
+    return value
+
+
+def _entry_id(value: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\n" in value:
+        raise ValueError("ledger entry_id must be a non-empty single-line string.")
+    return value.strip()
+
+
+def _timestamp() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _source_revision() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def _write_json_atomic(payload: dict[str, Any], path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"Refusing to overwrite JSON artifact: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    temporary = Path(raw)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
