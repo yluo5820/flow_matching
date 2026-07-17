@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from fm_lab.geometry_explorer.latent_factors import AzimuthCircle
 from fm_lab.geometry_explorer.registry import GeometryRegistry
+from fm_lab.geometry_explorer.render_maps import RenderConfig, RenderMap
 from fm_lab.geometry_explorer.synthetic_objects import (
     SyntheticObjectSpec,
     SyntheticRenderConfig,
@@ -18,28 +20,118 @@ from fm_lab.geometry_explorer.synthetic_objects import (
 from fm_lab.geometry_explorer.variants import DatasetVariantConfig, build_dataset_variant
 from fm_lab.image_diagnostics.explorer_payload import sample_metric_columns
 from fm_lab.image_diagnostics.save_utils import read_parquet
+from fm_lab.utils.config import ConfigError
 
 
 @pytest.mark.parametrize(
-    "kind,hue",
+    "kind",
     [
-        ("stepped_monument", 25.0),
-        ("crooked_arch", 145.0),
-        ("three_arm_vane", 265.0),
+        "stepped_monument",
+        "crooked_arch",
+        "three_arm_vane",
     ],
 )
-def test_long_tail_objects_are_asymmetric_and_colored(kind: str, hue: float) -> None:
-    spec = SyntheticObjectSpec(
-        kind=kind,
-        marker=False,
-        base_color=oklch_to_srgb(0.70, 0.12, hue),
-    )
+def test_long_tail_objects_are_asymmetric_in_silhouette(kind: str) -> None:
+    spec = SyntheticObjectSpec(kind=kind, marker=False)
     render = SyntheticRenderConfig(image_size=32, supersample=2)
-    image = render_synthetic_object(object_spec=spec, render=render, azimuth_deg=25.0)
+    image = render_synthetic_object(
+        object_spec=spec,
+        render=render,
+        azimuth_deg=25.0,
+        render_mode="silhouette",
+    )
     mirrored = np.flip(image, axis=1)
 
     assert image.shape == (32, 32, 3)
     assert float(np.mean(np.abs(image - mirrored))) > 0.005
+
+
+def test_long_tail_base_color_changes_direct_rendered_object_pixels() -> None:
+    render = SyntheticRenderConfig(image_size=32, supersample=2)
+    warm = render_synthetic_object(
+        object_spec=SyntheticObjectSpec(
+            kind="crooked_arch",
+            marker=False,
+            base_color=(0.90, 0.10, 0.10),
+        ),
+        render=render,
+        azimuth_deg=25.0,
+    )
+    cool = render_synthetic_object(
+        object_spec=SyntheticObjectSpec(
+            kind="crooked_arch",
+            marker=False,
+            base_color=(0.10, 0.10, 0.90),
+        ),
+        render=render,
+        azimuth_deg=25.0,
+    )
+    silhouette = render_synthetic_object(
+        object_spec=SyntheticObjectSpec(kind="crooked_arch", marker=False),
+        render=render,
+        azimuth_deg=25.0,
+        render_mode="silhouette",
+    )
+    mask = silhouette[..., 0] > 0.5
+
+    assert float(np.mean(np.abs(warm[mask] - cool[mask]))) > 0.10
+    assert float(np.mean(warm[mask, 0])) > float(np.mean(warm[mask, 2])) + 0.10
+    assert float(np.mean(cool[mask, 2])) > float(np.mean(cool[mask, 0])) + 0.10
+
+
+def test_long_tail_base_color_reaches_render_map_pixels() -> None:
+    factor = AzimuthCircle()
+    warm_map = RenderMap(
+        factor,
+        object_name="three_arm_vane",
+        config=RenderConfig(
+            image_size=32,
+            antialias=False,
+            object_config={"marker": False, "base_color": (0.90, 0.10, 0.10)},
+        ),
+    )
+    cool_map = RenderMap(
+        factor,
+        object_name="three_arm_vane",
+        config=RenderConfig(
+            image_size=32,
+            antialias=False,
+            object_config={"marker": False, "base_color": (0.10, 0.10, 0.90)},
+        ),
+    )
+    warm = warm_map.render(0.44)
+    cool = cool_map.render(0.44)
+    mask = RenderMap(
+        factor,
+        object_name="three_arm_vane",
+        config=RenderConfig(image_size=32, render_mode="silhouette", antialias=False),
+    ).render(0.44)[..., 0] > 0.5
+
+    assert float(np.mean(np.abs(warm[mask] - cool[mask]))) > 0.10
+    assert float(np.mean(warm[mask, 0])) > float(np.mean(warm[mask, 2])) + 0.10
+    assert float(np.mean(cool[mask, 2])) > float(np.mean(cool[mask, 0])) + 0.10
+
+
+@pytest.mark.parametrize(
+    "base_color",
+    [
+        (0.1, 0.2),
+        "red",
+        (0.1, 0.2, 1.1),
+        (0.1, float("nan"), 0.2),
+    ],
+)
+def test_long_tail_base_color_config_rejects_invalid_rgb_triplets(base_color: object) -> None:
+    with pytest.raises(ConfigError, match="base_color"):
+        synthetic_object_config_from_dict(
+            {"object": {"kind": "stepped_monument", "base_color": base_color}}
+        )
+    with pytest.raises(ConfigError, match="base_color"):
+        RenderMap(
+            AzimuthCircle(),
+            object_name="stepped_monument",
+            config=RenderConfig(object_config={"base_color": base_color}),
+        )
 
 
 def test_long_tail_object_silhouettes_are_pairwise_distinct() -> None:

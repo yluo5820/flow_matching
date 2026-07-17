@@ -38,6 +38,7 @@ from fm_lab.geometry_explorer.synthetic_objects import (
     _camera_frame,
     _camera_frame_from_position,
     _CameraFrame,
+    _validated_rgb_triplet,
     render_synthetic_object,
 )
 from fm_lab.utils.config import ConfigError
@@ -363,7 +364,10 @@ def _object_spec(object_name: str, raw: Any | None) -> SyntheticObjectSpec:
         base_color=(
             None
             if values.get("base_color") is None
-            else tuple(values["base_color"])  # type: ignore[arg-type]
+            else _validated_rgb_triplet(
+                values["base_color"],
+                name="object.base_color",
+            )
         ),
         marker=bool(values.get("marker", kind == "marked_cube")),
         marker_face=str(values.get("marker_face", "negative_y")),

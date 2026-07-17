@@ -126,7 +126,7 @@ def synthetic_object_config_from_dict(raw: dict[str, Any]) -> SyntheticObjectBui
         base_color=(
             None
             if object_values.get("base_color") is None
-            else _float_triplet(
+            else _validated_rgb_triplet(
                 object_values["base_color"],
                 name="object.base_color",
             )
@@ -1649,6 +1649,20 @@ def _float_triplet(value: object, *, name: str) -> tuple[float, float, float]:
     if not isinstance(value, list | tuple) or len(value) != 3:
         raise ConfigError(f"{name} must contain exactly three numeric values.")
     return (float(value[0]), float(value[1]), float(value[2]))
+
+
+def _validated_rgb_triplet(value: object, *, name: str) -> tuple[float, float, float]:
+    if not isinstance(value, list | tuple) or len(value) != 3:
+        raise ConfigError(f"{name} must contain exactly three numeric RGB values.")
+    if any(
+        isinstance(channel, bool) or not isinstance(channel, (int, float, np.number))
+        for channel in value
+    ):
+        raise ConfigError(f"{name} must contain exactly three numeric RGB values.")
+    color = tuple(float(channel) for channel in value)
+    if not all(math.isfinite(channel) and 0.0 <= channel <= 1.0 for channel in color):
+        raise ConfigError(f"{name} values must be finite and lie in [0, 1].")
+    return color
 
 
 def _float_pair(value: object, *, name: str) -> tuple[float, float]:
