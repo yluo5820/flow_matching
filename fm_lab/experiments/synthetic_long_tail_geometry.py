@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import tempfile
@@ -88,6 +89,7 @@ def write_condition_training_configs(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(tempfile.mkdtemp(prefix=".training-configs-", dir=output_path.parent))
+    published = False
     try:
         for plan, relative_path in zip(plans, relative_paths, strict=True):
             config = _condition_config(
@@ -102,9 +104,15 @@ def write_condition_training_configs(
             config_path.with_suffix(".sha256").write_text(
                 f"{_config_hash(config, plan.manifest_digest)}\n", encoding="utf-8"
             )
-        staging_root.replace(output_path)
+        os.symlink(
+            os.path.relpath(staging_root, start=output_path.parent),
+            output_path,
+            target_is_directory=True,
+        )
+        published = True
     except BaseException:
-        shutil.rmtree(staging_root, ignore_errors=True)
+        if not published:
+            shutil.rmtree(staging_root, ignore_errors=True)
         raise
     return tuple(output_path / path for path in relative_paths)
 
@@ -171,12 +179,14 @@ def _validate_count_rotations(plans: tuple[_ConditionPlan, ...]) -> None:
     if len(by_id) != len(plans):
         raise ValueError("condition_manifests cannot contain duplicate condition IDs.")
     base_counts = by_id["g0_f0"].class_counts
+    if not base_counts[0] > base_counts[1] > base_counts[2]:
+        raise ValueError("g0_f0 base counts must be strictly descending head>medium>tail.")
     expected_rotations = (
         base_counts,
         (base_counts[1], base_counts[2], base_counts[0]),
         (base_counts[2], base_counts[0], base_counts[1]),
     )
-    balanced_counts = (max(base_counts),) * 3
+    balanced_counts = (base_counts[0],) * 3
     for geometry in range(3):
         if by_id[f"g{geometry}_balanced"].class_counts != balanced_counts:
             raise ValueError("Balanced conditions must use the maximum base count in every class.")

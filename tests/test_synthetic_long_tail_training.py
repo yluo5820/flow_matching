@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import fm_lab.experiments.synthetic_long_tail_geometry as training_configs
 from fm_lab.experiments.factory import build_model, build_source, build_target
 from fm_lab.experiments.synthetic_long_tail_geometry import (
     matched_pass_step,
@@ -248,6 +249,78 @@ def test_writer_rejects_mixed_manifest_provenance_before_publish(tmp_path: Path)
             **training_kwargs(manifests, tmp_path, output_name="mixed-provenance")
         )
     assert not (tmp_path / "mixed-provenance").exists()
+
+
+@pytest.mark.parametrize("base_counts", [(5, 20, 2), (20, 20, 2), (20, 5, 5)])
+def test_writer_rejects_non_descending_canonical_base_counts_before_publish(
+    tmp_path: Path,
+    base_counts: tuple[int, int, int],
+) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    rotations = (
+        base_counts,
+        (base_counts[1], base_counts[2], base_counts[0]),
+        (base_counts[2], base_counts[0], base_counts[1]),
+    )
+    for manifest_path in manifests:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if payload["condition_id"].endswith("_balanced"):
+            counts = (max(base_counts),) * 3
+        else:
+            counts = rotations[int(payload["condition_id"][-1])]
+        for entry, count in zip(payload["classes"], counts, strict=True):
+            entry["count"] = count
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="strictly descending"):
+        write_condition_training_configs(
+            **training_kwargs(manifests, tmp_path, output_name="non-descending")
+        )
+    assert not (tmp_path / "non-descending").exists()
+
+
+def test_writer_refuses_publication_race_and_cleans_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    output_root = tmp_path / "raced-configs"
+    original_symlink = training_configs.os.symlink
+
+    def race_destination(target: str, link_name: Path, *, target_is_directory: bool) -> None:
+        output_root.mkdir()
+        (output_root / "sentinel.txt").write_text("preserve me", encoding="utf-8")
+        original_symlink(target, link_name, target_is_directory=target_is_directory)
+
+    monkeypatch.setattr(training_configs.os, "symlink", race_destination)
+    with pytest.raises(FileExistsError):
+        write_condition_training_configs(
+            **training_kwargs(manifests, tmp_path, output_name=output_root.name)
+        )
+
+    assert (output_root / "sentinel.txt").read_text(encoding="utf-8") == "preserve me"
+    assert not list(output_root.glob("*.yaml"))
+    assert not list(tmp_path.glob(".training-configs-*"))
+
+
+def test_writer_publishes_complete_immutable_symlink_root(tmp_path: Path) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    output_root = tmp_path / "published-configs"
+    paths = write_condition_training_configs(
+        **training_kwargs(manifests, tmp_path, output_name=output_root.name)
+    )
+
+    assert output_root.is_symlink()
+    assert len(paths) == 12
+    assert all(
+        path.is_file()
+        and load_config(path)["data"]["name"] == "synthetic_long_tail_geometry"
+        for path in paths
+    )
+    with pytest.raises(FileExistsError):
+        write_condition_training_configs(
+            **training_kwargs(manifests, tmp_path, output_name=output_root.name)
+        )
 
 
 def test_writer_hashes_manifest_provenance_and_accepts_each_replicate(tmp_path: Path) -> None:
