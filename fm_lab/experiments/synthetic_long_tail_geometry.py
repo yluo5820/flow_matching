@@ -699,6 +699,53 @@ class SyntheticLongTailRunner:
                 self._run(command, device=device, stage="matrix", resume=resume)
         return commands
 
+    def aggregate(self, *, bootstrap_draws: int | None = None) -> dict[str, Any]:
+        from fm_lab.geometry_explorer.synthetic_long_tail_report import aggregate_experiment
+
+        draws = (
+            int(self.config["evaluation"]["bootstrap_draws"])
+            if bootstrap_draws is None
+            else _positive_int("bootstrap_draws", bootstrap_draws)
+        )
+        result = aggregate_experiment(
+            self.output_root,
+            bootstrap_draws=draws,
+            seed=int(self.config["seed"]),
+        )
+        self.ledger.complete(
+            "aggregate",
+            {"summary": str(self.output_root / "analysis" / "summary.json")},
+            metadata={"stage": "aggregate"},
+        )
+        return result
+
+    def report(self) -> dict[str, Any]:
+        from fm_lab.geometry_explorer.synthetic_long_tail_report import (
+            render_research_report,
+        )
+
+        summary_path = self.output_root / "analysis" / "summary.json"
+        if summary_path.is_file():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        else:
+            summary = {
+                "effects": {},
+                "calibration": _calibration_snapshot(self.output_root),
+                "conditions": _condition_snapshot(self.output_root),
+            }
+        destination = (
+            self.config_path.parents[2]
+            / "docs"
+            / "research"
+            / "synthetic_long_tail_geometry_report.md"
+        )
+        path = render_research_report(
+            summary,
+            {"schema_version": 1, "entries": self.ledger.entries()},
+            destination,
+        )
+        return {"report": str(path)}
+
     def _run(
         self,
         command: TrainingCommand,
@@ -814,3 +861,35 @@ def _write_json_atomic(payload: dict[str, Any], path: Path) -> None:
         os.link(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _calibration_snapshot(root: Path) -> dict[str, Any]:
+    result = {}
+    for name, relative in {
+        "renderer": "calibration/renderer/renderer_gate.json",
+        "oracle": "calibration/oracle/oracle_gate.json",
+        "metric": "calibration/metric_gate.json",
+        "pilot": "calibration/pilot_gate.json",
+    }.items():
+        path = root / relative
+        result[name] = (
+            json.loads(path.read_text(encoding="utf-8"))
+            if path.is_file()
+            else {"status": "not_run", "path": str(path)}
+        )
+    return result
+
+
+def _condition_snapshot(root: Path) -> list[dict[str, Any]]:
+    result = []
+    for path in sorted(root.glob("replicate_*/conditions/*.json")):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        result.append(
+            {
+                "replicate": raw.get("replicate"),
+                "condition_id": raw.get("condition_id"),
+                "geometry_mapping": raw.get("geometry_mapping"),
+                "frequency_mapping": raw.get("frequency_mapping"),
+            }
+        )
+    return result
