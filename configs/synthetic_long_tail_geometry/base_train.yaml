@@ -1,0 +1,60 @@
+experiment:
+  name: synthetic_long_tail_geometry
+  seed: 0
+  output_dir: runs/synthetic_long_tail_geometry/manual
+data:
+  name: synthetic_long_tail_geometry
+  condition_manifest: outputs/synthetic_long_tail_geometry/replicate_00/conditions/g0_balanced.json
+  normalize: minus_one_one
+  dequantize: false
+source:
+  name: gaussian
+  dim: 3072
+coupling:
+  name: independent
+path:
+  name: linear
+model:
+  name: image_unet
+  image_shape: [3, 32, 32]
+  base_channels: 32
+  time_embedding_dim: 128
+  activation: silu
+  zero_init_head: true
+conditioning:
+  enabled: true
+  num_classes: 3
+  embedding_dim: 128
+  dropout_probability: 0.15
+objective:
+  name: flow_matching
+  model_output: target
+  loss_space: velocity
+  min_denom: 0.05
+  modifiers: []
+training:
+  batch_size: 256
+  steps: 40000
+  checkpoint_steps: [5000, 10000, 20000, 40000]
+  lr: 0.0001
+  warmup_steps: 500
+  time_sampling:
+    name: logit_normal
+    mean: -0.8
+    std: 0.8
+  log_every: 250
+  early_stopping:
+    enabled: false
+solvers:
+  names: [euler]
+  nfes: [64]
+  schedule: uniform
+sampling:
+  n_samples: 15000
+  n_trajectories: 18
+  nfe: 64
+  sample_batch_size: 500
+  classes: [0, 1, 2]
+  seed: 19072026
+  classifier_free_guidance:
+    scale: 1.0
