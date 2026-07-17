@@ -46,6 +46,39 @@ def test_v2_config_uses_isolated_artifact_and_training_roots() -> None:
     assert runner.config["pilot"]["batch_size"] == 64
 
 
+def test_balanced_learning_curve_budget_has_isolated_paths() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.balanced_pilots(device="cpu", dry_run=True, training_steps=2_000)
+
+    assert result["training_steps"] == 2_000
+    assert len(result["commands"]) == 3
+    assert {item["condition_id"] for item in result["commands"]} == {
+        "g0_balanced",
+        "g1_balanced",
+        "g2_balanced",
+    }
+    assert all(
+        "balanced_learning_curve/steps_00002000" in item["run_dir"] for item in result["commands"]
+    )
+    assert all(
+        "balanced_learning_curve/steps_00002000" in item["config_path"]
+        for item in result["commands"]
+    )
+
+
+@pytest.mark.parametrize("training_steps", [0, -1, True])
+def test_balanced_learning_curve_rejects_invalid_budget(training_steps: object) -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    with pytest.raises(ValueError, match="training_steps"):
+        runner.balanced_pilots(
+            device="cpu",
+            dry_run=True,
+            training_steps=training_steps,  # type: ignore[arg-type]
+        )
+
+
 def test_balanced_pilot_gate_checks_learning_and_each_class(tmp_path: Path) -> None:
     run_dir = tmp_path / "pilot"
     (run_dir / "diagnostics").mkdir(parents=True)

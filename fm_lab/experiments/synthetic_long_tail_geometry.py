@@ -797,10 +797,28 @@ class SyntheticLongTailRunner:
             require_gate(pilot_gate_path, stage="balanced_pilot")
         return (command,)
 
-    def balanced_pilots(self, *, device: str, dry_run: bool = False) -> dict[str, Any]:
-        """Run all three balanced dimension rotations at the reduced pilot budget."""
+    def balanced_pilots(
+        self,
+        *,
+        device: str,
+        dry_run: bool = False,
+        training_steps: int | None = None,
+    ) -> dict[str, Any]:
+        """Run all balanced rotations at the pilot or an isolated learning-curve budget."""
 
         self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        configured_steps = _positive_int(
+            "pilot.training_steps", self.config["pilot"]["training_steps"]
+        )
+        steps = (
+            configured_steps
+            if training_steps is None
+            else _positive_int("training_steps", training_steps)
+        )
+        pilot = copy.deepcopy(self.config["pilot"])
+        pilot["training_steps"] = steps
+        is_configured_pilot = steps == configured_steps
+        budget_id = f"steps_{steps:08d}"
         commands = []
         evaluations: dict[str, dict[str, Any]] = {}
         for geometry in range(3):
@@ -808,26 +826,49 @@ class SyntheticLongTailRunner:
             source_config_path = next(
                 path for path in self.config_paths()[0] if path.stem == condition_id
             )
-            pilot_config_root = (
-                self.output_root / "training_configs" / "pilot_set"
-                if geometry == 0
-                else self.output_root / "training_configs" / f"pilot_{condition_id}_set"
-            )
+            if is_configured_pilot:
+                pilot_config_root = (
+                    self.output_root / "training_configs" / "pilot_set"
+                    if geometry == 0
+                    else self.output_root / "training_configs" / f"pilot_{condition_id}_set"
+                )
+            else:
+                pilot_config_root = (
+                    self.output_root
+                    / "training_configs"
+                    / "balanced_learning_curve"
+                    / budget_id
+                    / f"{condition_id}_set"
+                )
             config_path = pilot_config_root / "replicate_00" / f"{condition_id}.yaml"
             legacy_config_path = pilot_config_root / "replicate_00" / "g0_balanced.yaml"
-            if geometry > 0 and not config_path.is_file() and legacy_config_path.is_file():
+            if (
+                is_configured_pilot
+                and geometry > 0
+                and not config_path.is_file()
+                and legacy_config_path.is_file()
+            ):
                 config_path = legacy_config_path
-            run_dir = (
-                self.run_root / "pilot" / "replicate_00" / condition_id
-                if geometry == 0
-                else self.run_root / "balanced_pilots" / "replicate_00" / condition_id
-            )
+            if is_configured_pilot:
+                run_dir = (
+                    self.run_root / "pilot" / "replicate_00" / condition_id
+                    if geometry == 0
+                    else self.run_root / "balanced_pilots" / "replicate_00" / condition_id
+                )
+            else:
+                run_dir = (
+                    self.run_root
+                    / "balanced_learning_curve"
+                    / budget_id
+                    / "replicate_00"
+                    / condition_id
+                )
             if not dry_run and not config_path.is_file():
                 config_path = write_pilot_training_config(
                     source_config_path=source_config_path,
                     output_root=pilot_config_root,
                     run_root=run_dir.parents[1],
-                    pilot=self.config["pilot"],
+                    pilot=pilot,
                 )
             command = TrainingCommand(
                 replicate=0,
@@ -839,7 +880,10 @@ class SyntheticLongTailRunner:
             if dry_run:
                 continue
 
-            stage = "pilot" if geometry == 0 else "balanced-pilot"
+            if is_configured_pilot:
+                stage = "pilot" if geometry == 0 else "balanced-pilot"
+            else:
+                stage = f"balanced-learning-curve-{budget_id}"
             entry_id = f"{stage}:replicate-00:{condition_id}"
             config_hash = _training_config_hash(config_path)
             if not self.ledger.is_complete(entry_id, config_hash=config_hash):
@@ -851,7 +895,7 @@ class SyntheticLongTailRunner:
                 )
 
                 pilot_config = load_config(config_path)
-                count = int(self.config["pilot"]["samples_per_class"])
+                count = int(pilot["samples_per_class"])
                 evaluation = evaluate_generated_distribution(
                     generated_root=run_dir,
                     oracle_checkpoint=self.output_root
@@ -871,7 +915,11 @@ class SyntheticLongTailRunner:
                     inference_batch_size=min(256, count),
                 )
                 self.ledger.complete(
-                    f"balanced-pilot-evaluation-active-factors:{condition_id}",
+                    (
+                        f"balanced-pilot-evaluation-active-factors:{condition_id}"
+                        if is_configured_pilot
+                        else f"balanced-learning-curve-evaluation:{budget_id}:{condition_id}"
+                    ),
                     {"evaluation": str(evaluation_dir / "factor_metrics.json")},
                     metadata={
                         "stage": "balanced-pilot-evaluation",
@@ -885,15 +933,36 @@ class SyntheticLongTailRunner:
             evaluations[condition_id] = evaluation
 
         if dry_run:
-            return {"commands": [self._command_record(command, device) for command in commands]}
+            return {
+                "training_steps": steps,
+                "commands": [self._command_record(command, device) for command in commands],
+            }
         summary = _balanced_pilot_rotation_summary(evaluations)
-        summary_path = self.output_root / "analysis" / "balanced_pilot_rotations.json"
-        _write_json_atomic(summary, summary_path)
-        self.ledger.complete(
-            "balanced-pilot-rotations-active-factors",
-            {"summary": str(summary_path)},
-            metadata={"stage": "balanced-pilot-rotations"},
-        )
+        if is_configured_pilot:
+            summary_path = self.output_root / "analysis" / "balanced_pilot_rotations.json"
+            summary_entry = "balanced-pilot-rotations-active-factors"
+            summary_stage = "balanced-pilot-rotations"
+        else:
+            summary["training_steps"] = steps
+            summary_path = (
+                self.output_root / "analysis" / "balanced_learning_curve" / f"{budget_id}.json"
+            )
+            summary_entry = f"balanced-learning-curve-rotations:{budget_id}"
+            summary_stage = "balanced-learning-curve-rotations"
+        if summary_path.is_file():
+            existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if existing_summary != summary:
+                raise FileExistsError(
+                    f"Refusing to replace a different balanced summary: {summary_path}"
+                )
+        else:
+            _write_json_atomic(summary, summary_path)
+        if not self.ledger.is_complete(summary_entry):
+            self.ledger.complete(
+                summary_entry,
+                {"summary": str(summary_path)},
+                metadata={"stage": summary_stage, "training_steps": steps},
+            )
         return summary
 
     def smoke(

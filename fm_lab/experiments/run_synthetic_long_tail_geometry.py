@@ -26,6 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
     balanced_pilots = subparsers.add_parser("balanced-pilots")
     _device(balanced_pilots)
     _dry_run(balanced_pilots)
+    balanced_pilots.add_argument(
+        "--training-steps",
+        type=int,
+        default=None,
+        help="Run an isolated balanced learning-curve budget instead of the configured pilot.",
+    )
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -66,7 +72,11 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
     if args.stage == "pilot":
         return runner.pilot(device=args.device, dry_run=args.dry_run)
     if args.stage == "balanced-pilots":
-        return runner.balanced_pilots(device=args.device, dry_run=args.dry_run)
+        return runner.balanced_pilots(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
+        )
     if args.stage == "smoke":
         return runner.smoke(
             condition_id=args.condition,

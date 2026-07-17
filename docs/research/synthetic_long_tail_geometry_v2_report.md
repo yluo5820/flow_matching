@@ -361,3 +361,9 @@ persistent fidelity floor. Only after selecting the smallest horizon at which th
 balanced dimension-5 classes have measurable validity should the frequency rotations
 be run. A later Jacobian/tangent-rank probe should test whether the high-dimensional
 failure is specifically a loss of learned directions rather than only pixel blur.
+
+The `balanced-pilots --training-steps N` interface now creates an immutable config,
+run directory, evaluation, and rotation summary isolated under `steps_N` for each
+budget. The 2,000- and 5,000-step jobs start from the same model and data-order seed
+as the 1,000-step pilot, so their prefixes are directly comparable; they train from
+scratch rather than sharing mutable run state.
