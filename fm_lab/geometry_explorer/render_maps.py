@@ -352,11 +352,19 @@ def _object_spec(object_name: str, raw: Any | None) -> SyntheticObjectSpec:
         "marked_cube": "marked_cube",
         "abstract_statue": "abstract_statue",
         "offset_monument": "offset_monument",
+        "stepped_monument": "stepped_monument",
+        "crooked_arch": "crooked_arch",
+        "three_arm_vane": "three_arm_vane",
     }
     kind = aliases.get(str(object_name), str(object_name))
     return SyntheticObjectSpec(
         kind=str(values.get("kind", kind)),
         scale=float(values.get("scale", 1.35)),
+        base_color=(
+            None
+            if values.get("base_color") is None
+            else tuple(values["base_color"])  # type: ignore[arg-type]
+        ),
         marker=bool(values.get("marker", kind == "marked_cube")),
         marker_face=str(values.get("marker_face", "negative_y")),
         marker_size=float(values.get("marker_size", 0.28)),

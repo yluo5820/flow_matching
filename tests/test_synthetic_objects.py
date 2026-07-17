@@ -3,18 +3,71 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from fm_lab.geometry_explorer.registry import GeometryRegistry
 from fm_lab.geometry_explorer.synthetic_objects import (
     SyntheticObjectSpec,
     SyntheticRenderConfig,
     build_synthetic_object_dataset,
+    oklch_to_srgb,
     render_marked_cube,
+    render_synthetic_object,
     synthetic_object_config_from_dict,
 )
 from fm_lab.geometry_explorer.variants import DatasetVariantConfig, build_dataset_variant
 from fm_lab.image_diagnostics.explorer_payload import sample_metric_columns
 from fm_lab.image_diagnostics.save_utils import read_parquet
+
+
+@pytest.mark.parametrize(
+    "kind,hue",
+    [
+        ("stepped_monument", 25.0),
+        ("crooked_arch", 145.0),
+        ("three_arm_vane", 265.0),
+    ],
+)
+def test_long_tail_objects_are_asymmetric_and_colored(kind: str, hue: float) -> None:
+    spec = SyntheticObjectSpec(
+        kind=kind,
+        marker=False,
+        base_color=oklch_to_srgb(0.70, 0.12, hue),
+    )
+    render = SyntheticRenderConfig(image_size=32, supersample=2)
+    image = render_synthetic_object(object_spec=spec, render=render, azimuth_deg=25.0)
+    mirrored = np.flip(image, axis=1)
+
+    assert image.shape == (32, 32, 3)
+    assert float(np.mean(np.abs(image - mirrored))) > 0.005
+
+
+def test_long_tail_object_silhouettes_are_pairwise_distinct() -> None:
+    render = SyntheticRenderConfig(image_size=32, supersample=2)
+    images = [
+        render_synthetic_object(
+            object_spec=SyntheticObjectSpec(kind=kind, marker=False),
+            render=render,
+            azimuth_deg=35.0,
+            render_mode="silhouette",
+        )
+        for kind in ("stepped_monument", "crooked_arch", "three_arm_vane")
+    ]
+    distances = [
+        float(np.mean(np.abs(images[left] - images[right])))
+        for left, right in ((0, 1), (0, 2), (1, 2))
+    ]
+
+    assert min(distances) > 0.03
+
+
+def test_long_tail_object_config_retains_fixed_base_color() -> None:
+    color = oklch_to_srgb(0.70, 0.12, 25.0)
+    config = synthetic_object_config_from_dict(
+        {"object": {"kind": "stepped_monument", "marker": False, "base_color": color}}
+    )
+
+    assert config.object_spec.base_color == color
 
 
 def test_render_marked_cube_is_deterministic_and_pose_dependent() -> None:

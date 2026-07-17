@@ -16,7 +16,14 @@ from fm_lab.image_diagnostics.save_utils import write_parquet
 from fm_lab.utils.config import ConfigError, save_config
 from fm_lab.utils.logging import write_json
 
-SUPPORTED_OBJECT_KINDS = {"marked_cube", "abstract_statue", "offset_monument"}
+SUPPORTED_OBJECT_KINDS = {
+    "marked_cube",
+    "abstract_statue",
+    "offset_monument",
+    "stepped_monument",
+    "crooked_arch",
+    "three_arm_vane",
+}
 TRANSLATION_POSE_MODES = {"translation_xy", "translation_z", "translation_xyz"}
 SUPPORTED_POSE_MODES = {"azimuth", "so3", "sphere", *TRANSLATION_POSE_MODES}
 SUPPORTED_RENDER_MODES = {
@@ -34,6 +41,7 @@ SUPPORTED_RENDER_MODES = {
 class SyntheticObjectSpec:
     kind: str = "marked_cube"
     scale: float = 1.35
+    base_color: tuple[float, float, float] | None = None
     marker: bool = True
     marker_face: str = "negative_y"
     marker_size: float = 0.28
@@ -115,6 +123,14 @@ def synthetic_object_config_from_dict(raw: dict[str, Any]) -> SyntheticObjectBui
     object_spec = SyntheticObjectSpec(
         kind=str(object_values.get("kind", "marked_cube")),
         scale=float(object_values.get("scale", 1.35)),
+        base_color=(
+            None
+            if object_values.get("base_color") is None
+            else _float_triplet(
+                object_values["base_color"],
+                name="object.base_color",
+            )
+        ),
         marker=bool(object_values.get("marker", True)),
         marker_face=str(object_values.get("marker_face", "negative_y")),
         marker_size=float(object_values.get("marker_size", 0.28)),
@@ -850,6 +866,101 @@ def _cube_faces(scale: float) -> tuple[_CubeFace, ...]:
     )
 
 
+def oklch_to_srgb(
+    lightness: float,
+    chroma: float,
+    hue_degrees: float,
+) -> tuple[float, float, float]:
+    hue = math.radians(float(hue_degrees))
+    lab_a = float(chroma) * math.cos(hue)
+    lab_b = float(chroma) * math.sin(hue)
+    l_root = float(lightness) + 0.3963377774 * lab_a + 0.2158037573 * lab_b
+    m_root = float(lightness) - 0.1055613458 * lab_a - 0.0638541728 * lab_b
+    s_root = float(lightness) - 0.0894841775 * lab_a - 1.2914855480 * lab_b
+    l_value, m_value, s_value = l_root**3, m_root**3, s_root**3
+    linear = np.asarray(
+        [
+            4.0767416621 * l_value - 3.3077115913 * m_value + 0.2309699292 * s_value,
+            -1.2684380046 * l_value + 2.6097574011 * m_value - 0.3413193965 * s_value,
+            -0.0041960863 * l_value - 0.7034186147 * m_value + 1.707614701 * s_value,
+        ]
+    )
+    srgb = np.where(
+        linear <= 0.0031308,
+        12.92 * linear,
+        1.055 * np.power(np.maximum(linear, 0.0), 1.0 / 2.4) - 0.055,
+    )
+    return tuple(float(value) for value in np.clip(srgb, 0.0, 1.0))
+
+
+def _uniform_colors(spec: SyntheticObjectSpec) -> tuple[tuple[float, float, float], ...]:
+    color = spec.base_color or (0.55, 0.55, 0.55)
+    return (color,) * 6
+
+
+def _combine_boxes(
+    boxes: tuple[tuple[tuple[float, float, float], tuple[float, float, float]], ...],
+    *,
+    scale: float,
+    colors: tuple[tuple[float, float, float], ...],
+    prefix: str,
+) -> tuple[_CubeFace, ...]:
+    faces: list[_CubeFace] = []
+    for index, (center, size) in enumerate(boxes):
+        faces.extend(
+            _box_faces(
+                center=tuple(scale * value for value in center),
+                size=tuple(scale * value for value in size),
+                colors=colors,
+                prefix=f"{prefix}_{index}",
+            )
+        )
+    return tuple(faces)
+
+
+def _stepped_monument_faces(spec: SyntheticObjectSpec) -> tuple[_CubeFace, ...]:
+    return _combine_boxes(
+        (
+            ((0.0, 0.0, -0.55), (0.90, 0.70, 0.28)),
+            ((-0.16, 0.04, -0.08), (0.48, 0.46, 0.82)),
+            ((0.20, -0.06, 0.43), (0.62, 0.34, 0.22)),
+            ((0.34, 0.02, 0.70), (0.18, 0.22, 0.38)),
+        ),
+        scale=spec.scale,
+        colors=_uniform_colors(spec),
+        prefix="stepped_monument",
+    )
+
+
+def _crooked_arch_faces(spec: SyntheticObjectSpec) -> tuple[_CubeFace, ...]:
+    return _combine_boxes(
+        (
+            ((-0.42, 0.0, -0.05), (0.24, 0.40, 1.25)),
+            ((0.38, 0.02, -0.22), (0.34, 0.34, 0.92)),
+            ((-0.02, 0.0, 0.58), (1.02, 0.34, 0.22)),
+            ((0.45, -0.16, 0.43), (0.22, 0.28, 0.34)),
+        ),
+        scale=spec.scale,
+        colors=_uniform_colors(spec),
+        prefix="crooked_arch",
+    )
+
+
+def _three_arm_vane_faces(spec: SyntheticObjectSpec) -> tuple[_CubeFace, ...]:
+    return _combine_boxes(
+        (
+            ((0.0, 0.0, 0.0), (0.34, 0.34, 0.34)),
+            ((0.48, 0.0, 0.03), (0.78, 0.18, 0.20)),
+            ((-0.14, 0.0, 0.50), (0.20, 0.22, 0.82)),
+            ((-0.32, 0.26, -0.28), (0.58, 0.18, 0.22)),
+            ((0.68, -0.12, 0.18), (0.16, 0.34, 0.42)),
+        ),
+        scale=spec.scale,
+        colors=_uniform_colors(spec),
+        prefix="three_arm_vane",
+    )
+
+
 def _object_faces(spec: SyntheticObjectSpec) -> tuple[_CubeFace, ...]:
     if spec.kind == "marked_cube":
         return _cube_faces(spec.scale)
@@ -857,6 +968,12 @@ def _object_faces(spec: SyntheticObjectSpec) -> tuple[_CubeFace, ...]:
         return _abstract_statue_faces(spec.scale)
     if spec.kind == "offset_monument":
         return _offset_monument_faces(spec.scale)
+    if spec.kind == "stepped_monument":
+        return _stepped_monument_faces(spec)
+    if spec.kind == "crooked_arch":
+        return _crooked_arch_faces(spec)
+    if spec.kind == "three_arm_vane":
+        return _three_arm_vane_faces(spec)
     raise ConfigError(f"Unsupported synthetic object kind: {spec.kind}.")
 
 
