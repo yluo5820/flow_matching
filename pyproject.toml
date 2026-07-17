@@ -46,9 +46,6 @@ image-embeddings = [
   "torchvision",
   "transformers>=4.50",
 ]
-long-tail-geometry = [
-  "pyarrow>=16.0",
-]
 
 [project.scripts]
 fm-lab-diagnostics = "fm_lab.experiments.run_diagnostics:main"
@@ -63,8 +60,6 @@ fm-lab-solver-sensitivity = "fm_lab.experiments.run_solver_sensitivity:main"
 fm-lab-sample-checkpoint = "fm_lab.experiments.run_sample_checkpoint:main"
 fm-lab-sampling-timesteps = "fm_lab.geometry_explorer.sampling_timesteps:main"
 fm-lab-imbdiff-eval = "fm_lab.experiments.run_imbdiff_eval:main"
-fm-lab-long-tail-geometry-stage0 = "fm_lab.experiments.run_long_tail_geometry_stage0:main"
-fm-lab-long-tail-geometry-observation0 = "fm_lab.experiments.run_long_tail_geometry_observation0:main"
 fm-lab-train = "fm_lab.experiments.run_train:main"
 
 [tool.setuptools.packages.find]

@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from long_tail_geometry_helpers import write_balanced_fashion_mnist
+from probe_helpers import write_balanced_fashion_mnist
 
 from fm_lab.data import LongTailedFashionMNIST
 from fm_lab.data.long_tail import (
