@@ -73,6 +73,7 @@ def build_target(config: dict[str, Any]):
             condition_manifest=manifest,
             normalize=str(data_config.get("normalize", "minus_one_one")),
             dequantize=bool(data_config.get("dequantize", False)),
+            sampling_policy=str(data_config.get("sampling_policy", "empirical")),
         )
     if name in {"cifar10_lt", "cifar100_lt", "imbalanced_cifar10", "imbalanced_cifar100"}:
         dataset = "cifar10" if "10" in name and "100" not in name else "cifar100"

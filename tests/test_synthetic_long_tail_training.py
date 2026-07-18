@@ -235,6 +235,7 @@ def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path
             "n_trajectories": 3,
         },
         require_balanced=False,
+        training_sampling_policy="class_balanced",
     )
     config = load_config(config_path)
 
@@ -242,6 +243,7 @@ def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path
     assert config["experiment"]["output_dir"] == str(run_root / "replicate_00/g1_f2")
     assert config["training"]["steps"] == 100
     assert config["data"]["condition_manifest"].endswith("g1_f2.json")
+    assert config["data"]["sampling_policy"] == "class_balanced"
 
 
 def test_writer_rejects_traversal_wrong_tree_and_non_32_manifest_before_publish(

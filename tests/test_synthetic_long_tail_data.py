@@ -176,6 +176,32 @@ def test_synthetic_target_sampling_follows_empirical_frequency(tmp_path: Path) -
     assert torch.max(torch.abs(frequencies - expected)) < 0.015
 
 
+def test_synthetic_target_rejects_unknown_sampling_policy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="sampling_policy"):
+        SyntheticLongTailImages(
+            write_tiny_condition(tmp_path, counts=(20, 5, 2)),
+            sampling_policy="unknown",
+        )
+
+
+def test_synthetic_target_class_balanced_sampling_preserves_finite_pools(
+    tmp_path: Path,
+) -> None:
+    target = SyntheticLongTailImages(
+        write_tiny_condition(tmp_path, counts=(200, 20, 2)),
+        normalize="zero_one",
+        sampling_policy="class_balanced",
+    )
+
+    images, labels = target.sample_with_labels(20_000)
+
+    frequencies = torch.bincount(labels, minlength=3).float() / len(labels)
+    assert torch.max(torch.abs(frequencies - torch.full((3,), 1.0 / 3.0))) < 0.015
+    assert images.shape == (20_000, target.dim)
+    assert target.class_counts == (200, 20, 2)
+    assert target.metadata()["sampling_policy"] == "class_balanced"
+
+
 def test_synthetic_target_factory_and_training_sampler_contract(tmp_path: Path) -> None:
     manifest_path = write_indexed_manifest(tmp_path)
     target = build_target(
@@ -198,6 +224,17 @@ def test_synthetic_target_factory_and_training_sampler_contract(tmp_path: Path) 
     assert labels is not None
     assert labels.shape == (8,)
     assert set(labels.tolist()) <= {0, 1, 2}
+
+    balanced_target = build_target(
+        {
+            "data": {
+                "name": "synthetic_long_tail_geometry",
+                "condition_manifest": str(manifest_path),
+                "sampling_policy": "class_balanced",
+            }
+        }
+    )
+    assert balanced_target.sampling_policy == "class_balanced"
 
 
 def test_synthetic_target_normalizes_and_dequantizes_selected_rows(tmp_path: Path) -> None:
@@ -262,6 +299,7 @@ def test_synthetic_target_metadata_and_log_prob(tmp_path: Path) -> None:
         "class_counts": [2, 2, 2],
         "normalize": "zero_one",
         "dequantize": True,
+        "sampling_policy": "empirical",
         "config_hash": "test",
     }
 

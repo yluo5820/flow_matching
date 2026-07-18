@@ -368,6 +368,7 @@ def write_pilot_training_config(
     run_root: str | Path,
     pilot: dict[str, Any],
     require_balanced: bool = True,
+    training_sampling_policy: str | None = None,
 ) -> Path:
     """Publish an immutable reduced-budget config derived from a matrix config."""
 
@@ -379,6 +380,8 @@ def write_pilot_training_config(
     if plan.replicate != 0 or (require_balanced and not plan.condition_id.endswith("_balanced")):
         expected = "replicate-0 balanced" if require_balanced else "replicate-0"
         raise ValueError(f"Reduced-budget source must be a {expected} condition.")
+    if training_sampling_policy not in {None, "empirical", "class_balanced"}:
+        raise ValueError("training_sampling_policy must be None, 'empirical', or 'class_balanced'.")
     steps = _positive_int("pilot.training_steps", pilot.get("training_steps"))
     batch_size = _positive_int("pilot.batch_size", pilot.get("batch_size"))
     warmup_steps = _nonnegative_int("pilot.warmup_steps", pilot.get("warmup_steps"))
@@ -402,6 +405,8 @@ def write_pilot_training_config(
             "checkpoint_steps": [steps],
         }
     )
+    if training_sampling_policy is not None:
+        config["data"]["sampling_policy"] = training_sampling_policy
     config["sampling"].update(
         {
             "n_samples": samples_per_class * len(plan.class_counts),
@@ -974,13 +979,22 @@ class SyntheticLongTailRunner:
         *,
         device: str,
         training_steps: int,
+        training_sampling_policy: str = "empirical",
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Run the nine replicate-0 dimension-by-frequency rotation conditions."""
 
         self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
         steps = _positive_int("training_steps", training_steps)
+        if training_sampling_policy not in {"empirical", "class_balanced"}:
+            raise ValueError("training_sampling_policy must be 'empirical' or 'class_balanced'.")
         budget_id = f"steps_{steps:08d}"
+        experiment_id = (
+            "frequency_factorial"
+            if training_sampling_policy == "empirical"
+            else "frequency_factorial_class_balanced"
+        )
+        ledger_stage = experiment_id.replace("_", "-")
         pilot = copy.deepcopy(self.config["pilot"])
         pilot["training_steps"] = steps
         condition_ids = tuple(
@@ -1000,14 +1014,12 @@ class SyntheticLongTailRunner:
             config_root = (
                 self.output_root
                 / "training_configs"
-                / "frequency_factorial"
+                / experiment_id
                 / budget_id
                 / f"{condition_id}_set"
             )
             config_path = config_root / "replicate_00" / f"{condition_id}.yaml"
-            run_dir = (
-                self.run_root / "frequency_factorial" / budget_id / "replicate_00" / condition_id
-            )
+            run_dir = self.run_root / experiment_id / budget_id / "replicate_00" / condition_id
             if not dry_run and not config_path.is_file():
                 config_path = write_pilot_training_config(
                     source_config_path=source_config_path,
@@ -1015,6 +1027,11 @@ class SyntheticLongTailRunner:
                     run_root=run_dir.parents[1],
                     pilot=pilot,
                     require_balanced=False,
+                    training_sampling_policy=(
+                        None
+                        if training_sampling_policy == "empirical"
+                        else training_sampling_policy
+                    ),
                 )
             command = TrainingCommand(
                 replicate=0,
@@ -1026,7 +1043,7 @@ class SyntheticLongTailRunner:
             if dry_run:
                 continue
 
-            stage = f"frequency-factorial-{budget_id}"
+            stage = f"{ledger_stage}-{budget_id}"
             entry_id = f"{stage}:replicate-00:{condition_id}"
             config_hash = _training_config_hash(config_path)
             if not self.ledger.is_complete(entry_id, config_hash=config_hash):
@@ -1058,12 +1075,13 @@ class SyntheticLongTailRunner:
                     inference_batch_size=min(256, count),
                 )
                 self.ledger.complete(
-                    f"frequency-factorial-evaluation:{budget_id}:{condition_id}",
+                    f"{ledger_stage}-evaluation:{budget_id}:{condition_id}",
                     {"evaluation": str(evaluation_dir / "factor_metrics.json")},
                     metadata={
-                        "stage": "frequency-factorial-evaluation",
+                        "stage": f"{ledger_stage}-evaluation",
                         "condition": condition_id,
                         "training_steps": steps,
+                        "training_sampling_policy": training_sampling_policy,
                     },
                 )
             else:
@@ -1075,6 +1093,7 @@ class SyntheticLongTailRunner:
         if dry_run:
             return {
                 "training_steps": steps,
+                "training_sampling_policy": training_sampling_policy,
                 "commands": [self._command_record(command, device) for command in commands],
             }
 
@@ -1086,8 +1105,10 @@ class SyntheticLongTailRunner:
             condition_counts={key: value.class_counts for key, value in plans.items()},
             training_steps=steps,
         )
-        summary_path = self.output_root / "analysis" / "frequency_factorial" / f"{budget_id}.json"
-        summary_entry = f"frequency-factorial-summary:{budget_id}"
+        if training_sampling_policy != "empirical":
+            summary["training_sampling_policy"] = training_sampling_policy
+        summary_path = self.output_root / "analysis" / experiment_id / f"{budget_id}.json"
+        summary_entry = f"{ledger_stage}-summary:{budget_id}"
         if summary_path.is_file():
             existing_summary = json.loads(summary_path.read_text(encoding="utf-8"))
             if existing_summary != summary:
@@ -1100,7 +1121,11 @@ class SyntheticLongTailRunner:
             self.ledger.complete(
                 summary_entry,
                 {"summary": str(summary_path)},
-                metadata={"stage": "frequency-factorial-summary", "training_steps": steps},
+                metadata={
+                    "stage": f"{ledger_stage}-summary",
+                    "training_steps": steps,
+                    "training_sampling_policy": training_sampling_policy,
+                },
             )
         return summary
 

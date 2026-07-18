@@ -481,6 +481,13 @@ recover substantially, allocation is dominant. Solver accuracy and direct latent
 projection remain useful validity checks for the balanced 5D residual, followed by a
 Jacobian/tangent-rank probe for direct evidence of lost directions.
 
+The ablation is implemented as `frequency-pilots --training-sampling class_balanced`.
+It selects the training class uniformly and then samples with replacement only from
+that class's unchanged finite pool. Configs, runs, ledger entries, and summaries are
+isolated under `frequency_factorial_class_balanced`, while the existing balanced 5k
+controls are reused because empirical sampling is already uniform when class counts
+are equal.
+
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
 budget. The 2,000- and 5,000-step jobs start from the same model and data-order seed

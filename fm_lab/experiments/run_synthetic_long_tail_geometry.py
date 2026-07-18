@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Training budget for the nine imbalanced frequency-rotation conditions.",
     )
+    frequency_pilots.add_argument(
+        "--training-sampling",
+        choices=("empirical", "class_balanced"),
+        default="empirical",
+        help="Choose proportional empirical sampling or equal class exposure during training.",
+    )
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -91,6 +97,7 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
             device=args.device,
             dry_run=args.dry_run,
             training_steps=args.training_steps,
+            training_sampling_policy=args.training_sampling,
         )
     if args.stage == "smoke":
         return runner.smoke(

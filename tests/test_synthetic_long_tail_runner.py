@@ -94,6 +94,30 @@ def test_frequency_factorial_dry_run_lists_nine_isolated_conditions() -> None:
         "frequency_factorial/steps_00005000" in item["run_dir"] for item in result["commands"]
     )
 
+    balanced_result = runner.frequency_pilots(
+        device="cpu",
+        dry_run=True,
+        training_steps=5_000,
+        training_sampling_policy="class_balanced",
+    )
+    assert balanced_result["training_sampling_policy"] == "class_balanced"
+    assert all(
+        "frequency_factorial_class_balanced/steps_00005000" in item["run_dir"]
+        for item in balanced_result["commands"]
+    )
+
+
+def test_frequency_factorial_rejects_unknown_training_sampling_policy() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    with pytest.raises(ValueError, match="training_sampling_policy"):
+        runner.frequency_pilots(
+            device="cpu",
+            dry_run=True,
+            training_steps=5_000,
+            training_sampling_policy="unknown",
+        )
+
 
 def test_frequency_factorial_summary_computes_paired_frequency_changes() -> None:
     objects = ("stepped_monument", "crooked_arch", "three_arm_vane")

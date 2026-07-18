@@ -29,6 +29,7 @@ class SyntheticLongTailImages:
     condition_manifest: str | Path
     normalize: str = "minus_one_one"
     dequantize: bool = False
+    sampling_policy: str = "empirical"
     name: str = "synthetic_long_tail_geometry"
     dim: int = field(default=0, init=False)
     image_shape: tuple[int, ...] = field(default=(), init=False)
@@ -41,6 +42,8 @@ class SyntheticLongTailImages:
     def __post_init__(self) -> None:
         if self.normalize not in {"zero_one", "minus_one_one"}:
             raise ValueError(f"Unsupported image normalization: {self.normalize}")
+        if self.sampling_policy not in {"empirical", "class_balanced"}:
+            raise ValueError("Synthetic sampling_policy must be 'empirical' or 'class_balanced'.")
         self._manifest_path = Path(self.condition_manifest).expanduser().resolve()
         if not self._manifest_path.is_file():
             raise ValueError(
@@ -125,8 +128,12 @@ class SyntheticLongTailImages:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         _validate_sample_size(n)
         batch_size = int(n)
-        global_indices = np.random.randint(0, int(self._offsets[-1]), size=batch_size)
-        labels = np.searchsorted(self._offsets[1:], global_indices, side="right")
+        if self.sampling_policy == "empirical":
+            global_indices = np.random.randint(0, int(self._offsets[-1]), size=batch_size)
+            labels = np.searchsorted(self._offsets[1:], global_indices, side="right")
+        else:
+            global_indices = None
+            labels = np.random.randint(0, len(self.class_counts), size=batch_size)
         output = np.empty((batch_size, *self.image_shape), dtype=np.uint8)
         for class_id, (entry, array) in enumerate(
             zip(self._manifest.classes, self._arrays, strict=True)
@@ -134,7 +141,14 @@ class SyntheticLongTailImages:
             mask = labels == class_id
             if not np.any(mask):
                 continue
-            local = global_indices[mask] - self._offsets[class_id] + entry.index_start
+            if global_indices is None:
+                local = entry.index_start + np.random.randint(
+                    0,
+                    entry.count,
+                    size=int(np.count_nonzero(mask)),
+                )
+            else:
+                local = global_indices[mask] - self._offsets[class_id] + entry.index_start
             output[mask] = np.asarray(array[local], dtype=np.uint8)
         images = self._normalize(torch.from_numpy(output).reshape(batch_size, -1))
         label_tensor = torch.from_numpy(labels.astype(np.int64))
@@ -182,6 +196,7 @@ class SyntheticLongTailImages:
             "class_counts": list(self.class_counts),
             "normalize": self.normalize,
             "dequantize": self.dequantize,
+            "sampling_policy": self.sampling_policy,
             "config_hash": self._manifest.config_hash,
         }
 
