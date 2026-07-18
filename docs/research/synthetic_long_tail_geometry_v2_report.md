@@ -924,3 +924,13 @@ run directory, evaluation, and rotation summary isolated under `steps_N` for eac
 budget. The 2,000- and 5,000-step jobs start from the same model and data-order seed
 as the 1,000-step pilot, so their prefixes are directly comparable; they train from
 scratch rather than sharing mutable run state.
+
+## Natural-image bridge protocol
+
+The next experiment is frozen at the design level in
+`docs/research/fashion_mnist_geometry_frequency_plan.md`. It selects low-, middle-, and
+high-scoring Fashion-MNIST classes only when split-half, estimator, representation, and
+subsample stability gates pass. The selected trio is then crossed with the cyclic
+5,000/500/50 frequency mapping under both empirical and equal class exposure. This
+preserves the synthetic experiment's central control while treating ID as an ordinal
+predictor rather than known ground truth. No Fashion-MNIST outcome run has started.
