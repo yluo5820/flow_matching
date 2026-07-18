@@ -288,6 +288,39 @@ variation, for every factor, multivariate energy distance, and oracle-feature FI
 | balanced-pilot-evaluation | g1_balanced |  | complete |  |
 | balanced-pilot-evaluation | g2_balanced |  | complete |  |
 | balanced-pilot-rotations |  |  | complete |  |
+| balanced-learning-curve-steps_00002000 | g0_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00002000/replicate_00/g0_balanced |
+| balanced-pilot-evaluation | g0_balanced |  | complete |  |
+| balanced-learning-curve-steps_00002000 | g1_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00002000/replicate_00/g1_balanced |
+| balanced-pilot-evaluation | g1_balanced |  | complete |  |
+| balanced-learning-curve-steps_00002000 | g2_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00002000/replicate_00/g2_balanced |
+| balanced-pilot-evaluation | g2_balanced |  | complete |  |
+| balanced-learning-curve-rotations |  |  | complete |  |
+| balanced-learning-curve-steps_00005000 | g0_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00005000/replicate_00/g0_balanced |
+| balanced-pilot-evaluation | g0_balanced |  | complete |  |
+| balanced-learning-curve-steps_00005000 | g1_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00005000/replicate_00/g1_balanced |
+| balanced-pilot-evaluation | g1_balanced |  | complete |  |
+| balanced-learning-curve-steps_00005000 | g2_balanced | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/balanced_learning_curve/steps_00005000/replicate_00/g2_balanced |
+| balanced-pilot-evaluation | g2_balanced |  | complete |  |
+| balanced-learning-curve-rotations |  |  | complete |  |
+| frequency-factorial-steps_00005000 | g0_f0 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g0_f0 |
+| frequency-factorial-evaluation | g0_f0 |  | complete |  |
+| frequency-factorial-steps_00005000 | g0_f1 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g0_f1 |
+| frequency-factorial-evaluation | g0_f1 |  | complete |  |
+| frequency-factorial-steps_00005000 | g0_f2 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g0_f2 |
+| frequency-factorial-evaluation | g0_f2 |  | complete |  |
+| frequency-factorial-steps_00005000 | g1_f0 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g1_f0 |
+| frequency-factorial-evaluation | g1_f0 |  | complete |  |
+| frequency-factorial-steps_00005000 | g1_f1 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g1_f1 |
+| frequency-factorial-evaluation | g1_f1 |  | complete |  |
+| frequency-factorial-steps_00005000 | g1_f2 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g1_f2 |
+| frequency-factorial-evaluation | g1_f2 |  | complete |  |
+| frequency-factorial-steps_00005000 | g2_f0 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g2_f0 |
+| frequency-factorial-evaluation | g2_f0 |  | complete |  |
+| frequency-factorial-steps_00005000 | g2_f1 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g2_f1 |
+| frequency-factorial-evaluation | g2_f1 |  | complete |  |
+| frequency-factorial-steps_00005000 | g2_f2 | 0 | complete | /Users/yluo/Downloads/Projects/Diffusion/flow_matching/.worktrees/synthetic-long-tail-geometry/runs/synthetic_long_tail_geometry_v2/frequency_factorial/steps_00005000/replicate_00/g2_f2 |
+| frequency-factorial-evaluation | g2_f2 |  | complete |  |
+| frequency-factorial-summary |  |  | complete |  |
 <!-- GENERATED:ledger:END -->
 
 ## Balanced pilot findings
@@ -359,6 +392,52 @@ The disagreement between plausible-looking images and the stringent oracle-reren
 test means that direct latent projection and sampler sensitivity should be checked
 before interpreting every rejection as true geometric memorization.
 
+## Frequency-factorial findings
+
+The nine 5,000-step imbalanced conditions completed, crossing three object-balanced
+dimension rotations with three frequency rotations. Class counts were 5,000 (head),
+500 (medium), and 50 (tail); the three 5,000-per-class balanced runs above provide
+the fourth context. Each cell below averages the three objects.
+
+| True dimension | Frequency role | Joint-valid rate | Oracle-feature FID | Active-factor energy distance |
+| ---: | :--- | ---: | ---: | ---: |
+| 1 | balanced | 1.0000 | 0.7072 | 0.0283 |
+| 1 | head | 1.0000 | 0.6582 | 0.0338 |
+| 1 | medium | 1.0000 | 2.4187 | 0.1273 |
+| 1 | tail | 0.5511 | 12.8921 | 0.5470 |
+| 3 | balanced | 0.9522 | 3.6147 | 0.0718 |
+| 3 | head | 0.9856 | 1.5439 | 0.0265 |
+| 3 | medium | 0.8178 | 8.0988 | 0.1137 |
+| 3 | tail | 0.2100 | 11.0546 | 0.1242 |
+| 5 | balanced | 0.0878 | 16.0968 | 0.2770 |
+| 5 | head | 0.2656 | 6.1237 | 0.0466 |
+| 5 | medium | 0.0911 | 16.8452 | 0.3123 |
+| 5 | tail | 0.0067 | 26.0978 | 0.3171 |
+
+Frequency has a large effect at every dimension. Tail joint validity declines to
+55.1%, 21.0%, and 0.7% as dimension increases from 1 to 3 to 5; tail FID reaches
+12.89, 11.05, and 26.10. The dimension-5 validity contrast is floor-saturated, so
+its small absolute tail-minus-balanced change does not imply a weak interaction.
+The unbounded FID contrast from head to tail is 12.23, 9.51, and 19.97 for dimensions
+1, 3, and 5, respectively. This makes the dimension-5 combined failure the most
+severe, while not giving a uniformly monotone interaction across every metric.
+
+The effects are not driven by one object. For dimension 3, tail validity loses 0.82,
+0.90, and 0.51 relative to the corresponding balanced crooked arch, monument, and
+vane. For dimension 1 the losses are 0.67, 0.42, and 0.26. Dimension 5 is already
+near the validity floor, but tail FID worsens substantially for the arch and monument.
+Class leakage remains negligible (maximum 1.33%, mean 0.13%), so the primary failure
+is geometry and coverage rather than object confusion. Generated montages visibly
+show tail shrinkage, deformation, and filled-in structure, supporting the metrics.
+
+A second, distinct effect appears when comparing balanced and head classes: both
+contain 5,000 unique examples, yet the head class is sampled about 90% of the time in
+the imbalanced mixture rather than one third of the time. Head performance improves
+for every dimension-3 and dimension-5 object rotation. Mean dimension-5 validity
+rises from 8.8% to 26.6%, while FID falls from 16.10 to 6.12. Thus unique sample count
+is not the only mechanism; optimization exposure and competition for shared model
+capacity also matter.
+
 ## Effects
 
 <!-- GENERATED:effects:START -->
@@ -369,36 +448,38 @@ before interpreting every rejection as true geometric memorization.
 
 ## Interpretation
 
-At equal class frequency and a fixed early training budget, intrinsic dimension is a
-major source of generative difficulty in this synthetic system. The model retains
-class identity while five-dimensional classes almost entirely fail a stringent
-renderer-consistency test. This is compatible with the proposed manifold-learning
-difficulty or geometric-memorization account, but it is not yet direct evidence that
-the learned manifold has lower intrinsic dimension: a Jacobian or tangent-rank probe
-is still needed for that stronger claim.
+Both class frequency and intrinsic dimension are major sources of generative
+difficulty in this synthetic system. Their joint worst case is unambiguous: the
+five-dimensional tail is almost entirely invalid and has the worst FID. The rotations
+show that neither fixed object appearance nor class-label confusion explains the
+dominant pattern. The head-versus-balanced contrast additionally implicates allocation
+of optimization exposure or shared capacity, because own-class unique sample count is
+held at 5,000 while the surrounding frequency context changes.
 
-The result is descriptive evidence from one model seed and one training horizon, not
-a final estimate of a long-tail interaction. Fixed object appearance has not been
-eliminated, although the rotation shows it cannot explain the dominant effect. The
-experiment has not yet varied class frequency in trained models, so it says nothing
-causal yet about frequency or dimension-by-frequency interaction.
+The stronger claim of a superadditive dimension-by-frequency interaction remains
+suggestive rather than established. The 5D renderer-validity outcome is bounded near
+zero before frequency is reduced, and the interaction is not monotone across FID,
+active-factor energy, and validity. All results use one model seed and one set of
+generated samples per cell. The contracted factor ranges and visual tail failures are
+compatible with geometric memorization, but a Jacobian/tangent-rank probe is still
+needed to demonstrate loss of learned manifold directions directly.
 
 ## Next decision
 
-Do not launch the 36-run, 40,000-step matrix. On the current CPU it would require
-roughly 19 hours per run, and the learning curve shows that additional updates alone
-do not yet produce a usable dimension-5 baseline. A frequency reduction would likely
-push the already 91% off-renderer balanced condition into a saturated failure regime,
-making a dimension-by-frequency interaction hard to estimate.
+Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
+the descriptive frequency phenomenon, while the larger matrix would be extremely
+costly and would not remove the 5D floor or single-seed limitation.
 
-Before changing model capacity or training longer, run two cheaper validity checks on
-the existing 5,000-step checkpoints: increase ODE solver accuracy, and directly fit
-renderer factors to a sample of generated images rather than relying only on the
-oracle initialization. If the failure survives both checks, a Jacobian/tangent-rank
-probe should test whether the contracted factor ranges reflect a genuine loss of
-learned directions. That would provide a more direct geometric-memorization test and
-guide whether the next intervention should be model capacity, sharing, or training
-horizon.
+The most informative next causal ablation is a class-balanced sampler on the same nine
+finite datasets at the same total update budget. Under the present empirical sampler,
+all three imbalanced classes receive roughly the same number of dataset passes, but
+the head receives about 100 times as many class-conditioned training examples as the
+tail. Equalizing class-conditioned update exposure while retaining 5,000/500/50 unique
+examples would separate finite manifold coverage from optimization/capacity allocation.
+If tails remain poor, unique geometric coverage is the dominant mechanism; if they
+recover substantially, allocation is dominant. Solver accuracy and direct latent
+projection remain useful validity checks for the balanced 5D residual, followed by a
+Jacobian/tangent-rank probe for direct evidence of lost directions.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
