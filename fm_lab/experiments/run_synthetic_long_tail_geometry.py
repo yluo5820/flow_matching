@@ -74,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=2_000,
         help="Budget identifying the completed bounded class-balanced tail run.",
     )
+    bounded_geometry = subparsers.add_parser("bounded-rotation-geometry")
+    _device(bounded_geometry)
+    _dry_run(bounded_geometry)
+    bounded_geometry.add_argument("--training-steps", type=int, default=2_000)
+    bounded_geometry.add_argument("--query-count", type=int, default=8)
+    bounded_geometry.add_argument("--num-directions", type=int, default=16)
+    bounded_geometry.add_argument("--nfe", type=int, default=32)
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -143,6 +150,15 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
             device=args.device,
             dry_run=args.dry_run,
             training_steps=args.training_steps,
+        )
+    if args.stage == "bounded-rotation-geometry":
+        return runner.bounded_rotation_geometry(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
+            query_count=args.query_count,
+            num_directions=args.num_directions,
+            nfe=args.nfe,
         )
     if args.stage == "smoke":
         return runner.smoke(

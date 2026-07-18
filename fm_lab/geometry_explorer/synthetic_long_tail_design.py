@@ -255,6 +255,120 @@ def canonical_factor_rows(
     return rows
 
 
+def build_local_geometry_queries(
+    config: dict[str, Any],
+    *,
+    object_id: str,
+    dimension_id: str,
+    count: int,
+    seed: int,
+    epsilon: float = 0.02,
+) -> tuple[np.ndarray, np.ndarray, tuple[str, ...], np.ndarray]:
+    """Render deterministic interior queries and normalized renderer tangents."""
+
+    if object_id not in OBJECT_IDS:
+        raise ValueError(f"object_id must be one of: {', '.join(OBJECT_IDS)}")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError("count must be a positive integer.")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed must be a non-negative integer.")
+    step = float(epsilon)
+    if not math.isfinite(step) or step <= 0.0:
+        raise ValueError("epsilon must be finite and positive.")
+
+    factor = build_factor_space(dimension_id)
+    scales = _geometry_normalization_scales(dimension_id)
+    if len(scales) != int(factor.dim):
+        raise ValueError("geometry normalization scales do not match the factor dimension.")
+    candidates = sample_values(factor.sample(max(count * 8, count + 16), seed=seed))
+    interior = [
+        value
+        for value in candidates
+        if _supports_centered_factor_steps(factor, value, scales=scales, epsilon=step)
+    ]
+    if len(interior) < count:
+        raise ValueError("Could not sample enough interior local-geometry queries.")
+
+    render_map = _render_map(config, _object_configs(config)[object_id], factor)
+    query_rows = []
+    tangent_rows = []
+    selected = []
+    for value in interior:
+        columns = []
+        for tangent, scale in zip(factor.tangent_basis(value), scales, strict=True):
+            plus = factor.retract(value, tangent, step * scale)
+            minus = factor.retract(value, tangent, -step * scale)
+            plus_image = np.asarray(render_map.render(plus), dtype=np.float32)
+            minus_image = np.asarray(render_map.render(minus), dtype=np.float32)
+            derivative = (plus_image - minus_image).transpose(2, 0, 1).reshape(-1) / step
+            columns.append(derivative.astype(np.float32))
+        tangent_row = np.stack(columns, axis=0)
+        if np.any(np.linalg.norm(tangent_row, axis=1) <= np.finfo(np.float32).eps):
+            continue
+        image = np.asarray(render_map.render(value), dtype=np.float32)
+        query_rows.append(image.transpose(2, 0, 1).reshape(-1) * 2.0 - 1.0)
+        tangent_rows.append(tangent_row)
+        selected.append(value)
+        if len(selected) == count:
+            break
+    if len(selected) != count:
+        raise ValueError("Could not render enough queries with five visible tangents.")
+    queries = np.stack(query_rows, axis=0).astype(np.float32)
+    tangents = np.stack(tangent_rows, axis=0)
+    names = tuple(str(name) for name in factor.tangent_labels(selected[0]))
+    if not np.isfinite(queries).all() or not np.isfinite(tangents).all():
+        raise ValueError("Rendered local-geometry queries and tangents must be finite.")
+    return queries, tangents, names, canonical_factor_rows(factor, selected)
+
+
+def _geometry_normalization_scales(dimension_id: str) -> tuple[float, ...]:
+    translation = (0.25, 0.25, 0.75)
+    if dimension_id == "low":
+        return (0.75,)
+    if dimension_id == "medium":
+        return translation
+    if dimension_id == "high":
+        return (*translation, float(np.pi), 0.5)
+    if dimension_id == BOUNDED_AZIMUTH_DIMENSION_ID:
+        return (*translation, BOUNDED_AZIMUTH_HALF_RANGE, 0.5)
+    raise ValueError(f"Unsupported dimension level: {dimension_id}")
+
+
+def _supports_centered_factor_steps(
+    factor: LatentFactorSpace,
+    value: Any,
+    *,
+    scales: Sequence[float],
+    epsilon: float,
+) -> bool:
+    baseline = canonical_factor_rows(factor, [value])[0]
+    active = np.flatnonzero(np.isfinite(baseline))
+    if len(active) != int(factor.dim):
+        return False
+    for column, tangent, scale in zip(
+        active,
+        factor.tangent_basis(value),
+        scales,
+        strict=True,
+    ):
+        plus = canonical_factor_rows(
+            factor,
+            [factor.retract(value, tangent, epsilon * scale)],
+        )[0, column]
+        minus = canonical_factor_rows(
+            factor,
+            [factor.retract(value, tangent, -epsilon * scale)],
+        )[0, column]
+        forward = abs(float(plus - baseline[column]))
+        backward = abs(float(baseline[column] - minus))
+        if min(forward, backward) <= np.finfo(np.float32).eps:
+            return False
+        ratio = forward / backward
+        if not 0.5 <= ratio <= 2.0:
+            return False
+    return True
+
+
 def build_condition_specs(
     replicate: int,
     *,

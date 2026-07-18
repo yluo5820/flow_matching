@@ -92,9 +92,11 @@ def test_local_geometry_writes_only_compact_spectra_and_scores(tmp_path: Path) -
         device="cpu",
         seed=3,
         source_revision="test",
+        context={"comparison_role": "fixture"},
     )
 
     assert result["query_count"] == 1
+    assert result["provenance"]["context"] == {"comparison_role": "fixture"}
     assert len(result["class_summary"]) == 1
     with np.load(tmp_path / "geometry" / "spectra.npz") as spectra:
         assert spectra["singular_values"].shape == (1, 3)

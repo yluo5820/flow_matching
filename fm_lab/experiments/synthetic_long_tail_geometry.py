@@ -1597,6 +1597,159 @@ class SyntheticLongTailRunner:
             )
         return result
 
+    def bounded_rotation_geometry(
+        self,
+        *,
+        device: str,
+        training_steps: int = 2_000,
+        query_count: int = 8,
+        num_directions: int = 16,
+        nfe: int = 32,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Compare bounded 50- and 5,000-example local geometry without retraining."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        queries_requested = _positive_int("query_count", query_count)
+        directions = _positive_int("num_directions", num_directions)
+        function_evaluations = _positive_int("nfe", nfe)
+        if directions < 5:
+            raise ValueError("num_directions must be at least the renderer rank of five.")
+        times = (0.8, 0.9)
+        budget_id = f"steps_{steps:08d}"
+        setting_id = (
+            f"q{queries_requested:02d}_d{directions:02d}_nfe{function_evaluations:02d}_t0800_0900"
+        )
+        head_run = (
+            self.run_root
+            / "bounded_rotation_control"
+            / budget_id
+            / "replicate_00"
+            / BOUNDED_ROTATION_CONDITION_ID
+        )
+        tail_run = (
+            self.run_root
+            / "bounded_rotation_frequency_slice_class_balanced"
+            / budget_id
+            / "replicate_00"
+            / BOUNDED_ROTATION_TAIL_CONDITION_ID
+        )
+        analysis_dir = (
+            self.run_root / "bounded_rotation_geometry" / budget_id / "replicate_00" / setting_id
+        )
+        comparison_path = analysis_dir / "comparison.json"
+        plan = {
+            "training_steps": steps,
+            "query_count": queries_requested,
+            "num_directions": directions,
+            "nfe": function_evaluations,
+            "t_values": list(times),
+            "head_5000_run": str(head_run),
+            "tail_50_class_balanced_run": str(tail_run),
+            "analysis_dir": str(analysis_dir),
+            "retraining": False,
+        }
+        if dry_run:
+            return plan
+        if comparison_path.is_file():
+            return json.loads(comparison_path.read_text(encoding="utf-8"))
+        for run_dir in (head_run, tail_run):
+            for filename in ("checkpoint.pt", "config.yaml"):
+                path = run_dir / filename
+                if not path.is_file():
+                    raise FileNotFoundError(f"Local-geometry input is missing: {path}")
+
+        import numpy as np
+
+        from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+            BOUNDED_AZIMUTH_DIMENSION_ID,
+            build_local_geometry_queries,
+        )
+        from fm_lab.image_diagnostics.save_utils import read_parquet
+
+        query_seed = int(self.config["seed"]) + 8_000_000
+        epsilon = float(self.config["calibration"]["finite_difference_epsilon"])
+        queries, tangents, tangent_names, factor_rows = build_local_geometry_queries(
+            self.config,
+            object_id="stepped_monument",
+            dimension_id=BOUNDED_AZIMUTH_DIMENSION_ID,
+            count=queries_requested,
+            seed=query_seed,
+            epsilon=epsilon,
+        )
+        class_ids = np.zeros(queries_requested, dtype=np.int64)
+        revision = _source_revision()
+        roles = {
+            "head_5000": head_run,
+            "tail_50_class_balanced": tail_run,
+        }
+        summaries = {}
+        frames = {}
+        for role, run_dir in roles.items():
+            output_dir = analysis_dir / role
+            summary_path = output_dir / "summary.json"
+            if summary_path.is_file():
+                summaries[role] = json.loads(summary_path.read_text(encoding="utf-8"))
+            else:
+                summaries[role] = _evaluate_checkpoint_local_geometry(
+                    run_dir=run_dir,
+                    output_dir=output_dir,
+                    queries=queries,
+                    class_ids=class_ids,
+                    renderer_tangents=tangents,
+                    tangent_names=tangent_names,
+                    t_values=times,
+                    renderer_rank=5,
+                    epsilon=epsilon,
+                    num_directions=directions,
+                    nfe=function_evaluations,
+                    seed=query_seed,
+                    device=device,
+                    source_revision=revision,
+                    context={
+                        "comparison_role": role,
+                        "checkpoint_run": str(run_dir),
+                        "unique_class_0_count": (
+                            int(self.config["counts"][0])
+                            if role == "head_5000"
+                            else int(self.config["counts"][2])
+                        ),
+                        "training_sampling_policy": "class_balanced",
+                    },
+                )
+            frames[role] = read_parquet(output_dir / "per_query.parquet")
+
+        comparison = _paired_local_geometry_summary(
+            head=frames["head_5000"],
+            tail=frames["tail_50_class_balanced"],
+            metadata={
+                **plan,
+                "schema_version": 1,
+                "query_seed": query_seed,
+                "renderer_epsilon": epsilon,
+                "tangent_names": list(tangent_names),
+                "query_factor_rows_sha256": hashlib.sha256(
+                    np.ascontiguousarray(factor_rows).tobytes()
+                ).hexdigest(),
+                "source_revision": revision,
+                "model_summaries": summaries,
+            },
+        )
+        _write_json_atomic(comparison, comparison_path)
+        entry_id = f"bounded-rotation-geometry:{budget_id}:{setting_id}"
+        if not self.ledger.is_complete(entry_id):
+            self.ledger.complete(
+                entry_id,
+                {"comparison": str(comparison_path)},
+                metadata={
+                    "stage": "bounded-rotation-geometry",
+                    "training_steps": steps,
+                    "query_count": queries_requested,
+                },
+            )
+        return comparison
+
     def _evaluate_bounded_followup_run(
         self,
         *,
@@ -2381,6 +2534,155 @@ def _frequency_factorial_summary(
         "means_by_true_dimension_and_frequency_role": means_by_dimension_and_role,
         "paired_changes_from_balanced": paired_changes,
         "mean_changes_from_balanced_by_true_dimension": mean_changes,
+    }
+
+
+def _evaluate_checkpoint_local_geometry(
+    *,
+    run_dir: Path,
+    output_dir: Path,
+    queries: Any,
+    class_ids: Any,
+    renderer_tangents: Any,
+    tangent_names: tuple[str, ...],
+    t_values: tuple[float, ...],
+    renderer_rank: int,
+    epsilon: float,
+    num_directions: int,
+    nfe: int,
+    seed: int,
+    device: str,
+    source_revision: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    from fm_lab.experiments.factory import (
+        build_model,
+        build_path,
+        build_solvers,
+        build_source,
+        resolve_device,
+    )
+    from fm_lab.geometry_explorer.synthetic_long_tail_geometry import (
+        evaluate_local_geometry,
+    )
+    from fm_lab.training.losses import build_objective
+    from fm_lab.training.prediction import velocity_model_for_objective
+    from fm_lab.utils.checkpoints import load_checkpoint
+
+    checkpoint_path = run_dir / "checkpoint.pt"
+    payload = load_checkpoint(checkpoint_path, map_location="cpu")
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        config = load_config(run_dir / "config.yaml")
+    resolved_device = resolve_device(device)
+    source = build_source(config)
+    path = build_path(config)
+    objective = build_objective(config.get("objective", {}))
+    model = build_model(config, dim=source.dim)
+    state = payload.get("model_state_dict")
+    if not isinstance(state, dict):
+        raise ValueError(f"Checkpoint has no model_state_dict: {checkpoint_path}")
+    model.load_state_dict(state)
+    model.to(resolved_device)
+    model.eval()
+    velocity_model = velocity_model_for_objective(model, path, objective)
+    velocity_model.eval()
+    solvers = build_solvers(config)
+    if len(solvers) != 1:
+        raise ValueError("Bounded local-geometry audit requires exactly one configured solver.")
+    return evaluate_local_geometry(
+        model=velocity_model,
+        ode_solver=solvers[0],
+        queries=queries,
+        class_ids=class_ids,
+        renderer_tangents=renderer_tangents,
+        tangent_names=tangent_names,
+        output_dir=output_dir,
+        t_values=t_values,
+        renderer_rank=renderer_rank,
+        eps=epsilon,
+        num_directions=num_directions,
+        nfe=nfe,
+        threshold=1.0e-2,
+        fm_schedule="linear",
+        num_trace_samples=1,
+        seed=seed,
+        device=resolved_device,
+        source_revision=source_revision,
+        context=context,
+    )
+
+
+def _paired_local_geometry_summary(
+    *,
+    head: Any,
+    tail: Any,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    identity = ("query_index", "class_id", "time", "renderer_rank")
+    missing = [column for column in identity if column not in head or column not in tail]
+    if missing:
+        raise ValueError(f"Local-geometry tables are missing identity columns: {missing}")
+    metric_columns = [
+        column
+        for column in head.columns
+        if column in tail.columns
+        and (
+            column
+            in {
+                "participation_rank",
+                "entropy_rank",
+                "threshold_rank",
+                "principal_angle_mean",
+                "principal_angle_max",
+                "fm_flipd_lid",
+            }
+            or column.startswith("alignment_")
+        )
+    ]
+    if not metric_columns:
+        raise ValueError("Local-geometry tables contain no paired metric columns.")
+    merged = head.merge(
+        tail,
+        on=list(identity),
+        how="inner",
+        suffixes=("_head_5000", "_tail_50"),
+        validate="one_to_one",
+    )
+    if len(merged) != len(head) or len(merged) != len(tail):
+        raise ValueError("Head and tail local-geometry rows are not exactly paired.")
+    records = []
+    for time_value, block in merged.groupby("time", sort=True):
+        metrics = {}
+        for name in metric_columns:
+            head_values = block[f"{name}_head_5000"]
+            tail_values = block[f"{name}_tail_50"]
+            delta = tail_values - head_values
+            metrics[name] = {
+                "head_5000_mean": float(head_values.mean()),
+                "tail_50_mean": float(tail_values.mean()),
+                "tail_minus_head_mean": float(delta.mean()),
+                "tail_minus_head_median": float(delta.median()),
+            }
+        records.append(
+            {
+                "time": float(time_value),
+                "paired_query_count": int(len(block)),
+                "metrics": metrics,
+            }
+        )
+    return {
+        **metadata,
+        "comparison_definition": (
+            "tail_50_class_balanced minus head_5000 on identical heldout queries, "
+            "random probe seeds, solver, and time values"
+        ),
+        "metric_direction": {
+            "participation_rank_entropy_rank_threshold_rank_alignment": "higher_is_more_preserved",
+            "principal_angles": "lower_is_more_aligned",
+            "fm_flipd_lid": "compare_to_renderer_rank_five",
+        },
+        "paired_comparisons": records,
     }
 
 

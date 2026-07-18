@@ -25,6 +25,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     build_condition_manifests,
     build_condition_specs,
     build_factor_space,
+    build_local_geometry_queries,
     build_master_pools,
     canonical_factor_rows,
 )
@@ -112,6 +113,32 @@ def test_factor_spaces_have_approved_dimensions_and_canonical_columns() -> None:
         assert rows.dtype == np.float32
         assert rows.shape == (4, 5)
         assert np.all(np.sum(np.isfinite(rows), axis=1) == expected_dimension)
+
+
+def test_local_geometry_queries_are_normalized_paired_five_factor_tangents() -> None:
+    config = _design_config(master_count=2, counts=(2, 1, 1), image_size=16)
+
+    queries, tangents, names, factors = build_local_geometry_queries(
+        config,
+        object_id="stepped_monument",
+        dimension_id=BOUNDED_AZIMUTH_DIMENSION_ID,
+        count=2,
+        seed=37,
+        epsilon=0.02,
+    )
+
+    assert queries.shape == (2, 3 * 16 * 16)
+    assert tangents.shape == (2, 5, 3 * 16 * 16)
+    assert factors.shape == (2, 5)
+    assert names == (
+        "translation_x",
+        "translation_y",
+        "translation_z",
+        "camera_azimuth",
+        "camera_elevation",
+    )
+    assert np.max(np.abs(queries)) <= 1.0
+    assert np.all(np.linalg.norm(tangents, axis=2) > 0.0)
 
 
 def test_tiny_master_pool_is_uint8_and_condition_views_are_nested(tmp_path: Path) -> None:

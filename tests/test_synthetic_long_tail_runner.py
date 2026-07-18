@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 import fm_lab.geometry_explorer.synthetic_factor_oracle as oracle_module
@@ -15,6 +16,7 @@ from fm_lab.experiments.synthetic_long_tail_geometry import (
     _balanced_pilot_gate,
     _bounded_rotation_followup_summary,
     _frequency_factorial_summary,
+    _paired_local_geometry_summary,
     build_matrix_commands,
     require_gate,
 )
@@ -173,6 +175,56 @@ def test_bounded_rotation_memorization_dry_run_reuses_completed_tail_run() -> No
     assert result["retraining"] is False
     assert "bounded_rotation_frequency_slice_class_balanced" in result["generated_run"]
     assert result["output_dir"].endswith("memorization_bounded_5d_tail_v2")
+
+
+def test_bounded_rotation_geometry_dry_run_is_paired_and_does_not_retrain() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.bounded_rotation_geometry(device="cpu", dry_run=True)
+
+    assert result["query_count"] == 8
+    assert result["num_directions"] == 16
+    assert result["nfe"] == 32
+    assert result["t_values"] == [0.8, 0.9]
+    assert result["retraining"] is False
+    assert "bounded_rotation_control" in result["head_5000_run"]
+    assert "frequency_slice_class_balanced" in result["tail_50_class_balanced_run"]
+
+
+def test_paired_local_geometry_summary_keeps_query_pairing_and_delta_direction() -> None:
+    head = pd.DataFrame(
+        {
+            "query_index": [0, 1],
+            "class_id": [0, 0],
+            "time": [0.8, 0.8],
+            "renderer_rank": [5, 5],
+            "participation_rank": [5.0, 4.0],
+            "principal_angle_mean": [0.2, 0.4],
+            "alignment_camera_elevation": [0.8, 0.6],
+        }
+    )
+    tail = head.copy()
+    tail["participation_rank"] -= 1.0
+    tail["principal_angle_mean"] += 0.1
+    tail["alignment_camera_elevation"] -= 0.2
+
+    result = _paired_local_geometry_summary(
+        head=head,
+        tail=tail,
+        metadata={"schema_version": 1},
+    )
+
+    comparison = result["paired_comparisons"][0]
+    assert comparison["paired_query_count"] == 2
+    assert comparison["metrics"]["participation_rank"]["tail_minus_head_mean"] == (
+        pytest.approx(-1.0)
+    )
+    assert comparison["metrics"]["principal_angle_mean"]["tail_minus_head_mean"] == (
+        pytest.approx(0.1)
+    )
+    assert comparison["metrics"]["alignment_camera_elevation"][
+        "tail_minus_head_mean"
+    ] == pytest.approx(-0.2)
 
 
 def test_bounded_rotation_followup_summary_separates_frequency_and_exposure() -> None:

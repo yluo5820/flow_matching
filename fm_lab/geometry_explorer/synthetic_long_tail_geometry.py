@@ -112,6 +112,7 @@ def evaluate_local_geometry(
     seed: int = 0,
     device: str | torch.device = "auto",
     source_revision: str = "unknown",
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate factor alignment and FM dimension on deterministic held-out queries.
 
@@ -141,6 +142,7 @@ def evaluate_local_geometry(
     spectra: list[np.ndarray] = []
     for query_index, (point, class_id) in enumerate(zip(points, labels, strict=True)):
         class_velocity = fixed_class_velocity(model, int(class_id))
+        torch.manual_seed(seed + query_index)
         flipd = FMFLIPDEstimator(
             class_velocity,
             GaussianFMSchedule(fm_schedule),
@@ -149,9 +151,7 @@ def evaluate_local_geometry(
             device=device,
         ).estimate_batch(point.unsqueeze(0))
         for time_index, time_value in enumerate(times):
-            generator = torch.Generator(device="cpu").manual_seed(
-                seed + query_index * len(times) + time_index
-            )
+            torch.manual_seed(seed + 1_000_000 + query_index * len(times) + time_index)
             estimator = FMJacobianSpectrumEstimator(
                 model=class_velocity,
                 ode_solver=ode_solver,
@@ -161,7 +161,7 @@ def evaluate_local_geometry(
                 threshold=threshold,
                 device=device,
                 nfe=nfe,
-                generator=generator,
+                generator=None,
             )
             matrix = estimator.compute_pushforward_matrix(point, time_value)
             singular = torch.linalg.svdvals(matrix)
@@ -212,6 +212,7 @@ def evaluate_local_geometry(
             "source_revision": source_revision,
             "query_sha256": _array_sha256(points.numpy()),
             "tangent_sha256": _array_sha256(tangents.numpy()),
+            "context": dict(context or {}),
         },
     }
 
