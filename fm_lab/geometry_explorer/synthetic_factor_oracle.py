@@ -1198,6 +1198,12 @@ def _stable_hash(payload: Any) -> str:
 
 
 def _resolve_device(device: str | torch.device) -> torch.device:
+    if isinstance(device, str) and device.strip().lower() == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     try:
         resolved = torch.device(device)
     except (RuntimeError, TypeError) as exc:

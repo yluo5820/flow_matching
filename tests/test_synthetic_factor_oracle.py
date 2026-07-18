@@ -93,6 +93,16 @@ def test_oracle_circular_error_rejects_non_circular_targets() -> None:
         circular_vector_error(torch.ones(1, 2), torch.zeros(1, 2))
 
 
+def test_oracle_auto_device_resolves_to_available_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert oracle_module._resolve_device("auto") == torch.device("cpu")
+    assert oracle_module._resolve_device(" AUTO ") == torch.device("cpu")
+
+
 def test_oracle_loss_uses_all_four_unit_weight_terms() -> None:
     prediction = SyntheticFactorOracle(num_classes=3)(torch.zeros(2, 3, 8, 8))
     targets = {
