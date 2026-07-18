@@ -128,9 +128,7 @@ def test_bounded_look_at_view_samples_area_uniform_band_and_retracts() -> None:
     factor = BoundedLookAtView(elevation_bounds=elevation_bounds)
     values = np.asarray(sample_values(factor.sample(20_000, seed=7)))
     sin_bounds = np.sin(elevation_bounds)
-    expected_quartiles = sin_bounds[0] + (sin_bounds[1] - sin_bounds[0]) * np.asarray(
-        [0.25, 0.75]
-    )
+    expected_quartiles = sin_bounds[0] + (sin_bounds[1] - sin_bounds[0]) * np.asarray([0.25, 0.75])
 
     assert values.shape == (20_000, 2)
     assert np.all(values[:, 0] >= -np.pi)
@@ -156,6 +154,22 @@ def test_bounded_look_at_view_samples_area_uniform_band_and_retracts() -> None:
     )
     assert np.isclose(retracted[0], -np.pi + 0.1)
     assert np.isclose(retracted[1], sin_bounds[1])
+
+
+def test_bounded_look_at_view_supports_nonperiodic_azimuth_interval() -> None:
+    factor = BoundedLookAtView(azimuth_bounds=(-0.2, 0.3))
+    values = np.asarray(sample_values(factor.sample(2_000, seed=11)))
+
+    assert np.all(values[:, 0] >= -0.2)
+    assert np.all(values[:, 0] <= 0.3)
+    retracted = factor.retract(
+        np.asarray([0.25, 0.0], dtype=np.float32),
+        np.asarray([1.0, 0.0], dtype=np.float32),
+        eps=1.0,
+    )
+    assert np.isclose(retracted[0], 0.3)
+    assert factor.distance(np.asarray([-0.2, 0.0]), np.asarray([0.3, 0.0])) == 0.5
+    assert factor.bins(np.asarray([-0.2, 0.0]), num_bins=10)["camera_azimuth_bin"] == "0"
 
 
 def test_render_map_applies_bounded_look_at_view() -> None:
@@ -217,8 +231,7 @@ def test_pullback_metric_matches_analytic_identity_map() -> None:
     assert result.max_abs_offdiag_tangent_correlation < 1.0e-3
 
 
-def test_product_coupling_is_zero_for_independent_map_and_nonzero_when_entangled(
-) -> None:
+def test_product_coupling_is_zero_for_independent_map_and_nonzero_when_entangled() -> None:
     product = ProductFactorSpace(
         [
             BoundedTranslation(dim=1, bounds=(-1.0, 1.0), name="a"),
@@ -244,11 +257,14 @@ def test_product_coupling_is_zero_for_independent_map_and_nonzero_when_entangled
     )
 
     assert product_metric_error(independent.G, product) < 1.0e-6
-    assert factor_coupling_score(
-        independent.G[0:1, 0:1],
-        independent.G[1:2, 1:2],
-        independent.G[0:1, 1:2],
-    ) < 1.0e-6
+    assert (
+        factor_coupling_score(
+            independent.G[0:1, 0:1],
+            independent.G[1:2, 1:2],
+            independent.G[0:1, 1:2],
+        )
+        < 1.0e-6
+    )
     assert independent.cross_factor_tangent_correlations["a__b"] < 1.0e-6
     assert entangled.pairwise_couplings["a__b"] > 0.1
     assert entangled.cross_factor_tangent_correlations["a__b"] > 0.1

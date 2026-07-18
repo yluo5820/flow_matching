@@ -119,6 +119,29 @@ def test_frequency_factorial_rejects_unknown_training_sampling_policy() -> None:
         )
 
 
+def test_bounded_rotation_control_dry_run_is_one_paired_2000_step_command() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.bounded_rotation_control(device="cpu", dry_run=True)
+
+    assert result["training_steps"] == 2_000
+    assert result["command"]["condition_id"] == "g0_balanced_bounded_azimuth"
+    assert "bounded_rotation_control/steps_00002000" in result["command"]["run_dir"]
+    assert "balanced_learning_curve/steps_00002000" in result["baseline_evaluation"]
+
+
+@pytest.mark.parametrize("training_steps", [0, -1, True])
+def test_bounded_rotation_control_rejects_invalid_budget(training_steps: object) -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    with pytest.raises(ValueError, match="training_steps"):
+        runner.bounded_rotation_control(
+            device="cpu",
+            dry_run=True,
+            training_steps=training_steps,  # type: ignore[arg-type]
+        )
+
+
 def test_frequency_factorial_summary_computes_paired_frequency_changes() -> None:
     objects = ("stepped_monument", "crooked_arch", "three_arm_vane")
     dimensions = ((5, 3, 1), (3, 1, 5), (1, 5, 3))

@@ -573,7 +573,11 @@ The economical follow-up order is:
    degrees, centered at the canonical view), because it gives azimuth a rough extent
    comparable to the current depth coordinate. Compare it with the existing 2,000-step
    `g0_balanced` run. Only if the recovery is large should the other object rotations
-   or a 5,000-step confirmation be run.
+   or a 5,000-step confirmation be run. This screen is now implemented as
+   `bounded-rotation-control`: it reuses the class-1 and class-2 pool files and uses the
+   original class-0 pool seed, so x/y/depth and elevation are exactly paired while only
+   azimuth is compressed. The manifest, matching calculation, training config, run,
+   evaluation, and paired summary use separate immutable paths.
 3. If factor identity remains important, compare two balanced 2,000-step models at
    fixed dimension 3: all three classes using x/y/depth translation versus all three
    using bounded view plus depth. This is two runs, averages over all three objects,
@@ -631,7 +635,7 @@ costly and would not remove the 5D floor or single-seed limitation.
 The class-balanced causal ablation and its memorization audit are complete. Allocation
 is dominant for the 1D and 3D tail failures and important for 5D, but aggressive tail
 reuse also produces a measurable near-duplicate regime. The next training experiment
-is the single restricted-azimuth 2,000-step screen, which addresses the separate
+is the now-implemented single restricted-azimuth 2,000-step screen, which addresses the separate
 dimension-versus-manifold-extent confound under balanced data. Its evaluation should
 include the same nearest-neighbor audit. Only a large paired effect should trigger the
 remaining object rotations or a 5,000-step confirmation.

@@ -47,6 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="empirical",
         help="Choose proportional empirical sampling or equal class exposure during training.",
     )
+    bounded_rotation = subparsers.add_parser("bounded-rotation-control")
+    _device(bounded_rotation)
+    _dry_run(bounded_rotation)
+    bounded_rotation.add_argument(
+        "--training-steps",
+        type=int,
+        default=2_000,
+        help="Training budget; must have a completed g0_balanced evaluation at this budget.",
+    )
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -98,6 +107,12 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
             dry_run=args.dry_run,
             training_steps=args.training_steps,
             training_sampling_policy=args.training_sampling,
+        )
+    if args.stage == "bounded-rotation-control":
+        return runner.bounded_rotation_control(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
         )
     if args.stage == "smoke":
         return runner.smoke(

@@ -23,12 +23,17 @@ from pathlib import Path
 from typing import Any
 
 from fm_lab.data import SyntheticLongTailImages
+from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+    BOUNDED_ROTATION_CONDITION_ID,
+)
 from fm_lab.utils.config import load_config, save_config
 
 _BALANCED_DATASET_SIZE = 15_000
 _IMBALANCED_DATASET_SIZE = 5_550
 _IMAGE_SHAPE = (3, 32, 32)
-_CONDITION_ID_PATTERN = re.compile(r"g[0-2]_(?:balanced|f[0-2])\Z")
+_CONDITION_ID_PATTERN = re.compile(
+    rf"(?:g[0-2]_(?:balanced|f[0-2])|{re.escape(BOUNDED_ROTATION_CONDITION_ID)})\Z"
+)
 _CANONICAL_CONDITION_IDS = frozenset(
     f"g{geometry}_{frequency}"
     for geometry in range(3)
@@ -369,17 +374,29 @@ def write_pilot_training_config(
     pilot: dict[str, Any],
     require_balanced: bool = True,
     training_sampling_policy: str | None = None,
+    condition_manifest_override: str | Path | None = None,
 ) -> Path:
     """Publish an immutable reduced-budget config derived from a matrix config."""
 
     source_path = Path(source_config_path).expanduser().resolve()
     source = load_config(source_path)
-    plan = _read_condition_plan(source["data"]["condition_manifest"])
+    source_plan = _read_condition_plan(source["data"]["condition_manifest"])
     if not isinstance(require_balanced, bool):
         raise ValueError("require_balanced must be a boolean.")
-    if plan.replicate != 0 or (require_balanced and not plan.condition_id.endswith("_balanced")):
+    if source_plan.replicate != 0 or (
+        require_balanced and not source_plan.condition_id.endswith("_balanced")
+    ):
         expected = "replicate-0 balanced" if require_balanced else "replicate-0"
         raise ValueError(f"Reduced-budget source must be a {expected} condition.")
+    plan = (
+        source_plan
+        if condition_manifest_override is None
+        else _read_condition_plan(condition_manifest_override)
+    )
+    if plan.replicate != source_plan.replicate:
+        raise ValueError("Source and override condition manifests must share a replicate.")
+    if plan.class_counts != source_plan.class_counts:
+        raise ValueError("Source and override condition manifests must share class counts.")
     if training_sampling_policy not in {None, "empirical", "class_balanced"}:
         raise ValueError("training_sampling_policy must be None, 'empirical', or 'class_balanced'.")
     steps = _positive_int("pilot.training_steps", pilot.get("training_steps"))
@@ -394,8 +411,9 @@ def write_pilot_training_config(
         raise ValueError("pilot.warmup_steps cannot exceed pilot.training_steps.")
 
     config = copy.deepcopy(source)
-    config["experiment"]["name"] = f"{config['experiment']['name']}_pilot"
+    config["experiment"]["name"] = f"{config['experiment']['name']}_{plan.condition_id}_pilot"
     config["experiment"]["output_dir"] = str(Path(run_root) / "replicate_00" / plan.condition_id)
+    config["data"]["condition_manifest"] = str(plan.manifest_path)
     config["training"].update(
         {
             "steps": steps,
@@ -475,8 +493,20 @@ def _read_condition_plan(raw_path: str | Path) -> _ConditionPlan:
     if path.stem != condition_id:
         raise ValueError("Synthetic manifest condition_id must match its filename stem.")
     expected_replicate_dir = f"replicate_{replicate:02d}"
-    if path.parent.name != "conditions" or path.parent.parent.name != expected_replicate_dir:
-        raise ValueError("Synthetic manifest must be located in replicate_XX/conditions.")
+    canonical_location = (
+        path.parent.name == "conditions" and path.parent.parent.name == expected_replicate_dir
+    )
+    control_location = (
+        condition_id == BOUNDED_ROTATION_CONDITION_ID
+        and path.parent.name == "conditions"
+        and path.parent.parent.name == "bounded_rotation_control"
+        and path.parent.parent.parent.name == expected_replicate_dir
+    )
+    if not canonical_location and not control_location:
+        raise ValueError(
+            "Synthetic manifest must be in replicate_XX/conditions or the approved "
+            "bounded-rotation control directory."
+        )
     if tuple(raw.get("image_shape", ())) != _IMAGE_SHAPE:
         raise ValueError("Synthetic training manifests must have image_shape [3, 32, 32].")
     config_hash = raw.get("config_hash")
@@ -1129,6 +1159,183 @@ class SyntheticLongTailRunner:
             )
         return summary
 
+    def bounded_rotation_control(
+        self,
+        *,
+        device: str,
+        training_steps: int = 2_000,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Run one paired g0 control with the 5D class azimuth range restricted."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        budget_id = f"steps_{steps:08d}"
+        experiment_id = "bounded_rotation_control"
+        control_root = self.output_root / "replicate_00" / experiment_id
+        manifest_path = control_root / "conditions" / f"{BOUNDED_ROTATION_CONDITION_ID}.json"
+        control_spec_path = control_root / "control_spec.json"
+        config_root = (
+            self.output_root
+            / "training_configs"
+            / experiment_id
+            / budget_id
+            / f"{BOUNDED_ROTATION_CONDITION_ID}_set"
+        )
+        config_path = config_root / "replicate_00" / f"{BOUNDED_ROTATION_CONDITION_ID}.yaml"
+        run_dir = (
+            self.run_root
+            / experiment_id
+            / budget_id
+            / "replicate_00"
+            / BOUNDED_ROTATION_CONDITION_ID
+        )
+        command = TrainingCommand(
+            replicate=0,
+            condition_id=BOUNDED_ROTATION_CONDITION_ID,
+            config_path=config_path,
+            run_dir=run_dir,
+        )
+        baseline_run_dir = self._balanced_run_dir("g0_balanced", steps)
+        baseline_metrics_path = baseline_run_dir / "evaluation" / "factor_metrics.json"
+        if dry_run:
+            return {
+                "training_steps": steps,
+                "intervention": (
+                    "restrict class-0 azimuth; keep XYZ/elevation and classes 1/2 paired"
+                ),
+                "baseline_evaluation": str(baseline_metrics_path),
+                "command": self._command_record(command, device),
+            }
+
+        if not manifest_path.is_file():
+            from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+                build_bounded_rotation_control,
+            )
+
+            artifacts = build_bounded_rotation_control(
+                self.config,
+                self.output_root,
+                replicate=0,
+            )
+            manifest_path = artifacts["manifest"]
+            control_spec_path = artifacts["control_spec"]
+        SyntheticLongTailImages(manifest_path)
+        if not control_spec_path.is_file():
+            raise FileNotFoundError(
+                f"Bounded-rotation control spec is missing: {control_spec_path}"
+            )
+
+        source_config_path = next(
+            path for path in self.config_paths()[0] if path.stem == "g0_balanced"
+        )
+        pilot = copy.deepcopy(self.config["pilot"])
+        pilot["training_steps"] = steps
+        if not config_path.is_file():
+            config_path = write_pilot_training_config(
+                source_config_path=source_config_path,
+                output_root=config_root,
+                run_root=run_dir.parents[1],
+                pilot=pilot,
+                condition_manifest_override=manifest_path,
+            )
+            command = TrainingCommand(
+                replicate=0,
+                condition_id=BOUNDED_ROTATION_CONDITION_ID,
+                config_path=config_path,
+                run_dir=run_dir,
+            )
+
+        stage = f"bounded-rotation-control-{budget_id}"
+        entry_id = f"{stage}:replicate-00:{BOUNDED_ROTATION_CONDITION_ID}"
+        config_hash = _training_config_hash(config_path)
+        if not self.ledger.is_complete(entry_id, config_hash=config_hash):
+            self._run(command, device=device, stage=stage, resume=False)
+
+        evaluation_dir = run_dir / "evaluation"
+        metrics_path = evaluation_dir / "factor_metrics.json"
+        if not metrics_path.is_file():
+            from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+                evaluate_generated_distribution,
+            )
+
+            reduced_config = load_config(config_path)
+            count = int(pilot["samples_per_class"])
+            evaluation = evaluate_generated_distribution(
+                generated_root=run_dir,
+                oracle_checkpoint=self.output_root / "calibration" / "oracle" / "factor_oracle.pt",
+                oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+                output_dir=evaluation_dir,
+                device=device,
+                samples_per_class=count,
+                reference_samples_per_class=count,
+                seed=int(self.config["seed"]) + 8_000_000,
+                generated_seed=int(reduced_config["sampling"]["seed"]),
+                source_revision=_source_revision(),
+                clip_generated_to_value_range=True,
+                condition_manifest=reduced_config["data"]["condition_manifest"],
+                inference_batch_size=min(256, count),
+            )
+            self.ledger.complete(
+                f"bounded-rotation-control-evaluation:{budget_id}",
+                {"evaluation": str(metrics_path)},
+                metadata={
+                    "stage": "bounded-rotation-control-evaluation",
+                    "training_steps": steps,
+                },
+            )
+        else:
+            evaluation = json.loads(metrics_path.read_text(encoding="utf-8"))
+
+        if not baseline_metrics_path.is_file():
+            raise FileNotFoundError(
+                "The paired g0_balanced evaluation must exist at the same training budget: "
+                f"{baseline_metrics_path}"
+            )
+        baseline = json.loads(baseline_metrics_path.read_text(encoding="utf-8"))
+        control_spec = json.loads(control_spec_path.read_text(encoding="utf-8"))
+        summary = _bounded_rotation_summary(
+            baseline=baseline,
+            control=evaluation,
+            control_spec=control_spec,
+            training_steps=steps,
+            baseline_metrics_path=baseline_metrics_path,
+            control_metrics_path=metrics_path,
+        )
+        summary_path = self.output_root / "analysis" / experiment_id / f"{budget_id}.json"
+        if summary_path.is_file():
+            if json.loads(summary_path.read_text(encoding="utf-8")) != summary:
+                raise FileExistsError(
+                    f"Refusing to replace a different bounded-rotation summary: {summary_path}"
+                )
+        else:
+            _write_json_atomic(summary, summary_path)
+        summary_entry = f"bounded-rotation-control-summary:{budget_id}"
+        if not self.ledger.is_complete(summary_entry):
+            self.ledger.complete(
+                summary_entry,
+                {"summary": str(summary_path)},
+                metadata={
+                    "stage": "bounded-rotation-control-summary",
+                    "training_steps": steps,
+                },
+            )
+        return summary
+
+    def _balanced_run_dir(self, condition_id: str, training_steps: int) -> Path:
+        configured_steps = int(self.config["pilot"]["training_steps"])
+        if training_steps == configured_steps:
+            if condition_id == "g0_balanced":
+                return self.run_root / "pilot" / "replicate_00" / condition_id
+            return self.run_root / "balanced_pilots" / "replicate_00" / condition_id
+        return (
+            self.run_root
+            / "balanced_learning_curve"
+            / f"steps_{training_steps:08d}"
+            / "replicate_00"
+            / condition_id
+        )
+
     def _balanced_evaluations_for_budget(
         self, training_steps: int
     ) -> tuple[dict[str, dict[str, Any]], dict[str, _ConditionPlan]]:
@@ -1464,6 +1671,101 @@ def _balanced_pilot_rotation_summary(
         "generated_value_clipping": {
             condition_id: evaluation["provenance"]["generated_value_clipping"]
             for condition_id, evaluation in sorted(evaluations.items())
+        },
+    }
+
+
+def _bounded_rotation_summary(
+    *,
+    baseline: dict[str, Any],
+    control: dict[str, Any],
+    control_spec: dict[str, Any],
+    training_steps: int,
+    baseline_metrics_path: str | Path,
+    control_metrics_path: str | Path,
+) -> dict[str, Any]:
+    """Build the paired class-level comparison for the azimuth-range intervention."""
+
+    steps = _positive_int("training_steps", training_steps)
+
+    def records(evaluation: dict[str, Any]) -> dict[int, dict[str, Any]]:
+        result = {}
+        for item in evaluation.get("classes", []):
+            class_id = int(item["requested_class"])
+            metrics = item["all_requested"]["metrics"]
+            result[class_id] = {
+                "class_id": class_id,
+                "object_id": str(item["object_id"]),
+                "target_dimension_id": str(item["target_dimension_id"]),
+                "true_dimension": int(item["true_dimension"]),
+                "class_leakage_rate": float(item["validity"]["class_leakage_rate"]),
+                "off_renderer_rate": float(item["validity"]["off_renderer_rate"]),
+                "joint_valid_rate": float(item["validity"]["joint_valid_rate"]),
+                "active_multivariate_energy_distance": float(
+                    metrics["active_factors"]["multivariate_energy_distance"]
+                ),
+                "oracle_feature_fid": float(metrics["oracle_feature_fid"]),
+            }
+        if set(result) != {0, 1, 2}:
+            raise ValueError("Bounded-rotation comparison requires all three evaluated classes.")
+        return result
+
+    baseline_records = records(baseline)
+    control_records = records(control)
+    metric_names = (
+        "class_leakage_rate",
+        "off_renderer_rate",
+        "joint_valid_rate",
+        "active_multivariate_energy_distance",
+        "oracle_feature_fid",
+    )
+    comparisons = []
+    for class_id in range(3):
+        baseline_record = baseline_records[class_id]
+        control_record = control_records[class_id]
+        if baseline_record["object_id"] != control_record["object_id"]:
+            raise ValueError("Baseline and control class identities do not align.")
+        comparisons.append(
+            {
+                "class_id": class_id,
+                "object_id": baseline_record["object_id"],
+                "role": "intervention" if class_id == 0 else "unchanged_pool_control",
+                "baseline": baseline_record,
+                "bounded_rotation": control_record,
+                "bounded_minus_baseline": {
+                    name: float(control_record[name] - baseline_record[name])
+                    for name in metric_names
+                },
+            }
+        )
+    return {
+        "schema_version": 1,
+        "design": (
+            "paired g0 balanced control: restrict class-0 azimuth extent while preserving "
+            "five active factors, exact XYZ/elevation draws, and unchanged class-1/2 pools"
+        ),
+        "training_steps": steps,
+        "primary_class_id": 0,
+        "delta_convention": "bounded_rotation_minus_full_azimuth_baseline",
+        "control_spec": control_spec,
+        "comparisons": comparisons,
+        "artifacts": {
+            "baseline_metrics": str(Path(baseline_metrics_path).resolve()),
+            "bounded_rotation_metrics": str(Path(control_metrics_path).resolve()),
+        },
+        "interpretation": {
+            "primary_test": (
+                "Whether the unusually large full-azimuth visual extent explains part of the "
+                "5D class difficulty at fixed sample count and training exposure."
+            ),
+            "does_not_test": (
+                "A reduction from five-dimensional to lower-dimensional support; the control "
+                "manifold remains five-dimensional."
+            ),
+            "nuisance_check": (
+                "Changes in classes 1 and 2 reveal model-wide optimization spillover even "
+                "though their underlying pool files are unchanged."
+            ),
         },
     }
 

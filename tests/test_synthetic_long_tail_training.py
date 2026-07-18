@@ -14,6 +14,8 @@ from fm_lab.experiments.synthetic_long_tail_geometry import (
     write_pilot_training_config,
 )
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+    BOUNDED_ROTATION_CONDITION_ID,
+    build_bounded_rotation_control,
     build_condition_manifests,
     build_master_pools,
 )
@@ -27,7 +29,13 @@ def write_tiny_factorial_manifests(
     *,
     replicate: int = 0,
 ) -> tuple[Path, ...]:
-    config = {
+    config = tiny_factorial_config()
+    cells = build_master_pools(config, root, replicate=replicate)
+    return build_condition_manifests(root, replicate, cells, counts=(20, 5, 2))
+
+
+def tiny_factorial_config() -> dict[str, object]:
+    return {
         "seed": 17,
         "image_size": 32,
         "master_count": 20,
@@ -40,8 +48,6 @@ def write_tiny_factorial_manifests(
         "material": {"oklch_lightness": 0.70, "oklch_chroma": 0.12},
         "render": {"supersample": 1, "render_batch_size": 8},
     }
-    cells = build_master_pools(config, root, replicate=replicate)
-    return build_condition_manifests(root, replicate, cells, counts=(20, 5, 2))
 
 
 def training_kwargs(
@@ -211,6 +217,35 @@ def test_pilot_writer_preserves_balanced_rotation_identity(tmp_path: Path) -> No
     assert config["training"]["checkpoint_steps"] == [100]
     assert config["sampling"]["n_samples"] == 9
     assert config_path.with_suffix(".sha256").is_file()
+
+
+def test_reduced_writer_accepts_paired_bounded_rotation_manifest(tmp_path: Path) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    matrix_paths = write_condition_training_configs(**training_kwargs(manifests, tmp_path))
+    source_path = next(path for path in matrix_paths if path.stem == "g0_balanced")
+    artifacts = build_bounded_rotation_control(tiny_factorial_config(), tmp_path, replicate=0)
+
+    config_path = write_pilot_training_config(
+        source_config_path=source_path,
+        output_root=tmp_path / "bounded-config",
+        run_root=tmp_path / "bounded-runs",
+        pilot={
+            "training_steps": 100,
+            "batch_size": 64,
+            "warmup_steps": 10,
+            "log_every": 5,
+            "samples_per_class": 3,
+            "nfe": 8,
+            "sample_batch_size": 3,
+            "n_trajectories": 3,
+        },
+        condition_manifest_override=artifacts["manifest"],
+    )
+    config = load_config(config_path)
+
+    assert config_path.stem == BOUNDED_ROTATION_CONDITION_ID
+    assert Path(config["data"]["condition_manifest"]) == artifacts["manifest"]
+    assert config["experiment"]["output_dir"].endswith(BOUNDED_ROTATION_CONDITION_ID)
 
 
 def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path) -> None:

@@ -7,12 +7,16 @@ import numpy as np
 import pytest
 
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+    BOUNDED_AZIMUTH_DIMENSION_ID,
+    BOUNDED_AZIMUTH_HALF_RANGE,
+    BOUNDED_ROTATION_CONDITION_ID,
     DIMENSION_IDS,
     FACTOR_COLUMNS,
     OBJECT_IDS,
     ConditionManifest,
     _object_configs,
     _render_map,
+    build_bounded_rotation_control,
     build_condition_manifests,
     build_condition_specs,
     build_factor_space,
@@ -192,3 +196,37 @@ def test_pool_and_condition_reruns_refuse_overwrite_without_partial_files(
         path.name: path.read_bytes() for path in condition_root.iterdir() if path.is_file()
     }
     assert manifests_after == manifests_before
+
+
+def test_bounded_rotation_control_changes_only_paired_class_zero_azimuth(
+    tmp_path: Path,
+) -> None:
+    config = _design_config(master_count=20, counts=(20, 5, 2), image_size=16)
+    build_master_pools(config, tmp_path, replicate=0)
+
+    artifacts = build_bounded_rotation_control(config, tmp_path, replicate=0)
+    manifest = ConditionManifest.read(artifacts["manifest"])
+    assert manifest.condition_id == BOUNDED_ROTATION_CONDITION_ID
+    assert [entry.dimension_id for entry in manifest.classes] == [
+        BOUNDED_AZIMUTH_DIMENSION_ID,
+        "medium",
+        "low",
+    ]
+    assert [entry.count for entry in manifest.classes] == [20, 20, 20]
+
+    baseline = np.load(tmp_path / "replicate_00/pools/stepped_monument/high/factors.npy")
+    bounded = np.load(
+        tmp_path
+        / "replicate_00/bounded_rotation_control/pools/stepped_monument"
+        / BOUNDED_AZIMUTH_DIMENSION_ID
+        / "factors.npy"
+    )
+    np.testing.assert_array_equal(baseline[:, (0, 1, 2, 4)], bounded[:, (0, 1, 2, 4)])
+    assert np.max(np.abs(bounded[:, 3])) <= BOUNDED_AZIMUTH_HALF_RANGE
+    for entry in manifest.classes[1:]:
+        assert (artifacts["manifest"].parent / entry.image_path).resolve() == (
+            tmp_path / "replicate_00/pools" / entry.object_id / entry.dimension_id / "images.npy"
+        ).resolve()
+
+    with pytest.raises(FileExistsError, match="Bounded-rotation control"):
+        build_bounded_rotation_control(config, tmp_path, replicate=0)

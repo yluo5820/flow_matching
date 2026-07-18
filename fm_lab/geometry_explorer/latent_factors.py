@@ -170,6 +170,7 @@ class LookAtViewSphere(LatentFactorSpace):
 class BoundedLookAtView(LatentFactorSpace):
     """Look-at camera direction within an elevation band, without roll."""
 
+    azimuth_bounds: tuple[float, float] = (-math.pi, math.pi)
     elevation_bounds: tuple[float, float] = (-math.pi / 6.0, math.pi / 6.0)
     name: str = "bounded_look_at_view"
     dim: int = 2
@@ -177,16 +178,20 @@ class BoundedLookAtView(LatentFactorSpace):
     factor_dims: tuple[int, ...] = (2,)
 
     def __post_init__(self) -> None:
+        azimuth_low, azimuth_high = (float(value) for value in self.azimuth_bounds)
+        if not -math.pi <= azimuth_low < azimuth_high <= math.pi:
+            raise ValueError("azimuth_bounds must lie inside [-pi, pi].")
         low, high = (float(value) for value in self.elevation_bounds)
         if not -math.pi / 2.0 < low < high < math.pi / 2.0:
             raise ValueError("elevation_bounds must lie inside (-pi/2, pi/2).")
 
     def sample(self, n: int, seed: int | None = None) -> LatentSample:
         rng = np.random.default_rng(seed)
+        azimuth_low, azimuth_high = self.azimuth_bounds
         low, high = self.elevation_bounds
         values = np.column_stack(
             [
-                rng.uniform(-math.pi, math.pi, int(n)),
+                rng.uniform(azimuth_low, azimuth_high, int(n)),
                 rng.uniform(math.sin(low), math.sin(high), int(n)),
             ]
         ).astype(np.float32)
@@ -202,7 +207,10 @@ class BoundedLookAtView(LatentFactorSpace):
 
     def retract(self, z: Any, tangent_vec: Any, eps: float) -> np.ndarray:
         value = np.asarray(z, dtype=np.float64) + eps * np.asarray(tangent_vec)
-        value[0] = (value[0] + math.pi) % (2.0 * math.pi) - math.pi
+        if self._full_azimuth_circle:
+            value[0] = (value[0] + math.pi) % (2.0 * math.pi) - math.pi
+        else:
+            value[0] = np.clip(value[0], *self.azimuth_bounds)
         low, high = self.elevation_bounds
         value[1] = np.clip(value[1], math.sin(low), math.sin(high))
         return value.astype(np.float32)
@@ -211,8 +219,14 @@ class BoundedLookAtView(LatentFactorSpace):
         first = np.asarray(z1, dtype=np.float64)
         second = np.asarray(z2, dtype=np.float64)
         azimuth = abs(first[0] - second[0])
-        azimuth = min(azimuth, 2.0 * math.pi - azimuth)
+        if self._full_azimuth_circle:
+            azimuth = min(azimuth, 2.0 * math.pi - azimuth)
         return float(np.hypot(azimuth, first[1] - second[1]))
+
+    @property
+    def _full_azimuth_circle(self) -> bool:
+        low, high = self.azimuth_bounds
+        return math.isclose(low, -math.pi) and math.isclose(high, math.pi)
 
     def coordinates(self, z: Any) -> dict[str, float]:
         azimuth, sin_elevation = np.asarray(z, dtype=np.float64)
@@ -225,7 +239,7 @@ class BoundedLookAtView(LatentFactorSpace):
         coordinates = self.coordinates(z)
         azimuth_bin = _linear_bin(
             coordinates["camera_azimuth"],
-            (-math.pi, math.pi),
+            self.azimuth_bounds,
             bins=num_bins,
         )
         elevation_bin = _linear_bin(
@@ -268,6 +282,7 @@ class LightingDirectionSphere(LookAtViewSphere):
             "label_id": str(label_id),
             "light_z_bin": str(label_id),
         }
+
 
 @dataclass(frozen=True)
 class BoundedTranslation(LatentFactorSpace):
@@ -555,7 +570,7 @@ class CameraPrincipalPointOffset(BoundedTranslation):
 
     def bins(self, z: Any, num_bins: int = 36) -> dict[str, str]:
         value = np.asarray(z, dtype=np.float32).reshape(-1)
-        bins_per_axis = max(1, int(round(num_bins ** 0.5)))
+        bins_per_axis = max(1, int(round(num_bins**0.5)))
         x_bin = _linear_bin(float(value[0]), self.bounds[0], bins=bins_per_axis)
         y_bin = _linear_bin(float(value[1]), self.bounds[1], bins=bins_per_axis)
         label_id = x_bin + bins_per_axis * y_bin
@@ -795,10 +810,7 @@ class ProductFactorSpace(LatentFactorSpace):
         counts: dict[str, int] = {}
         for _, label in labels:
             counts[label] = counts.get(label, 0) + 1
-        resolved = [
-            f"{key}_{label}" if counts[label] > 1 else label
-            for key, label in labels
-        ]
+        resolved = [f"{key}_{label}" if counts[label] > 1 else label for key, label in labels]
         return _unique_names(resolved)
 
     def retract(self, z: Any, tangent_vec: Any, eps: float) -> dict[str, Any]:
@@ -852,9 +864,11 @@ class CameraSE3Factor(ProductFactorSpace):
         self,
         *,
         roll_bounds: tuple[float, float] = (-math.pi / 6.0, math.pi / 6.0),
-        translation_bounds: (
-            tuple[tuple[float, float], ...] | tuple[float, float]
-        ) = ((-0.6, 0.6), (-0.6, 0.6), (-1.0, 1.0)),
+        translation_bounds: (tuple[tuple[float, float], ...] | tuple[float, float]) = (
+            (-0.6, 0.6),
+            (-0.6, 0.6),
+            (-1.0, 1.0),
+        ),
         name: str = "camera_se3",
     ) -> None:
         super().__init__(
@@ -875,9 +889,10 @@ class CameraIntrinsicsFactor(ProductFactorSpace):
         *,
         focal_log_bounds: tuple[float, float] = (-0.4, 0.4),
         aspect_log_bounds: tuple[float, float] = (-0.25, 0.25),
-        principal_point_bounds: (
-            tuple[tuple[float, float], ...] | tuple[float, float]
-        ) = (-8.0, 8.0),
+        principal_point_bounds: (tuple[tuple[float, float], ...] | tuple[float, float]) = (
+            -8.0,
+            8.0,
+        ),
         skew_bounds: tuple[float, float] = (-0.15, 0.15),
         name: str = "camera_intrinsics_k",
     ) -> None:
@@ -899,14 +914,17 @@ class FullCameraFactor(ProductFactorSpace):
         self,
         *,
         roll_bounds: tuple[float, float] = (-math.pi / 6.0, math.pi / 6.0),
-        translation_bounds: (
-            tuple[tuple[float, float], ...] | tuple[float, float]
-        ) = ((-0.6, 0.6), (-0.6, 0.6), (-1.0, 1.0)),
+        translation_bounds: (tuple[tuple[float, float], ...] | tuple[float, float]) = (
+            (-0.6, 0.6),
+            (-0.6, 0.6),
+            (-1.0, 1.0),
+        ),
         focal_log_bounds: tuple[float, float] = (-0.4, 0.4),
         aspect_log_bounds: tuple[float, float] = (-0.25, 0.25),
-        principal_point_bounds: (
-            tuple[tuple[float, float], ...] | tuple[float, float]
-        ) = (-8.0, 8.0),
+        principal_point_bounds: (tuple[tuple[float, float], ...] | tuple[float, float]) = (
+            -8.0,
+            8.0,
+        ),
         skew_bounds: tuple[float, float] = (-0.15, 0.15),
         name: str = "full_camera",
     ) -> None:

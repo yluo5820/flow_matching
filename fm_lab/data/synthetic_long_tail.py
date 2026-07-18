@@ -13,9 +13,11 @@ import torch
 
 from fm_lab.geometry_explorer.latent_factors import sample_values
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+    BOUNDED_ROTATION_CONDITION_ID,
     FACTOR_COLUMNS,
     ConditionClass,
     ConditionManifest,
+    bounded_rotation_condition_spec,
     build_condition_specs,
     build_factor_space,
     canonical_factor_rows,
@@ -46,9 +48,7 @@ class SyntheticLongTailImages:
             raise ValueError("Synthetic sampling_policy must be 'empirical' or 'class_balanced'.")
         self._manifest_path = Path(self.condition_manifest).expanduser().resolve()
         if not self._manifest_path.is_file():
-            raise ValueError(
-                f"Synthetic condition manifest does not exist: {self._manifest_path}"
-            )
+            raise ValueError(f"Synthetic condition manifest does not exist: {self._manifest_path}")
         raw_manifest = _read_raw_manifest(self._manifest_path)
         _validate_raw_manifest(raw_manifest)
         self._manifest = _manifest_from_raw(raw_manifest, self._manifest_path)
@@ -170,9 +170,7 @@ class SyntheticLongTailImages:
             indices = np.arange(entry.index_start, entry.index_start + entry.count)
             image_parts.append(np.asarray(array[indices], dtype=np.uint8))
             label_parts.append(np.full(entry.count, class_id, dtype=np.int64))
-            source_parts.append(
-                (np.int64(class_id) << np.int64(48)) | indices.astype(np.int64)
-            )
+            source_parts.append((np.int64(class_id) << np.int64(48)) | indices.astype(np.int64))
         images = self._normalize(
             torch.from_numpy(np.concatenate(image_parts)).reshape(-1, self.dim)
         )
@@ -212,11 +210,7 @@ class SyntheticLongTailImages:
             raise ValueError(f"Synthetic {kind} path must be relative to the manifest.")
         suffix = "images.npy" if kind == "image" else "factors.npy"
         expected = (
-            self._manifest_path.parent.parent
-            / "pools"
-            / object_id
-            / dimension_id
-            / suffix
+            self._manifest_path.parent.parent / "pools" / object_id / dimension_id / suffix
         ).resolve()
         resolved = (self._manifest_path.parent / candidate).resolve()
         if not resolved.is_file():
@@ -310,12 +304,15 @@ def _manifest_from_raw(raw: dict[str, Any], path: Path) -> ConditionManifest:
 
 
 def _expected_condition_manifest(manifest: ConditionManifest) -> ConditionManifest:
-    expected = {
-        condition.condition_id: condition
-        for condition in build_condition_specs(manifest.replicate)
-    }.get(manifest.condition_id)
+    if manifest.condition_id == BOUNDED_ROTATION_CONDITION_ID:
+        expected = bounded_rotation_condition_spec(manifest.replicate)
+    else:
+        expected = {
+            condition.condition_id: condition
+            for condition in build_condition_specs(manifest.replicate)
+        }.get(manifest.condition_id)
     if expected is None:
-        raise ValueError("Synthetic manifest condition_id is not part of the Task 3 design.")
+        raise ValueError("Synthetic manifest condition_id is not an approved study condition.")
     if (
         manifest.geometry_mapping != expected.geometry_mapping
         or manifest.frequency_mapping != expected.frequency_mapping
@@ -370,9 +367,7 @@ def _validate_factors(
     expected_mask = _expected_factor_mask(entry.dimension_id)
     finite_mask = np.isfinite(factors)
     if not np.all(finite_mask == expected_mask):
-        raise ValueError(
-            "Synthetic factor array finite/NaN pattern does not match its dimension."
-        )
+        raise ValueError("Synthetic factor array finite/NaN pattern does not match its dimension.")
 
 
 def _expected_factor_mask(dimension_id: str) -> np.ndarray:

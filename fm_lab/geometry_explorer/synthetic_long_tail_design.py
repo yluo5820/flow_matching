@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -28,6 +29,8 @@ from fm_lab.utils.logging import write_json
 
 OBJECT_IDS = ("stepped_monument", "crooked_arch", "three_arm_vane")
 DIMENSION_IDS = ("high", "medium", "low")
+BOUNDED_AZIMUTH_DIMENSION_ID = "high_bounded_azimuth"
+BOUNDED_ROTATION_CONDITION_ID = "g0_balanced_bounded_azimuth"
 FACTOR_COLUMNS = ("tx", "ty", "tz", "azimuth", "elevation")
 GEOMETRY_MAPPINGS = (
     ("high", "medium", "low"),
@@ -39,6 +42,15 @@ FREQUENCY_MAPPINGS = (
     (500, 50, 5000),
     (50, 5000, 500),
 )
+
+# The azimuth span is chosen so that its estimated total pixel-space arc length
+# matches the existing depth interval's.  The Jacobian norms come from the frozen
+# renderer's pullback diagnostic for the 5D stepped-monument cell.
+AZIMUTH_PULLBACK_NORM = 119.40936660766602
+DEPTH_PULLBACK_NORM = 29.531200408935547
+DEPTH_TOTAL_RANGE = 1.5
+BOUNDED_AZIMUTH_TOTAL_RANGE = DEPTH_TOTAL_RANGE * DEPTH_PULLBACK_NORM / AZIMUTH_PULLBACK_NORM
+BOUNDED_AZIMUTH_HALF_RANGE = BOUNDED_AZIMUTH_TOTAL_RANGE / 2.0
 
 
 @dataclass(frozen=True)
@@ -92,7 +104,7 @@ class PoolCellManifest:
 
 
 def build_factor_space(level: str) -> LatentFactorSpace:
-    """Build one of the three approved latent spaces."""
+    """Build an approved latent space, including the bounded-rotation control."""
 
     translation_xyz = BoundedTranslation(
         dim=3,
@@ -108,7 +120,56 @@ def build_factor_space(level: str) -> LatentFactorSpace:
             [translation_xyz, BoundedLookAtView()],
             name="translation_xyz_bounded_view",
         )
+    if level == BOUNDED_AZIMUTH_DIMENSION_ID:
+        return ProductFactorSpace(
+            [
+                translation_xyz,
+                BoundedLookAtView(
+                    azimuth_bounds=(
+                        -BOUNDED_AZIMUTH_HALF_RANGE,
+                        BOUNDED_AZIMUTH_HALF_RANGE,
+                    )
+                ),
+            ],
+            name="translation_xyz_bounded_azimuth_view",
+        )
     raise ValueError(f"Unsupported dimension level: {level}")
+
+
+def bounded_rotation_condition_spec(
+    replicate: int,
+    *,
+    count: int = 5000,
+) -> ConditionManifest:
+    """Return the single approved g0 control with only class-0 azimuth restricted."""
+
+    class_count = int(count)
+    if class_count <= 0:
+        raise ValueError("Bounded-rotation class count must be positive.")
+    dimensions = (BOUNDED_AZIMUTH_DIMENSION_ID, "medium", "low")
+    classes = tuple(
+        ConditionClass(
+            class_id=class_id,
+            object_id=object_id,
+            dimension_id=dimension_id,
+            true_dimension=int(build_factor_space(dimension_id).dim),
+            count=class_count,
+            image_path="",
+            factor_path="",
+        )
+        for class_id, (object_id, dimension_id) in enumerate(
+            zip(OBJECT_IDS, dimensions, strict=True)
+        )
+    )
+    return ConditionManifest(
+        condition_id=BOUNDED_ROTATION_CONDITION_ID,
+        replicate=int(replicate),
+        geometry_mapping="geometry_0_bounded_azimuth",
+        frequency_mapping="balanced",
+        image_shape=(3, 32, 32),
+        classes=classes,
+        config_hash="",
+    )
 
 
 def canonical_factor_rows(
@@ -319,6 +380,183 @@ def build_condition_manifests(
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
     return tuple(manifest_dir / filename for filename in filenames)
+
+
+def build_bounded_rotation_control(
+    config: dict[str, Any],
+    root: str | Path,
+    *,
+    replicate: int = 0,
+) -> dict[str, Path]:
+    """Render the one changed 5D pool and reuse the unchanged g0 pool cells.
+
+    The control uses the original class-0 5D seed.  Consequently XYZ and
+    elevation are paired sample-for-sample with the full-azimuth pool, while the
+    underlying azimuth uniform variate is mapped into the narrower interval.
+    """
+
+    master_count = int(config["master_count"])
+    image_size = int(config["image_size"])
+    if master_count <= 0 or image_size <= 0:
+        raise ValueError("master_count and image_size must be positive.")
+    replicate_id = int(replicate)
+    if replicate_id < 0:
+        raise ValueError("replicate must be non-negative.")
+    render_batch_size = int(config.get("render", {}).get("render_batch_size", 128))
+    if render_batch_size <= 0:
+        raise ValueError("render.render_batch_size must be positive.")
+
+    replicate_root = Path(root).resolve() / f"replicate_{replicate_id:02d}"
+    canonical_pool_root = replicate_root / "pools"
+    reused_cells = (
+        (OBJECT_IDS[1], "medium"),
+        (OBJECT_IDS[2], "low"),
+    )
+    baseline_5d_dir = canonical_pool_root / OBJECT_IDS[0] / "high"
+    for cell_dir in (baseline_5d_dir, *(canonical_pool_root / o / d for o, d in reused_cells)):
+        for filename in ("images.npy", "factors.npy"):
+            if not (cell_dir / filename).is_file():
+                raise FileNotFoundError(
+                    "Canonical pools must be built before the bounded-rotation control: "
+                    f"{cell_dir / filename}"
+                )
+
+    control_root = replicate_root / "bounded_rotation_control"
+    _refuse_existing(control_root, kind="Bounded-rotation control")
+    replicate_root.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=".bounded-rotation-", dir=replicate_root))
+    condition_dir = staging_root / "conditions"
+    new_cell_dir = staging_root / "pools" / OBJECT_IDS[0] / BOUNDED_AZIMUTH_DIMENSION_ID
+    final_condition_dir = control_root / "conditions"
+    final_new_cell_dir = control_root / "pools" / OBJECT_IDS[0] / BOUNDED_AZIMUTH_DIMENSION_ID
+    published = False
+    try:
+        condition_dir.mkdir(parents=True)
+        new_cell_dir.mkdir(parents=True)
+        factor = build_factor_space(BOUNDED_AZIMUTH_DIMENSION_ID)
+        seed = int(config["seed"]) + replicate_id * 100_000
+        values = sample_values(factor.sample(master_count, seed=seed))
+        staging_image_path = new_cell_dir / "images.npy"
+        staging_factor_path = new_cell_dir / "factors.npy"
+        images = np.lib.format.open_memmap(
+            staging_image_path,
+            mode="w+",
+            dtype=np.uint8,
+            shape=(master_count, 3, image_size, image_size),
+        )
+        factors = np.lib.format.open_memmap(
+            staging_factor_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(master_count, len(FACTOR_COLUMNS)),
+        )
+        object_config = _object_configs(config)[OBJECT_IDS[0]]
+        render_map = _render_map(config, object_config, factor)
+        for start in range(0, master_count, render_batch_size):
+            stop = min(master_count, start + render_batch_size)
+            rendered = _as_hwc_batch(
+                render_map.render_batch(values[start:stop], batch_size=render_batch_size),
+                image_size=image_size,
+            )
+            images[start:stop] = np.rint(
+                np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0
+            ).astype(np.uint8)
+            factors[start:stop] = canonical_factor_rows(factor, values[start:stop])
+        images.flush()
+        factors.flush()
+        del images, factors
+
+        baseline_factors = np.load(baseline_5d_dir / "factors.npy", mmap_mode="r")
+        control_factors = np.load(staging_factor_path, mmap_mode="r")
+        if baseline_factors.shape != control_factors.shape:
+            raise ValueError("Baseline and control 5D factor pools must have identical shapes.")
+        paired_columns = (0, 1, 2, 4)
+        if not np.array_equal(
+            np.asarray(baseline_factors[:, paired_columns]),
+            np.asarray(control_factors[:, paired_columns]),
+        ):
+            raise ValueError("Control XYZ/elevation factors are not paired with the baseline.")
+        del baseline_factors, control_factors
+
+        for object_id, dimension_id in reused_cells:
+            link = staging_root / "pools" / object_id / dimension_id
+            link.parent.mkdir(parents=True, exist_ok=True)
+            target = canonical_pool_root / object_id / dimension_id
+            os.symlink(os.path.relpath(target, link.parent), link, target_is_directory=True)
+
+        control_spec = {
+            "schema_version": 1,
+            "condition_id": BOUNDED_ROTATION_CONDITION_ID,
+            "replicate": replicate_id,
+            "class_id_changed": 0,
+            "object_id_changed": OBJECT_IDS[0],
+            "baseline_dimension_id": "high",
+            "control_dimension_id": BOUNDED_AZIMUTH_DIMENSION_ID,
+            "true_dimension_unchanged": 5,
+            "azimuth_bounds_radians": [
+                -BOUNDED_AZIMUTH_HALF_RANGE,
+                BOUNDED_AZIMUTH_HALF_RANGE,
+            ],
+            "azimuth_total_range_radians": BOUNDED_AZIMUTH_TOTAL_RANGE,
+            "azimuth_total_range_degrees": math.degrees(BOUNDED_AZIMUTH_TOTAL_RANGE),
+            "elevation_bounds_radians": [-math.pi / 6.0, math.pi / 6.0],
+            "matching_rule": {
+                "description": (
+                    "Match estimated total pixel-space arc length of azimuth to the "
+                    "full depth interval."
+                ),
+                "formula": "depth_range * depth_jacobian_norm / azimuth_jacobian_norm",
+                "depth_total_range": DEPTH_TOTAL_RANGE,
+                "depth_jacobian_norm": DEPTH_PULLBACK_NORM,
+                "azimuth_jacobian_norm": AZIMUTH_PULLBACK_NORM,
+            },
+            "pairing": {
+                "seed": seed,
+                "identical_factor_columns": ["tx", "ty", "tz", "elevation"],
+                "reused_pool_cells": [
+                    {"object_id": object_id, "dimension_id": dimension_id}
+                    for object_id, dimension_id in reused_cells
+                ],
+            },
+            "interpretation_limit": (
+                "This changes the extent and pixel-space scale of one factor, not the "
+                "topological intrinsic dimension, which remains five."
+            ),
+        }
+        control_hash = _config_hash({"base_config": config, "control": control_spec})
+        spec = bounded_rotation_condition_spec(replicate_id, count=master_count)
+        class_dirs = (
+            final_new_cell_dir,
+            control_root / "pools" / OBJECT_IDS[1] / "medium",
+            control_root / "pools" / OBJECT_IDS[2] / "low",
+        )
+        classes = tuple(
+            replace(
+                entry,
+                image_path=os.path.relpath(cell_dir / "images.npy", final_condition_dir),
+                factor_path=os.path.relpath(cell_dir / "factors.npy", final_condition_dir),
+            )
+            for entry, cell_dir in zip(spec.classes, class_dirs, strict=True)
+        )
+        manifest = replace(
+            spec,
+            image_shape=(3, image_size, image_size),
+            classes=classes,
+            config_hash=control_hash,
+        )
+        manifest.write(condition_dir / f"{BOUNDED_ROTATION_CONDITION_ID}.json")
+        write_json(control_spec | {"config_hash": control_hash}, staging_root / "control_spec.json")
+        staging_root.replace(control_root)
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+    return {
+        "root": control_root,
+        "manifest": final_condition_dir / f"{BOUNDED_ROTATION_CONDITION_ID}.json",
+        "control_spec": control_root / "control_spec.json",
+    }
 
 
 def _condition_spec(
