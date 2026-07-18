@@ -755,6 +755,39 @@ while retaining directional contraction and a strong risk of interpolation or
 memorization. The existing nearest-neighbor audit should be repeated on this bounded
 50-example model before attributing its recovery to manifold learning.
 
+## Bounded 50-example memorization audit
+
+The audit is complete on the 300 class-0 samples from the class-balanced 50-example
+run. It reads the exact 50-image training prefix from the immutable condition manifest
+and renders 300 independent held-out samples from the same bounded 5D factor space.
+All distances use the production-gated oracle. The corrected audit calibrates both
+generated and held-out queries against the same 50 training references; this avoids
+the reference-set-size bias that would arise from directly comparing nearest distances
+to 50 training images and 300 held-out images.
+
+| Diagnostic | Generated samples | Held-out baseline |
+|---|---:|---:|
+| Exact uint8 training copies | 0 / 300 | — |
+| Near training duplicates | 2 / 300 (0.67%) | 0.5% calibration quantile |
+| Median nearest-training factor distance | 0.4380 | 0.5042 |
+| Median nearest-training oracle-feature distance | 2.1539 | 2.3399 |
+
+The median generated-to-held-out proximity ratios are 0.869 in recovered-factor space
+and 0.921 in oracle-feature space. Thus generated samples are mildly closer to the 50
+training anchors than independent renderer samples, consistent with some interpolation
+bias or manifold contraction. But this is not classical sample memorization: there are
+no exact copies, and the 0.67% near-duplicate rate is close to its deliberately strict
+0.5% held-out calibration. Together with 0.913 joint validity, the result is more
+consistent with substantial interpolation/generalization plus incomplete directional
+coverage than with retrieval or near-copy collapse.
+
+This remains a one-seed, one-object result. It does not establish that the learned
+distribution has the correct local tangent rank, nor that 50 examples recover the full
+bounded 5D density. The azimuth/elevation range contraction remains direct evidence of
+missing coverage. The immutable audit artifacts are stored under
+`memorization_bounded_5d_tail_v2/`; the first-pass audit is retained separately because
+its unmatched 50-versus-300 reference comparison is descriptive but not causal.
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
@@ -763,22 +796,25 @@ costly and would not remove the 5D floor or single-seed limitation.
 
 The class-balanced causal ablation, its memorization audit, and the bounded-rotation
 screen are complete. Allocation is dominant for the 1D and 3D tail failures and
-important for 5D, while aggressive tail reuse produces a measurable near-duplicate
-regime. Separately, the 76-point bounded-rotation validity gain establishes that the
-original balanced 5D floor is dominated by more than the dimension integer alone.
+important for 5D. Aggressive tail reuse does not produce a large exact-copy or
+near-duplicate regime here, although the mild training-proximity shift and directional
+contraction show that equal exposure does not fully recover the target distribution.
+Separately, the 76-point bounded-rotation validity gain establishes that the original
+balanced 5D floor is dominated by more than the dimension integer alone.
 
 The targeted bounded follow-up is complete and supports both primary directional
 predictions: azimuth extent is a robust source of baseline difficulty, and empirical
 update allocation dominates the bounded 5D long-tail failure. Do not rerun the full
 nine-cell factorial.
 
-Before claiming that 50 unique samples suffice, run the existing exact-copy and
-nearest-neighbor audit on the bounded class-balanced tail. After that audit, the next
-synthetic question should hold nominal dimension fixed while changing factor identity:
-compare balanced 3D translation against bounded view plus depth across all three
-objects. Fashion-MNIST or a controlled pose dataset remains the more important bridge
-for external validity, because additional synthetic frequency rotations now have low
-information value.
+The next synthetic question should hold nominal dimension fixed while changing factor
+identity: compare balanced 3D translation against bounded view plus depth across all
+three objects. This directly tests whether nominal intrinsic dimension or factor type
+drives the remaining difficulty. A local Jacobian/tangent-rank probe on the existing
+50-versus-5,000 bounded pair would be the most direct geometric follow-up and requires
+no retraining. Fashion-MNIST or a controlled pose dataset remains the more important
+bridge for external validity, because additional synthetic frequency rotations now
+have low information value.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
