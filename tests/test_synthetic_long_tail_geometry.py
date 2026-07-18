@@ -125,6 +125,7 @@ def test_memorization_keeps_copy_and_geometry_metrics_separate(tmp_path: Path) -
         heldout_features=heldout_features,
         output_dir=tmp_path / "memorization",
         source_revision="test",
+        context={"condition_id": "bounded_tail", "training_unique_count": 2},
     )
 
     assert result["summary"]["exact_copy_rate"] == 0.5
@@ -135,6 +136,10 @@ def test_memorization_keeps_copy_and_geometry_metrics_separate(tmp_path: Path) -
     assert destination.is_symlink()
     payload = json.loads((destination / "summary.json").read_text(encoding="utf-8"))
     assert payload == result
+    assert payload["provenance"]["context"] == {
+        "condition_id": "bounded_tail",
+        "training_unique_count": 2,
+    }
 
 
 def test_memorization_refuses_existing_destination(tmp_path: Path) -> None:

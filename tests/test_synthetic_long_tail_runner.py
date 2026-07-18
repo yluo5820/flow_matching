@@ -162,6 +162,19 @@ def test_bounded_rotation_followups_dry_run_lists_only_four_targeted_runs() -> N
     assert all("steps_00002000" in item["run_dir"] for item in result["commands"])
 
 
+def test_bounded_rotation_memorization_dry_run_reuses_completed_tail_run() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.bounded_rotation_memorization(device="cpu", dry_run=True)
+
+    assert result["training_steps"] == 2_000
+    assert result["requested_class"] == 0
+    assert result["training_unique_count"] == 50
+    assert result["retraining"] is False
+    assert "bounded_rotation_frequency_slice_class_balanced" in result["generated_run"]
+    assert result["output_dir"].endswith("memorization_bounded_5d_tail")
+
+
 def test_bounded_rotation_followup_summary_separates_frequency_and_exposure() -> None:
     objects = ("stepped_monument", "crooked_arch", "three_arm_vane")
 

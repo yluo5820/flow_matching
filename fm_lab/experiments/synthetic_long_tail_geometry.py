@@ -1518,6 +1518,85 @@ class SyntheticLongTailRunner:
             )
         return summary
 
+    def bounded_rotation_memorization(
+        self,
+        *,
+        device: str,
+        training_steps: int = 2_000,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Audit the bounded 50-example class-balanced recovery without retraining."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        budget_id = f"steps_{steps:08d}"
+        run_dir = (
+            self.run_root
+            / "bounded_rotation_frequency_slice_class_balanced"
+            / budget_id
+            / "replicate_00"
+            / BOUNDED_ROTATION_TAIL_CONDITION_ID
+        )
+        manifest_path = (
+            self.output_root
+            / "replicate_00"
+            / "bounded_rotation_followups"
+            / "conditions"
+            / f"{BOUNDED_ROTATION_TAIL_CONDITION_ID}.json"
+        )
+        output_dir = run_dir / "memorization_bounded_5d_tail"
+        summary_path = output_dir / "summary.json"
+        if dry_run:
+            return {
+                "training_steps": steps,
+                "requested_class": 0,
+                "training_unique_count": int(self.config["counts"][2]),
+                "generated_run": str(run_dir),
+                "condition_manifest": str(manifest_path),
+                "output_dir": str(output_dir),
+                "retraining": False,
+            }
+        if summary_path.is_file():
+            return json.loads(summary_path.read_text(encoding="utf-8"))
+        for path in (
+            run_dir / "samples" / "euler_nfe64.npy",
+            run_dir / "samples" / "generated_labels.npy",
+            manifest_path,
+        ):
+            if not path.is_file():
+                raise FileNotFoundError(f"Memorization audit input is missing: {path}")
+
+        from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+            audit_condition_memorization,
+        )
+
+        result = audit_condition_memorization(
+            generated_root=run_dir,
+            condition_manifest=manifest_path,
+            oracle_checkpoint=self.output_root / "calibration" / "oracle" / "factor_oracle.pt",
+            oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+            output_dir=output_dir,
+            device=device,
+            requested_class=0,
+            heldout_count=int(self.config["pilot"]["samples_per_class"]),
+            seed=int(self.config["seed"]) + 8_000_000,
+            source_revision=_source_revision(),
+            inference_batch_size=min(256, int(self.config["pilot"]["samples_per_class"])),
+        )
+        entry_id = f"bounded-rotation-memorization:{budget_id}"
+        if not self.ledger.is_complete(entry_id):
+            self.ledger.complete(
+                entry_id,
+                {"summary": str(summary_path)},
+                metadata={
+                    "stage": "bounded-rotation-memorization",
+                    "training_steps": steps,
+                    "condition": BOUNDED_ROTATION_TAIL_CONDITION_ID,
+                    "training_sampling_policy": "class_balanced",
+                },
+            )
+        return result
+
     def _evaluate_bounded_followup_run(
         self,
         *,

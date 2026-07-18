@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +241,7 @@ def evaluate_memorization(
     generated_class_ids: np.ndarray | None = None,
     source_revision: str = "unknown",
     distance_chunk_size: int = 1024,
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Measure exact-copy and nearest-neighbour memorization independently."""
 
@@ -334,6 +335,7 @@ def evaluate_memorization(
             "generated_images_sha256": _array_sha256(generated_images),
             "training_images_sha256": _array_sha256(training_images),
             "heldout_images_sha256": _array_sha256(heldout_images),
+            "context": dict(context or {}),
         },
     }
 

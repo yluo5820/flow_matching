@@ -21,8 +21,11 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     OBJECT_IDS,
     _object_configs,
     _render_map,
+    build_condition_manifests,
+    build_master_pools,
 )
 from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+    audit_condition_memorization,
     calibrate_metric_controls,
     central_range_ratio,
     deterministic_subsample,
@@ -379,6 +382,47 @@ def test_evaluator_uses_real_oracle_and_renderer_and_preserves_invalid_mass(
         json.loads(row["factor_normalization_json"]) == checkpoint_payload["factor_normalization"]
         for row in rows
     )
+
+
+def test_condition_memorization_audit_uses_manifest_prefix_and_heldout_renderer(
+    tmp_path: Path,
+) -> None:
+    config = _config() | {"master_count": 3}
+    oracle = train_factor_oracle(config, tmp_path / "oracle", "cpu")
+    pool_cells = build_master_pools(config, tmp_path / "design", replicate=0)
+    manifests = build_condition_manifests(
+        tmp_path / "design",
+        replicate=0,
+        pool_cells=pool_cells,
+        counts=(3, 2, 1),
+    )
+    manifest = next(path for path in manifests if path.name == "g0_balanced.json")
+    generated_root = tmp_path / "generated"
+    _write_real_generated_samples(config, generated_root, count_per_class=2)
+
+    result = audit_condition_memorization(
+        generated_root=generated_root,
+        condition_manifest=manifest,
+        oracle_checkpoint=oracle["checkpoint_path"],
+        oracle_gate=oracle["gate_path"],
+        output_dir=tmp_path / "memorization",
+        device="cpu",
+        requested_class=0,
+        heldout_count=3,
+        seed=71,
+        source_revision="test-revision",
+        inference_batch_size=2,
+        required_gate_profile="fixture_only",
+    )
+
+    context = result["provenance"]["context"]
+    assert result["summary"]["generated_count"] == 2
+    assert context["condition_id"] == "g0_balanced"
+    assert context["training_unique_count"] == 3
+    assert context["heldout_count"] == 3
+    assert context["oracle_gate_profile"] == "fixture_only"
+    assert (tmp_path / "memorization" / "per_sample.parquet").is_file()
+    assert (tmp_path / "memorization" / "distances.npz").is_file()
 
 
 def test_evaluator_rejects_forged_external_gate_even_with_matching_checkpoint_digest(

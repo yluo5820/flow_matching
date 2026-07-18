@@ -21,6 +21,7 @@ from scipy.linalg import LinAlgWarning, sqrtm
 from scipy.spatial.distance import cdist
 from scipy.stats import wasserstein_distance
 
+from fm_lab.data import SyntheticLongTailImages
 from fm_lab.geometry_explorer.latent_factors import sample_values
 from fm_lab.geometry_explorer.synthetic_factor_oracle import (
     FACTOR_NAMES,
@@ -41,6 +42,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     build_factor_space,
     canonical_factor_rows,
 )
+from fm_lab.geometry_explorer.synthetic_long_tail_geometry import evaluate_memorization
 from fm_lab.utils.logging import write_json
 
 _FACTOR_METRICS_FILENAME = "factor_metrics.json"
@@ -478,6 +480,142 @@ def evaluate_generated_distribution(
         fields=_CLASS_CSV_FIELDS,
     )
     return result
+
+
+def audit_condition_memorization(
+    *,
+    generated_root: str | Path,
+    condition_manifest: str | Path,
+    oracle_checkpoint: str | Path,
+    oracle_gate: str | Path,
+    output_dir: str | Path,
+    device: str | torch.device,
+    requested_class: int,
+    heldout_count: int = 300,
+    seed: int = 25_072_026,
+    source_revision: str = "unknown",
+    inference_batch_size: int = 256,
+    required_gate_profile: str = "production",
+) -> dict[str, Any]:
+    """Audit one generated class against its exact train prefix and held-out renderer data."""
+
+    _destination(output_dir, "Memorization")
+    if isinstance(requested_class, bool) or not isinstance(requested_class, int):
+        raise TypeError("requested_class must be an integer.")
+    if requested_class not in range(len(OBJECT_IDS)):
+        raise ValueError("requested_class must identify class 0, 1, or 2.")
+    reference_count = _positive_integer(heldout_count, "heldout_count")
+    reference_seed = _nonnegative_integer(seed, "seed")
+    batch_size = _positive_integer(inference_batch_size, "inference_batch_size")
+    revision = _nonempty_string(source_revision, "source_revision")
+    gate_profile = _nonempty_string(required_gate_profile, "required_gate_profile")
+
+    samples_path, labels_path = _generated_paths(generated_root)
+    samples_snapshot = _snapshot_file(samples_path, "generated samples")
+    labels_snapshot = _snapshot_file(labels_path, "generated labels")
+    samples = _load_numeric_snapshot(samples_snapshot, "generated samples")
+    raw_labels = _load_numeric_snapshot(labels_snapshot, "generated labels")
+    if raw_labels.ndim != 1 or not np.issubdtype(raw_labels.dtype, np.integer):
+        raise ValueError("generated labels must be a one-dimensional integer array.")
+    label_counts = [int(np.count_nonzero(raw_labels == class_id)) for class_id in range(3)]
+    if len(set(label_counts)) != 1 or label_counts[0] <= 0:
+        raise ValueError("generated labels must contain the same positive count for each class.")
+    requested_labels = _load_requested_labels(labels_snapshot, label_counts[0])
+    if len(samples) != len(requested_labels):
+        raise ValueError("generated samples and labels must have matching lengths.")
+
+    payload, gate, model, oracle_provenance = _validated_oracle(
+        oracle_checkpoint,
+        oracle_gate,
+        device=device,
+        required_gate_profile=gate_profile,
+    )
+    parsed = _parse_config(payload["config"])
+    generated_images = _normalize_generated_images(
+        np.clip(samples, -1.0, 1.0),
+        image_size=parsed.image_size,
+        value_range=(-1.0, 1.0),
+    )
+    generated_mask = requested_labels == requested_class
+    generated_images = generated_images[generated_mask]
+
+    manifest_path = Path(condition_manifest).expanduser().resolve()
+    SyntheticLongTailImages(manifest_path)
+    manifest = ConditionManifest.read(manifest_path)
+    entry = next(item for item in manifest.classes if item.class_id == requested_class)
+    training_path = (manifest_path.parent / entry.image_path).resolve()
+    training_pool = np.load(training_path, mmap_mode="r")
+    training_images = np.asarray(
+        training_pool[entry.index_start : entry.index_start + entry.count],
+        dtype=np.uint8,
+    ).copy()
+    del training_pool
+
+    object_configs = _object_configs(payload["config"])
+    heldout_all, heldout_labels, condition_reference = _render_condition_reference(
+        payload["config"],
+        condition_manifest=manifest_path,
+        object_configs=object_configs,
+        count_per_class=reference_count,
+        seed=reference_seed,
+    )
+    heldout_images = heldout_all[heldout_labels == requested_class]
+    generated_prediction = _infer(
+        model,
+        generated_images,
+        device=device,
+        batch_size=batch_size,
+    )
+    training_prediction = _infer(
+        model,
+        training_images.astype(np.float32) / 255.0,
+        device=device,
+        batch_size=batch_size,
+    )
+    heldout_prediction = _infer(
+        model,
+        heldout_images.astype(np.float32) / 255.0,
+        device=device,
+        batch_size=batch_size,
+    )
+
+    def factor_matrix(prediction: Mapping[str, np.ndarray]) -> np.ndarray:
+        return _joint_factor_matrix(_factor_arrays(prediction))
+
+    return evaluate_memorization(
+        generated_images=np.rint(generated_images * 255.0).astype(np.uint8),
+        generated_factors=factor_matrix(generated_prediction),
+        generated_features=generated_prediction["features"],
+        training_images=training_images,
+        training_factors=factor_matrix(training_prediction),
+        training_features=training_prediction["features"],
+        heldout_images=heldout_images,
+        heldout_factors=factor_matrix(heldout_prediction),
+        heldout_features=heldout_prediction["features"],
+        output_dir=output_dir,
+        generated_class_ids=np.full(len(generated_images), requested_class, dtype=np.int64),
+        source_revision=revision,
+        context={
+            "condition_id": manifest.condition_id,
+            "condition_manifest": str(manifest_path),
+            "requested_class": requested_class,
+            "object_id": entry.object_id,
+            "dimension_id": entry.dimension_id,
+            "training_unique_count": int(entry.count),
+            "heldout_count": reference_count,
+            "heldout_seed": reference_seed,
+            "generated_samples_path": str(samples_snapshot["path"]),
+            "generated_labels_path": str(labels_snapshot["path"]),
+            "training_images_path": str(training_path),
+            "condition_reference": condition_reference,
+            **oracle_provenance,
+            "oracle_checkpoint_digest": str(payload["artifact_digest"]),
+            "oracle_gate_profile": str(gate["gate_profile"]),
+            "factor_space": "oracle normalized tx/ty/tz, azimuth sin/cos, elevation",
+            "generated_image_conversion": "clip model samples to [-1,1], map to uint8",
+            "master_pool_reads": int(entry.count),
+        },
+    )
 
 
 def calibrate_metric_controls(
