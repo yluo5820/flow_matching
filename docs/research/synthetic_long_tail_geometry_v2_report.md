@@ -940,3 +940,17 @@ a high class after seeing the identities. The clean fallback is a newly preregis
 all-ten-class bridge that treats representation-specific geometry estimates as
 competing predictors of frequency sensitivity rather than assuming one consensus ID
 ordering.
+
+That all-class fallback is now frozen and implemented. Its primary arm uses uniform
+class exposure and ten cyclic IR-100 support assignments, so each natural class occupies
+every support rank once while its retained subsets stay nested. The balanced reference
+and ten rotations form eleven discovery models. Raw-PCA and DINOv2-PCA are each crossed
+with TwoNN, two MLE-LID neighborhoods, participation ratio, and PCA-90 dimension; these
+ten geometry predictors are frozen separately and all will be reported.
+
+The first action is a balanced budget calibration at 2,000, 5,000, and, only if needed,
+10,000 updates. Rotation training is blocked until conditional accuracy exceeds 80% for
+every class and the preregistered convergence rule selects a common budget. A local CPU
+benchmark projected the 2,000-step training pass at about 40 minutes and was stopped at
+26 updates, so the actual calibration is handed to an MPS-capable user terminal. No
+Fashion-MNIST frequency outcome has yet been observed.

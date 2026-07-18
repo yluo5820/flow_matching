@@ -41,6 +41,7 @@ class LongTailedFashionMNIST:
     subset_seed: int = 0
     normalize: str = "minus_one_one"
     dequantize: bool = False
+    sampling_policy: str = "empirical"
     frequency_mapping_offset: int | None = None
     frequency_mapping_multiplier: int = 3
     diagnostic_pool_per_class: int = 0
@@ -52,6 +53,9 @@ class LongTailedFashionMNIST:
     _labels: torch.Tensor | None = field(default=None, init=False, repr=False)
     _selected_indices: np.ndarray | None = field(default=None, init=False, repr=False)
     _class_counts: tuple[int, ...] = field(default=(), init=False, repr=False)
+    _class_positions: tuple[torch.Tensor, ...] = field(
+        default=(), init=False, repr=False
+    )
     _class_ranks: tuple[int, ...] = field(default=(), init=False, repr=False)
     _probe_a_raw_images: torch.Tensor | None = field(default=None, init=False, repr=False)
     _probe_a_labels: torch.Tensor | None = field(default=None, init=False, repr=False)
@@ -65,6 +69,11 @@ class LongTailedFashionMNIST:
             raise ValueError("imbalance_type must be 'exp' or 'balanced'.")
         if not 0.0 < self.imbalance_factor <= 1.0:
             raise ValueError("imbalance_factor must be in (0, 1].")
+        if self.sampling_policy not in {"empirical", "class_balanced"}:
+            raise ValueError(
+                "Fashion-MNIST sampling_policy must be 'empirical' or "
+                "'class_balanced'."
+            )
         if self.frequency_mapping_offset is None and self.diagnostic_pool_per_class:
             raise ValueError(
                 "diagnostic_pool_per_class requires a frequency mapping offset."
@@ -92,7 +101,16 @@ class LongTailedFashionMNIST:
             raise ValueError("LongTailedFashionMNIST.sample requires n >= 1.")
         assert self._raw_images is not None
         assert self._labels is not None
-        indices = torch.randint(len(self._raw_images), (n,))
+        if self.sampling_policy == "empirical":
+            indices = torch.randint(len(self._raw_images), (n,))
+        else:
+            labels = torch.randint(self.num_classes, (n,))
+            indices = torch.empty(n, dtype=torch.long)
+            for class_id, positions in enumerate(self._class_positions):
+                mask = labels == class_id
+                count = int(mask.sum())
+                if count:
+                    indices[mask] = positions[torch.randint(len(positions), (count,))]
         images = _normalize_images(
             self._raw_images[indices],
             self.normalize,
@@ -136,6 +154,7 @@ class LongTailedFashionMNIST:
             "train": self.train,
             "normalize": self.normalize,
             "dequantize": self.dequantize,
+            "sampling_policy": self.sampling_policy,
             "image_shape": list(self.image_shape),
             "image_value_range": list(_image_value_range(self.normalize)),
             "num_classes": self.num_classes,
@@ -317,6 +336,10 @@ class LongTailedFashionMNIST:
         self._labels = torch.from_numpy(selected_labels.astype(np.int64, copy=True))
         self._class_counts = tuple(
             int(np.sum(selected_labels == class_id)) for class_id in range(self.num_classes)
+        )
+        self._class_positions = tuple(
+            torch.nonzero(self._labels == class_id, as_tuple=False).flatten()
+            for class_id in range(self.num_classes)
         )
 
 

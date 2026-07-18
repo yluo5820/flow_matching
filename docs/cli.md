@@ -48,7 +48,7 @@ When adding or changing a CLI:
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
-| `fm-lab-fashion-geometry-frequency` | Select a stable three-class Fashion-MNIST geometry bridge before outcome training. | Frozen Stage-0 YAML | probe manifest, raw/DINO features, ID stability records, fail-closed class-selection gate |
+| `fm-lab-fashion-geometry-frequency` | Run the gated Fashion-MNIST geometry-by-frequency bridge. | Frozen Stage-0 or Stage-1 YAML | geometry gate, all-class cyclic configs, budget gate, evaluations, response analysis |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
 | `fm-lab-long-tail-geometry-stage0` | Validate the counterfactual long-tail observation pipeline before measurement runs. | Ordinary-FM checkpoint and Stage-0 YAML config | fail-closed report, paired probe manifests, validated gradient rows |
 | `fm-lab-long-tail-geometry-observation0` | Establish the reproducible-gradient noise ceiling before any mapping experiment. | Locked Observation-0 preregistration and three raw-checkpoint runs | immutable manifests, checkpoint sketches, reliability table, noise-ceiling decision |
@@ -68,6 +68,32 @@ fm-lab-fashion-geometry-frequency \
 Remove `--dry-run` to extract the raw-PCA and DINOv2-PCA features and apply the frozen
 split-half/subsample stability rule. A failed selection gate is a valid scientific
 outcome and does not enable downstream training.
+
+The failed trio gate enables only the separately frozen all-class fallback. Inspect its
+eleven-condition primary design—one balanced reference and ten equal-exposure cyclic
+support rotations—without training:
+
+```bash
+fm-lab-fashion-geometry-frequency \
+  --config configs/fashion_mnist_geometry_frequency/stage1_all_classes.yaml \
+  stage1-plan --dry-run
+```
+
+Calibrate the balanced model sequentially at 2,000, 5,000, and, only if needed, 10,000
+steps. A later budget resumes exactly from the preceding checkpoint. The frequency
+commands fail closed until `stage1-calibration-status` selects a budget.
+
+```bash
+fm-lab-fashion-geometry-frequency \
+  --config configs/fashion_mnist_geometry_frequency/stage1_all_classes.yaml \
+  stage1-calibrate --training-steps 2000 --device auto
+```
+
+After the budget passes, `stage1-run --condition class_balanced_offset_00` runs one
+rotation, `stage1-run-all` runs all missing rotations, and `stage1-analyze` writes the
+classwise support responses and all ten preregistered geometry correlations. The full
+rotation command is intended for a user terminal when its projected runtime exceeds 30
+minutes.
 
 ## `fm-lab-synthetic-long-tail`
 

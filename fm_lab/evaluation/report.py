@@ -279,6 +279,20 @@ def _conditional_diagnostics(
     predicted = probabilities.argmax(axis=1)
     confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
     np.add.at(confusion, (labels, predicted), 1)
+    per_class = {}
+    for class_id in range(num_classes):
+        mask = labels == class_id
+        if not np.any(mask):
+            raise ValueError(
+                "Conditional diagnostics require generated samples from every class."
+            )
+        per_class[f"class_{class_id}"] = {
+            "sample_count": int(np.count_nonzero(mask)),
+            "requested_class_accuracy": float(np.mean(predicted[mask] == class_id)),
+            "mean_requested_class_probability": float(
+                np.mean(probabilities[mask, class_id])
+            ),
+        }
     return {
         "requested_class_accuracy": float(np.mean(predicted == labels)),
         "mean_requested_class_probability": float(
@@ -288,6 +302,7 @@ def _conditional_diagnostics(
             predicted, minlength=num_classes
         ).astype(int).tolist(),
         "confusion_matrix": confusion.tolist(),
+        "per_class": per_class,
     }
 
 

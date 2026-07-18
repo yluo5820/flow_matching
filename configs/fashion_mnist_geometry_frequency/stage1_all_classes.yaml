@@ -1,0 +1,40 @@
+experiment:
+  name: fashion_mnist_frequency_response_stage1
+  seed: 26072026
+
+stage0:
+  output_dir: outputs/fashion_mnist_geometry_frequency/stage0_class_selection
+
+data:
+  root: data/fashion_mnist
+  download: true
+  subset_seed: 26072026
+  diagnostic_pool_per_class: 1000
+  imbalance_factor: 0.01
+
+design:
+  frequency_multiplier: 3
+  rotation_offsets: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  # Unique support is the primary manipulated variable. Add empirical only in a
+  # separately frozen extension because it also changes class exposure.
+  sampling_policies: [class_balanced]
+
+training:
+  base_config: configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml
+  calibration:
+    steps: [2000, 5000, 10000]
+    min_class_accuracy: 0.8
+    max_macro_fid_relative_improvement: 0.1
+    max_accuracy_improvement: 0.02
+
+evaluation:
+  samples_per_class: 1000
+  classifier_checkpoint: artifacts/fashion_mnist_lt_evaluator.pt
+  classifier_steps: 1000
+  classifier_minimum_accuracy: 0.9
+  repeats: 2
+  kid_subsets: 20
+
+output:
+  protocol_dir: outputs/fashion_mnist_geometry_frequency/stage1_all_classes
+  runs_dir: runs/fashion_mnist_geometry_frequency/stage1_all_classes

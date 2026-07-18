@@ -117,6 +117,7 @@ def build_target(config: dict[str, Any]):
             subset_seed=int(data_config.get("subset_seed", 0)),
             normalize=str(data_config.get("normalize", "minus_one_one")),
             dequantize=bool(data_config.get("dequantize", False)),
+            sampling_policy=str(data_config.get("sampling_policy", "empirical")),
             frequency_mapping_offset=(
                 int(frequency_mapping["offset"])
                 if "offset" in frequency_mapping

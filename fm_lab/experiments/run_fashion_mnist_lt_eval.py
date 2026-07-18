@@ -61,6 +61,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imbalance-factor", type=float, default=0.01)
+    parser.add_argument(
+        "--class-counts",
+        default=None,
+        help=(
+            "Comma-separated unique training support for classes 0..9. Required for "
+            "frequency rotations; otherwise the legacy monotone IR counts are used."
+        ),
+    )
     parser.add_argument("--samples-per-class", type=int, default=1000)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--repeats", type=int, default=2)
@@ -78,7 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     generated, real = _resolve_feature_caches(args)
     _validate_cache_pair(generated, real)
     _validate_balanced_labels(generated.labels, samples_per_class=args.samples_per_class)
-    class_counts = _long_tail_class_counts(args.imbalance_factor)
+    class_counts = _resolve_class_counts(args.class_counts, args.imbalance_factor)
     report = evaluate_feature_caches(
         generated,
         real,
@@ -99,6 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "benchmark": "fashion_mnist_lt",
             "samples_per_class": args.samples_per_class,
             "imbalance_factor": args.imbalance_factor,
+            "class_counts": class_counts,
             "reference_split": "official_test",
         }
     )
@@ -307,6 +316,18 @@ def _long_tail_class_counts(imbalance_factor: float) -> list[int]:
         int(_TRAIN_CLASS_COUNT * imbalance_factor ** (class_id / (_NUM_CLASSES - 1.0)))
         for class_id in range(_NUM_CLASSES)
     ]
+
+
+def _resolve_class_counts(serialized: str | None, imbalance_factor: float) -> list[int]:
+    if serialized is None:
+        return _long_tail_class_counts(imbalance_factor)
+    try:
+        counts = [int(value.strip()) for value in serialized.split(",")]
+    except ValueError as exc:
+        raise ValueError("--class-counts must be comma-separated integers.") from exc
+    if len(counts) != _NUM_CLASSES or any(value <= 0 for value in counts):
+        raise ValueError("--class-counts must contain ten positive integers.")
+    return counts
 
 
 def _image_range(normalize: str) -> tuple[float, float]:

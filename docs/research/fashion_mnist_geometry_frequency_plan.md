@@ -225,32 +225,65 @@ Therefore the proposed low/middle/high three-class outcome experiment is blocked
 thresholds will not be relaxed after seeing class identities. The scientifically clean
 fallback is to retain all ten classes and treat representation-specific geometry scores
 as competing predictors of frequency response, rather than forcing one consensus ID
-ordering. That fallback requires a new frozen outcome design before training.
+ordering.
 
-## Required implementation before any outcome run
+## Stage-1 all-class fallback
 
-- Add a three-class Fashion-MNIST adapter with an immutable original-to-conditional
-  label map and disjoint 500/500/5,000 splits.
-- Add `empirical` and `class_balanced` sampling policies to the Fashion target.
-- Add the split-half/subsample stability aggregator and selection gate on top of the
-  existing raw-pixel and DINO ID outputs.
-- Extend the Fashion evaluator to subset official-test features by original label while
-  evaluating remapped conditional labels.
-- Add an orchestrator that writes immutable manifests/configs, lists all seven commands
-  in dry-run mode, records backend and seeds, resumes safely, and writes the crossed
-  analysis into the living research report.
-- Unit-test nested support, probe exclusion, cyclic counts, label provenance, sampling
-  exposure, selection failure, and evaluator label mapping before downloading data or
-  training.
+The fallback is frozen in
+`configs/fashion_mnist_geometry_frequency/stage1_all_classes.yaml`. It does not turn the
+failed consensus score into a softer selection rule. Instead, it freezes each of the
+two representations crossed with all five estimators as ten competing predictors. The
+median Stage-0 percentile rank over both probes and 100 subsamples is recorded for every
+class and predictor before outcomes are generated. All ten correlations are reported;
+none may be selected because it fits the outcome.
+
+The primary causal manipulation is unique support under equal expected class exposure.
+There is one balanced `(5000, ..., 5000)` reference and ten cyclic IR-100 mappings. In
+the rotation set, each class occupies each of the support ranks
+`[5000, 2997, 1796, 1077, 645, 387, 232, 139, 83, 50]` exactly once. The retained image
+sets are nested within class and the 1,000 diagnostic images used by Stage 0 never enter
+training. Uniform class sampling prevents the number of gradient presentations from
+changing with unique support.
+
+The ordinary empirical-sampling arm is deliberately absent from the primary YAML. It
+would alter support and exposure together, double the training cost, and repeat an
+exposure effect already established synthetically. It remains an optional separately
+frozen extension if the equal-exposure response justifies it.
+
+### Frozen Stage-1 hypotheses and evidence rules
+
+- H1, causal support effect: at least eight of ten classes must have both worse
+  tail-versus-head classwise FID and worse tail-versus-head classwise recall.
+- H2, geometry sensitivity: within a representation, at least four of five frozen
+  estimators must correlate positively with both FID and recall degradation, and the
+  median Spearman correlation must be at least 0.5 for both endpoints.
+- Requested-class accuracy is a diagnostic endpoint. Results are blocked if conditional
+  generation has not reached 80% accuracy for every class during budget calibration.
+- No correlation p-value or model-seed uncertainty claim is made in the discovery run.
+  Evaluation repeats quantify sample-resampling variation only.
+
+The balanced budget gate checks 2,000 against 5,000 steps and, if necessary, 5,000
+against 10,000. It selects the earlier budget only when macro classwise FID improves by
+less than 10%, requested-class accuracy improves by less than two percentage points,
+and every class already exceeds 80% accuracy. If neither comparison passes, 10,000
+steps is allowed only when all classes exceed 80% accuracy. Outcome rotations cannot
+start before this gate passes.
+
+The protocol, 100 frozen class-predictor rows, eleven generated configs, and cyclic
+condition manifest have been materialized under
+`outputs/fashion_mnist_geometry_frequency/stage1_all_classes`. A sandbox CPU benchmark
+projected the 2,000-step calibration at roughly 40 minutes, so the incomplete 26-step
+benchmark was stopped and preserved separately; the real calibration is assigned to an
+MPS-capable user terminal under the 30-minute handoff rule.
 
 ## Interpretation boundary
 
-This experiment can show that a reproducible class-geometry score predicts sensitivity
-to support or exposure. It cannot establish that estimated ID is the causal property.
+This experiment can show that a preregistered class-geometry measurement predicts
+sensitivity to support. It cannot establish that estimated ID is the causal property.
 Class identity remains bundled with multimodality, curvature, topology, nuisance
 variation, and semantic ambiguity. Frequency rotation makes the frequency contrasts
 within-class and therefore causal; the geometry contrast remains an observational
-comparison across three naturally different classes.
+comparison across ten naturally different classes.
 
 If a revised all-class bridge is successful, freeze the protocol and repeat it on
 CIFAR-10. Do not retune the geometry scores or endpoints on CIFAR-10.

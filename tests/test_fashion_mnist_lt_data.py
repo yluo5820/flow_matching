@@ -123,6 +123,7 @@ def test_same_class_frequency_subsets_are_nested_across_mappings() -> None:
             for smaller, larger in zip(ordered, ordered[1:], strict=False)
         )
 
+
 def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
     write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
 
@@ -260,3 +261,25 @@ def test_fashion_mnist_sampling_keeps_images_and_labels_aligned(tmp_path: Path) 
 
     assert images.shape == (20, 28 * 28)
     assert torch.equal(torch.round(images[:, 0] * 255).long(), labels)
+
+
+def test_class_balanced_sampling_changes_exposure_not_unique_support(
+    tmp_path: Path,
+) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
+    target = LongTailedFashionMNIST(
+        root=tmp_path,
+        imbalance_factor=0.01,
+        subset_seed=7,
+        normalize="zero_one",
+        sampling_policy="class_balanced",
+    )
+
+    torch.manual_seed(3)
+    images, labels = target.sample_with_labels(20_000)
+    sampled_counts = torch.bincount(labels, minlength=10)
+
+    assert target.class_counts == (100, 59, 35, 21, 12, 7, 4, 2, 1, 1)
+    assert torch.all(torch.abs(sampled_counts - 2000) < 175)
+    assert torch.equal(torch.round(images[:, 0] * 255).long(), labels)
+    assert target.metadata()["sampling_policy"] == "class_balanced"

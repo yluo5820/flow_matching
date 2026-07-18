@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -6,7 +7,12 @@ import pytest
 
 from fm_lab.diagnostics.mnist_eval import _classifier_checkpoint_path
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
-from fm_lab.experiments.run_fashion_mnist_lt_eval import _sha256_file, main, parse_args
+from fm_lab.experiments.run_fashion_mnist_lt_eval import (
+    _resolve_class_counts,
+    _sha256_file,
+    main,
+    parse_args,
+)
 
 
 def _cache(
@@ -195,6 +201,12 @@ def test_cached_fashion_cli_writes_balanced_report(tmp_path) -> None:
     report_text = (output_dir / "metrics.json").read_text()
     assert "macro_classwise_fid" in report_text
     assert "reference_calibration" in report_text
+    report = json.loads(report_text)
+    assert report["conditional"]["per_class"]["class_0"]["sample_count"] == 2
+    assert (
+        report["conditional"]["per_class"]["class_0"]["requested_class_accuracy"]
+        == 1.0
+    )
 
 
 def test_sha256_file_changes_when_generated_content_changes(tmp_path) -> None:
@@ -204,3 +216,12 @@ def test_sha256_file_changes_when_generated_content_changes(tmp_path) -> None:
     path.write_bytes(b"second")
 
     assert _sha256_file(path) != first
+
+
+def test_frequency_rotation_class_counts_are_explicit() -> None:
+    counts = _resolve_class_counts("50,83,139,232,387,645,1077,1796,2997,5000", 0.01)
+
+    assert counts == [50, 83, 139, 232, 387, 645, 1077, 1796, 2997, 5000]
+
+    with pytest.raises(ValueError, match="ten positive"):
+        _resolve_class_counts("5000,50", 0.01)
