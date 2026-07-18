@@ -81,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
     bounded_geometry.add_argument("--query-count", type=int, default=8)
     bounded_geometry.add_argument("--num-directions", type=int, default=16)
     bounded_geometry.add_argument("--nfe", type=int, default=32)
+    factor_identity = subparsers.add_parser("factor-identity-control")
+    _device(factor_identity)
+    _dry_run(factor_identity)
+    factor_identity.add_argument("--training-steps", type=int, default=2_000)
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -159,6 +163,12 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
             query_count=args.query_count,
             num_directions=args.num_directions,
             nfe=args.nfe,
+        )
+    if args.stage == "factor-identity-control":
+        return runner.factor_identity_control(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
         )
     if args.stage == "smoke":
         return runner.smoke(

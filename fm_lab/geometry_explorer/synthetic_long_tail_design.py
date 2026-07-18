@@ -30,6 +30,7 @@ from fm_lab.utils.logging import write_json
 OBJECT_IDS = ("stepped_monument", "crooked_arch", "three_arm_vane")
 DIMENSION_IDS = ("high", "medium", "low")
 BOUNDED_AZIMUTH_DIMENSION_ID = "high_bounded_azimuth"
+VIEW_DEPTH_DIMENSION_ID = "depth_bounded_view"
 BOUNDED_ROTATION_CONDITION_ID = "g0_balanced_bounded_azimuth"
 BOUNDED_ROTATION_G2_CONDITION_ID = "g2_balanced_bounded_azimuth"
 BOUNDED_ROTATION_MEDIUM_CONDITION_ID = "g0_bounded_azimuth_medium"
@@ -41,6 +42,9 @@ BOUNDED_ROTATION_CONDITION_IDS = frozenset(
         BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
         BOUNDED_ROTATION_TAIL_CONDITION_ID,
     }
+)
+FACTOR_IDENTITY_CONDITION_IDS = frozenset(
+    f"g{geometry}_balanced_view_depth_3d" for geometry in range(3)
 )
 FACTOR_COLUMNS = ("tx", "ty", "tz", "azimuth", "elevation")
 GEOMETRY_MAPPINGS = (
@@ -144,6 +148,19 @@ def build_factor_space(level: str) -> LatentFactorSpace:
             ],
             name="translation_xyz_bounded_azimuth_view",
         )
+    if level == VIEW_DEPTH_DIMENSION_ID:
+        return ProductFactorSpace(
+            [
+                CameraDepthTranslationInterval(bounds=(-0.75, 0.75)),
+                BoundedLookAtView(
+                    azimuth_bounds=(
+                        -BOUNDED_AZIMUTH_HALF_RANGE,
+                        BOUNDED_AZIMUTH_HALF_RANGE,
+                    )
+                ),
+            ],
+            name="depth_bounded_azimuth_view",
+        )
     raise ValueError(f"Unsupported dimension level: {level}")
 
 
@@ -199,6 +216,49 @@ def bounded_rotation_followup_condition_specs(
             frequency_mapping="class_0_tail_only",
         ),
     )
+
+
+def factor_identity_condition_specs(
+    replicate: int,
+    *,
+    count: int = 5000,
+) -> tuple[ConditionManifest, ...]:
+    """Replace each rotation's 3D XYZ class with 3D depth-plus-view in turn."""
+
+    class_count = int(count)
+    if class_count <= 0:
+        raise ValueError("Factor-identity class count must be positive.")
+    manifests = []
+    for geometry_index, baseline_dimensions in enumerate(GEOMETRY_MAPPINGS):
+        dimensions = tuple(
+            VIEW_DEPTH_DIMENSION_ID if value == "medium" else value for value in baseline_dimensions
+        )
+        classes = tuple(
+            ConditionClass(
+                class_id=class_id,
+                object_id=object_id,
+                dimension_id=dimension_id,
+                true_dimension=int(build_factor_space(dimension_id).dim),
+                count=class_count,
+                image_path="",
+                factor_path="",
+            )
+            for class_id, (object_id, dimension_id) in enumerate(
+                zip(OBJECT_IDS, dimensions, strict=True)
+            )
+        )
+        manifests.append(
+            ConditionManifest(
+                condition_id=f"g{geometry_index}_balanced_view_depth_3d",
+                replicate=int(replicate),
+                geometry_mapping=f"geometry_{geometry_index}_view_depth_3d",
+                frequency_mapping="balanced",
+                image_shape=(3, 32, 32),
+                classes=classes,
+                config_hash="",
+            )
+        )
+    return tuple(manifests)
 
 
 def _bounded_rotation_spec(
@@ -331,6 +391,8 @@ def _geometry_normalization_scales(dimension_id: str) -> tuple[float, ...]:
         return (*translation, float(np.pi), 0.5)
     if dimension_id == BOUNDED_AZIMUTH_DIMENSION_ID:
         return (*translation, BOUNDED_AZIMUTH_HALF_RANGE, 0.5)
+    if dimension_id == VIEW_DEPTH_DIMENSION_ID:
+        return (0.75, BOUNDED_AZIMUTH_HALF_RANGE, 0.5)
     raise ValueError(f"Unsupported dimension level: {dimension_id}")
 
 
@@ -926,6 +988,221 @@ def build_bounded_rotation_followups(
         "root": followup_root,
         "manifests": manifests,
         "followup_spec": followup_root / "followup_spec.json",
+    }
+
+
+def build_factor_identity_control(
+    config: dict[str, Any],
+    root: str | Path,
+    *,
+    replicate: int = 0,
+) -> dict[str, Any]:
+    """Render depth-plus-view pools and build three matched 3D interventions."""
+
+    master_count = int(config["master_count"])
+    image_size = int(config["image_size"])
+    replicate_id = int(replicate)
+    if master_count <= 0 or image_size <= 0:
+        raise ValueError("master_count and image_size must be positive.")
+    if replicate_id < 0:
+        raise ValueError("replicate must be non-negative.")
+    render_batch_size = int(config.get("render", {}).get("render_batch_size", 128))
+    if render_batch_size <= 0:
+        raise ValueError("render.render_batch_size must be positive.")
+
+    replicate_root = Path(root).resolve() / f"replicate_{replicate_id:02d}"
+    canonical_pool_root = replicate_root / "pools"
+    required_cells = tuple(
+        canonical_pool_root / object_id / dimension_id
+        for object_id in OBJECT_IDS
+        for dimension_id in DIMENSION_IDS
+    )
+    for cell_dir in required_cells:
+        for filename in ("images.npy", "factors.npy"):
+            if not (cell_dir / filename).is_file():
+                raise FileNotFoundError(
+                    f"Canonical pool is missing before factor-identity control: "
+                    f"{cell_dir / filename}"
+                )
+
+    control_root = replicate_root / "factor_identity_control"
+    _refuse_existing(control_root, kind="Factor-identity control")
+    staging_root = Path(tempfile.mkdtemp(prefix=".factor-identity-", dir=replicate_root))
+    condition_dir = staging_root / "conditions"
+    final_condition_dir = control_root / "conditions"
+    published = False
+    try:
+        condition_dir.mkdir(parents=True)
+        factor = build_factor_space(VIEW_DEPTH_DIMENSION_ID)
+        object_configs = _object_configs(config)
+        seeds = {}
+        for object_index, object_id in enumerate(OBJECT_IDS):
+            seed = int(config["seed"]) + replicate_id * 100_000 + object_index * 1_000 + 10
+            seeds[object_id] = seed
+            values = sample_values(factor.sample(master_count, seed=seed))
+            cell_dir = staging_root / "pools" / object_id / VIEW_DEPTH_DIMENSION_ID
+            cell_dir.mkdir(parents=True)
+            image_path = cell_dir / "images.npy"
+            factor_path = cell_dir / "factors.npy"
+            images = np.lib.format.open_memmap(
+                image_path,
+                mode="w+",
+                dtype=np.uint8,
+                shape=(master_count, 3, image_size, image_size),
+            )
+            factors = np.lib.format.open_memmap(
+                factor_path,
+                mode="w+",
+                dtype=np.float32,
+                shape=(master_count, len(FACTOR_COLUMNS)),
+            )
+            render_map = _render_map(config, object_configs[object_id], factor)
+            for start in range(0, master_count, render_batch_size):
+                stop = min(master_count, start + render_batch_size)
+                rendered = _as_hwc_batch(
+                    render_map.render_batch(
+                        values[start:stop],
+                        batch_size=render_batch_size,
+                    ),
+                    image_size=image_size,
+                )
+                images[start:stop] = np.rint(
+                    np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0
+                ).astype(np.uint8)
+                factors[start:stop] = canonical_factor_rows(factor, values[start:stop])
+            images.flush()
+            factors.flush()
+            del images, factors
+
+        for object_id in OBJECT_IDS:
+            for dimension_id in DIMENSION_IDS:
+                link = staging_root / "pools" / object_id / dimension_id
+                link.parent.mkdir(parents=True, exist_ok=True)
+                target = canonical_pool_root / object_id / dimension_id
+                os.symlink(os.path.relpath(target, link.parent), link, target_is_directory=True)
+
+        renderer_check = _factor_identity_renderer_check(config)
+        if (
+            config.get("renderer_profile") == "calibrated_v2"
+            and renderer_check["passed"] is not True
+        ):
+            raise ValueError("Factor-identity view-depth renderer failed its local rank check.")
+        control_spec = {
+            "schema_version": 1,
+            "replicate": replicate_id,
+            "baseline_factor_identity": "translation_xyz",
+            "intervention_factor_identity": "depth_bounded_azimuth_elevation",
+            "nominal_dimension": 3,
+            "class_count": master_count,
+            "condition_ids": sorted(FACTOR_IDENTITY_CONDITION_IDS),
+            "seeds": seeds,
+            "renderer_check": renderer_check,
+            "factor_bounds": {
+                "depth": [-0.75, 0.75],
+                "azimuth": [
+                    -BOUNDED_AZIMUTH_HALF_RANGE,
+                    BOUNDED_AZIMUTH_HALF_RANGE,
+                ],
+                "elevation_degrees": [-30.0, 30.0],
+            },
+            "pairing": (
+                "Each intervention changes only the balanced rotation's 3D class; "
+                "the 1D and 5D class pools, training seed, and sampling seed are unchanged."
+            ),
+            "interpretation_limit": (
+                "This isolates factor identity at fixed nominal dimension, not equal "
+                "pixel-space arc length for every factor and object."
+            ),
+        }
+        control_hash = _config_hash({"base_config": config, "control": control_spec})
+        manifests = {}
+        for spec in factor_identity_condition_specs(replicate_id, count=master_count):
+            classes = tuple(
+                replace(
+                    entry,
+                    image_path=os.path.relpath(
+                        control_root
+                        / "pools"
+                        / entry.object_id
+                        / entry.dimension_id
+                        / "images.npy",
+                        final_condition_dir,
+                    ),
+                    factor_path=os.path.relpath(
+                        control_root
+                        / "pools"
+                        / entry.object_id
+                        / entry.dimension_id
+                        / "factors.npy",
+                        final_condition_dir,
+                    ),
+                )
+                for entry in spec.classes
+            )
+            manifest = replace(
+                spec,
+                image_shape=(3, image_size, image_size),
+                classes=classes,
+                config_hash=control_hash,
+            )
+            filename = f"{manifest.condition_id}.json"
+            manifest.write(condition_dir / filename)
+            manifests[manifest.condition_id] = final_condition_dir / filename
+        write_json(
+            control_spec | {"config_hash": control_hash},
+            staging_root / "control_spec.json",
+        )
+        staging_root.replace(control_root)
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+    return {
+        "root": control_root,
+        "manifests": manifests,
+        "control_spec": control_root / "control_spec.json",
+    }
+
+
+def _factor_identity_renderer_check(config: dict[str, Any]) -> dict[str, Any]:
+    count = min(16, int(config["master_count"]))
+    epsilon = float(config.get("calibration", {}).get("finite_difference_epsilon", 0.02))
+    threshold = float(config.get("calibration", {}).get("relative_singular_threshold", 0.02))
+    required_fraction = float(config.get("calibration", {}).get("full_rank_fraction", 0.95))
+    records = []
+    for object_index, object_id in enumerate(OBJECT_IDS):
+        _, tangents, _, _ = build_local_geometry_queries(
+            config,
+            object_id=object_id,
+            dimension_id=VIEW_DEPTH_DIMENSION_ID,
+            count=count,
+            seed=int(config["seed"]) + 9_300_003 + object_index * 1_000,
+            epsilon=epsilon,
+        )
+        singular = np.linalg.svd(tangents.transpose(0, 2, 1), compute_uv=False)
+        ranks = np.sum(singular > singular[:, :1] * threshold, axis=1)
+        condition = np.divide(
+            singular[:, 0],
+            singular[:, -1],
+            out=np.full(len(singular), np.inf, dtype=np.float64),
+            where=singular[:, -1] > 0.0,
+        )
+        records.append(
+            {
+                "object_id": object_id,
+                "query_count": count,
+                "full_rank_fraction": float(np.mean(ranks == 3)),
+                "median_singular_values": [float(value) for value in np.median(singular, axis=0)],
+                "median_condition_number": float(np.median(condition)),
+            }
+        )
+    return {
+        "passed": all(item["full_rank_fraction"] >= required_fraction for item in records),
+        "dimension": 3,
+        "relative_singular_threshold": threshold,
+        "required_full_rank_fraction": required_fraction,
+        "records": records,
     }
 
 

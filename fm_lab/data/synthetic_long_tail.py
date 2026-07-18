@@ -16,6 +16,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_CONDITION_ID,
     BOUNDED_ROTATION_CONDITION_IDS,
     FACTOR_COLUMNS,
+    FACTOR_IDENTITY_CONDITION_IDS,
     ConditionClass,
     ConditionManifest,
     bounded_rotation_condition_spec,
@@ -23,6 +24,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     build_condition_specs,
     build_factor_space,
     canonical_factor_rows,
+    factor_identity_condition_specs,
 )
 
 
@@ -312,6 +314,11 @@ def _expected_condition_manifest(manifest: ConditionManifest) -> ConditionManife
         expected = {
             condition.condition_id: condition
             for condition in bounded_rotation_followup_condition_specs(manifest.replicate)
+        }.get(manifest.condition_id)
+    elif manifest.condition_id in FACTOR_IDENTITY_CONDITION_IDS:
+        expected = {
+            condition.condition_id: condition
+            for condition in factor_identity_condition_specs(manifest.replicate)
         }.get(manifest.condition_id)
     else:
         expected = {

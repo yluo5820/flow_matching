@@ -36,6 +36,7 @@ from fm_lab.geometry_explorer.synthetic_factor_oracle import (
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_AZIMUTH_DIMENSION_ID,
     OBJECT_IDS,
+    VIEW_DEPTH_DIMENSION_ID,
     ConditionManifest,
     _as_hwc_batch,
     _render_map,
@@ -52,6 +53,7 @@ _CONTROL_CLASS_FILENAME = "metric_controls_by_class.csv"
 _ACTIVE_FACTORS_BY_DIMENSION = {
     "high": FACTOR_NAMES,
     BOUNDED_AZIMUTH_DIMENSION_ID: FACTOR_NAMES,
+    VIEW_DEPTH_DIMENSION_ID: ("tz", "azimuth", "elevation"),
     "medium": ("tx", "ty", "tz"),
     "low": ("tz",),
 }

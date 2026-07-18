@@ -16,7 +16,9 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_TAIL_CONDITION_ID,
     DIMENSION_IDS,
     FACTOR_COLUMNS,
+    FACTOR_IDENTITY_CONDITION_IDS,
     OBJECT_IDS,
+    VIEW_DEPTH_DIMENSION_ID,
     ConditionManifest,
     _object_configs,
     _render_map,
@@ -24,6 +26,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     build_bounded_rotation_followups,
     build_condition_manifests,
     build_condition_specs,
+    build_factor_identity_control,
     build_factor_space,
     build_local_geometry_queries,
     build_master_pools,
@@ -308,3 +311,39 @@ def test_bounded_rotation_followups_render_one_pool_and_publish_three_conditions
 
     with pytest.raises(FileExistsError, match="Bounded-rotation follow-up"):
         build_bounded_rotation_followups(config, tmp_path, replicate=0)
+
+
+def test_factor_identity_control_replaces_each_objects_three_dimensional_class(
+    tmp_path: Path,
+) -> None:
+    config = _design_config(master_count=20, counts=(20, 5, 2), image_size=16)
+    build_master_pools(config, tmp_path, replicate=0)
+
+    artifacts = build_factor_identity_control(config, tmp_path, replicate=0)
+
+    assert set(artifacts["manifests"]) == FACTOR_IDENTITY_CONDITION_IDS
+    changed_objects = []
+    for geometry in range(3):
+        condition_id = f"g{geometry}_balanced_view_depth_3d"
+        manifest = ConditionManifest.read(artifacts["manifests"][condition_id])
+        assert [entry.count for entry in manifest.classes] == [20, 20, 20]
+        changed = [
+            entry for entry in manifest.classes if entry.dimension_id == VIEW_DEPTH_DIMENSION_ID
+        ]
+        assert len(changed) == 1
+        changed_objects.append(changed[0].object_id)
+        target = SyntheticLongTailImages(artifacts["manifests"][condition_id])
+        assert target.class_counts == (20, 20, 20)
+    assert set(changed_objects) == set(OBJECT_IDS)
+
+    factors = np.load(
+        tmp_path
+        / "replicate_00/factor_identity_control/pools/stepped_monument"
+        / VIEW_DEPTH_DIMENSION_ID
+        / "factors.npy"
+    )
+    assert np.all(np.isnan(factors[:, :2]))
+    assert np.all(np.isfinite(factors[:, 2:]))
+
+    with pytest.raises(FileExistsError, match="Factor-identity control"):
+        build_factor_identity_control(config, tmp_path, replicate=0)

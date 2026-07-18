@@ -17,6 +17,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_CONDITION_ID,
     build_bounded_rotation_control,
     build_condition_manifests,
+    build_factor_identity_control,
     build_master_pools,
 )
 from fm_lab.utils.config import load_config
@@ -246,6 +247,34 @@ def test_reduced_writer_accepts_paired_bounded_rotation_manifest(tmp_path: Path)
     assert config_path.stem == BOUNDED_ROTATION_CONDITION_ID
     assert Path(config["data"]["condition_manifest"]) == artifacts["manifest"]
     assert config["experiment"]["output_dir"].endswith(BOUNDED_ROTATION_CONDITION_ID)
+
+
+def test_reduced_writer_accepts_factor_identity_control_manifest(tmp_path: Path) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    matrix_paths = write_condition_training_configs(**training_kwargs(manifests, tmp_path))
+    source_path = next(path for path in matrix_paths if path.stem == "g0_balanced")
+    artifacts = build_factor_identity_control(tiny_factorial_config(), tmp_path, replicate=0)
+    manifest = artifacts["manifests"]["g0_balanced_view_depth_3d"]
+
+    config_path = write_pilot_training_config(
+        source_config_path=source_path,
+        output_root=tmp_path / "factor-identity-config",
+        run_root=tmp_path / "factor-identity-runs",
+        pilot={
+            "training_steps": 100,
+            "batch_size": 64,
+            "warmup_steps": 10,
+            "log_every": 5,
+            "samples_per_class": 3,
+            "nfe": 8,
+            "sample_batch_size": 3,
+            "n_trajectories": 3,
+        },
+        condition_manifest_override=manifest,
+    )
+
+    assert config_path.stem == "g0_balanced_view_depth_3d"
+    assert Path(load_config(config_path)["data"]["condition_manifest"]) == manifest
 
 
 def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path) -> None:

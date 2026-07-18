@@ -29,14 +29,18 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_G2_CONDITION_ID,
     BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
     BOUNDED_ROTATION_TAIL_CONDITION_ID,
+    FACTOR_IDENTITY_CONDITION_IDS,
+    VIEW_DEPTH_DIMENSION_ID,
 )
 from fm_lab.utils.config import load_config, save_config
 
 _BALANCED_DATASET_SIZE = 15_000
 _IMBALANCED_DATASET_SIZE = 5_550
 _IMAGE_SHAPE = (3, 32, 32)
+_CONTROL_CONDITION_IDS = BOUNDED_ROTATION_CONDITION_IDS | FACTOR_IDENTITY_CONDITION_IDS
+_CONTROL_CONDITION_PATTERN = "|".join(map(re.escape, _CONTROL_CONDITION_IDS))
 _CONDITION_ID_PATTERN = re.compile(
-    rf"(?:g[0-2]_(?:balanced|f[0-2])|{'|'.join(map(re.escape, BOUNDED_ROTATION_CONDITION_IDS))})\Z"
+    rf"(?:g[0-2]_(?:balanced|f[0-2])|{_CONTROL_CONDITION_PATTERN})\Z"
 )
 _CANONICAL_CONDITION_IDS = frozenset(
     f"g{geometry}_{frequency}"
@@ -504,15 +508,20 @@ def _read_condition_plan(raw_path: str | Path) -> _ConditionPlan:
         path.parent.name == "conditions" and path.parent.parent.name == expected_replicate_dir
     )
     control_location = (
-        condition_id in BOUNDED_ROTATION_CONDITION_IDS
+        condition_id in BOUNDED_ROTATION_CONDITION_IDS | FACTOR_IDENTITY_CONDITION_IDS
         and path.parent.name == "conditions"
-        and path.parent.parent.name in {"bounded_rotation_control", "bounded_rotation_followups"}
+        and path.parent.parent.name
+        in {
+            "bounded_rotation_control",
+            "bounded_rotation_followups",
+            "factor_identity_control",
+        }
         and path.parent.parent.parent.name == expected_replicate_dir
     )
     if not canonical_location and not control_location:
         raise ValueError(
             "Synthetic manifest must be in replicate_XX/conditions or the approved "
-            "bounded-rotation control directory."
+            "matched-control directory."
         )
     if tuple(raw.get("image_shape", ())) != _IMAGE_SHAPE:
         raise ValueError("Synthetic training manifests must have image_shape [3, 32, 32].")
@@ -1751,6 +1760,154 @@ class SyntheticLongTailRunner:
             )
         return comparison
 
+    def factor_identity_control(
+        self,
+        *,
+        device: str,
+        training_steps: int = 2_000,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Replace each object's 3D translation class with 3D depth-plus-view."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        budget_id = f"steps_{steps:08d}"
+        experiment_id = "factor_identity_control"
+        control_root = self.output_root / "replicate_00" / experiment_id
+        manifest_root = control_root / "conditions"
+        control_spec_path = control_root / "control_spec.json"
+        run_specs = tuple(
+            {
+                "geometry": geometry,
+                "condition_id": f"g{geometry}_balanced_view_depth_3d",
+                "baseline_condition_id": f"g{geometry}_balanced",
+            }
+            for geometry in range(3)
+        )
+        commands = {}
+        for spec in run_specs:
+            condition_id = str(spec["condition_id"])
+            config_root = (
+                self.output_root
+                / "training_configs"
+                / experiment_id
+                / budget_id
+                / f"{condition_id}_set"
+            )
+            config_path = config_root / "replicate_00" / f"{condition_id}.yaml"
+            run_dir = self.run_root / experiment_id / budget_id / "replicate_00" / condition_id
+            commands[condition_id] = TrainingCommand(
+                replicate=0,
+                condition_id=condition_id,
+                config_path=config_path,
+                run_dir=run_dir,
+            )
+        if dry_run:
+            return {
+                "training_steps": steps,
+                "design": (
+                    "three matched balanced interventions; replace only each rotation's "
+                    "3D XYZ class with 3D depth plus bounded view"
+                ),
+                "estimated_runtime_minutes": "5-10 based on completed 2000-step runs",
+                "commands": [
+                    self._command_record(commands[str(spec["condition_id"])], device)
+                    | {"baseline_condition_id": spec["baseline_condition_id"]}
+                    for spec in run_specs
+                ],
+            }
+
+        if not control_spec_path.is_file():
+            from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+                build_factor_identity_control,
+            )
+
+            build_factor_identity_control(self.config, self.output_root, replicate=0)
+        if not control_spec_path.is_file():
+            raise FileNotFoundError(f"Factor-identity control spec is missing: {control_spec_path}")
+
+        pilot = copy.deepcopy(self.config["pilot"])
+        pilot["training_steps"] = steps
+        evaluations = {}
+        baselines = {}
+        artifact_paths = {}
+        for spec in run_specs:
+            condition_id = str(spec["condition_id"])
+            baseline_condition_id = str(spec["baseline_condition_id"])
+            manifest_path = manifest_root / f"{condition_id}.json"
+            SyntheticLongTailImages(manifest_path)
+            source_config_path = next(
+                path for path in self.config_paths()[0] if path.stem == baseline_condition_id
+            )
+            command = commands[condition_id]
+            if not command.config_path.is_file():
+                config_path = write_pilot_training_config(
+                    source_config_path=source_config_path,
+                    output_root=command.config_path.parents[1],
+                    run_root=command.run_dir.parents[1],
+                    pilot=pilot,
+                    condition_manifest_override=manifest_path,
+                )
+                command = TrainingCommand(
+                    replicate=0,
+                    condition_id=condition_id,
+                    config_path=config_path,
+                    run_dir=command.run_dir,
+                )
+                commands[condition_id] = command
+            stage = f"factor-identity-control-{budget_id}"
+            entry_id = f"{stage}:replicate-00:{condition_id}"
+            config_hash = _training_config_hash(command.config_path)
+            if not self.ledger.is_complete(entry_id, config_hash=config_hash):
+                self._run(command, device=device, stage=stage, resume=False)
+            evaluations[condition_id] = self._evaluate_factor_identity_run(
+                command=command,
+                device=device,
+                pilot=pilot,
+                ledger_key=f"{budget_id}:{condition_id}",
+            )
+            baseline_path = (
+                self._balanced_run_dir(baseline_condition_id, steps)
+                / "evaluation"
+                / "factor_metrics.json"
+            )
+            if not baseline_path.is_file():
+                raise FileNotFoundError(
+                    f"Factor-identity baseline evaluation is missing: {baseline_path}"
+                )
+            baselines[baseline_condition_id] = json.loads(baseline_path.read_text(encoding="utf-8"))
+            artifact_paths[condition_id] = {
+                "baseline": str(baseline_path),
+                "intervention": str(command.run_dir / "evaluation" / "factor_metrics.json"),
+            }
+
+        summary = _factor_identity_summary(
+            evaluations=evaluations,
+            baselines=baselines,
+            control_spec=json.loads(control_spec_path.read_text(encoding="utf-8")),
+            training_steps=steps,
+            artifact_paths=artifact_paths,
+        )
+        summary_path = self.output_root / "analysis" / experiment_id / f"{budget_id}.json"
+        if summary_path.is_file():
+            if json.loads(summary_path.read_text(encoding="utf-8")) != summary:
+                raise FileExistsError(
+                    f"Refusing to replace a different factor-identity summary: {summary_path}"
+                )
+        else:
+            _write_json_atomic(summary, summary_path)
+        summary_entry = f"factor-identity-control-summary:{budget_id}"
+        if not self.ledger.is_complete(summary_entry):
+            self.ledger.complete(
+                summary_entry,
+                {"summary": str(summary_path)},
+                metadata={
+                    "stage": "factor-identity-control-summary",
+                    "training_steps": steps,
+                },
+            )
+        return summary
+
     def _evaluate_bounded_followup_run(
         self,
         *,
@@ -1793,6 +1950,50 @@ class SyntheticLongTailRunner:
                 "stage": "bounded-rotation-followup-evaluation",
                 "condition": command.condition_id,
                 "training_sampling_policy": sampling_policy,
+            },
+        )
+        return evaluation
+
+    def _evaluate_factor_identity_run(
+        self,
+        *,
+        command: TrainingCommand,
+        device: str,
+        pilot: dict[str, Any],
+        ledger_key: str,
+    ) -> dict[str, Any]:
+        evaluation_dir = command.run_dir / "evaluation"
+        metrics_path = evaluation_dir / "factor_metrics.json"
+        if metrics_path.is_file():
+            return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+        from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+            evaluate_generated_distribution,
+        )
+
+        reduced_config = load_config(command.config_path)
+        count = int(pilot["samples_per_class"])
+        evaluation = evaluate_generated_distribution(
+            generated_root=command.run_dir,
+            oracle_checkpoint=self.output_root / "calibration" / "oracle" / "factor_oracle.pt",
+            oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+            output_dir=evaluation_dir,
+            device=device,
+            samples_per_class=count,
+            reference_samples_per_class=count,
+            seed=int(self.config["seed"]) + 8_000_000,
+            generated_seed=int(reduced_config["sampling"]["seed"]),
+            source_revision=_source_revision(),
+            clip_generated_to_value_range=True,
+            condition_manifest=reduced_config["data"]["condition_manifest"],
+            inference_batch_size=min(256, count),
+        )
+        self.ledger.complete(
+            f"factor-identity-control-evaluation:{ledger_key}",
+            {"evaluation": str(metrics_path)},
+            metadata={
+                "stage": "factor-identity-control-evaluation",
+                "condition": command.condition_id,
             },
         )
         return evaluation
@@ -2395,6 +2596,135 @@ def _bounded_rotation_followup_summary(
                 "optimization contexts."
             ),
         },
+    }
+
+
+def _factor_identity_summary(
+    *,
+    evaluations: dict[str, dict[str, Any]],
+    baselines: dict[str, dict[str, Any]],
+    control_spec: dict[str, Any],
+    training_steps: int,
+    artifact_paths: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    expected_interventions = FACTOR_IDENTITY_CONDITION_IDS
+    expected_baselines = {f"g{geometry}_balanced" for geometry in range(3)}
+    if set(evaluations) != expected_interventions or set(baselines) != expected_baselines:
+        raise ValueError("Factor-identity summary requires all three matched pairs.")
+    steps = _positive_int("training_steps", training_steps)
+    delta_metrics = (
+        "class_leakage_rate",
+        "off_renderer_rate",
+        "joint_valid_rate",
+        "active_multivariate_energy_distance",
+        "oracle_feature_fid",
+        "active_mean_normalized_wasserstein",
+        "active_mean_absolute_range_error",
+    )
+
+    def class_record(evaluation: dict[str, Any], class_id: int) -> dict[str, Any]:
+        item = next(
+            (
+                value
+                for value in evaluation.get("classes", [])
+                if int(value["requested_class"]) == class_id
+            ),
+            None,
+        )
+        if item is None:
+            raise ValueError(f"Factor-identity evaluation is missing class {class_id}.")
+        metrics = item["all_requested"]["metrics"]
+        active_names = tuple(str(value) for value in item["active_factor_names"])
+        marginal = metrics["factor_metrics"]
+        active_wasserstein = [
+            float(marginal[name]["normalized_wasserstein"]) for name in active_names
+        ]
+        active_ranges = [float(marginal[name]["central_range_ratio"]) for name in active_names]
+        return {
+            "class_id": class_id,
+            "object_id": str(item["object_id"]),
+            "target_dimension_id": str(item["target_dimension_id"]),
+            "true_dimension": int(item["true_dimension"]),
+            "active_factor_names": list(active_names),
+            "class_leakage_rate": float(item["validity"]["class_leakage_rate"]),
+            "off_renderer_rate": float(item["validity"]["off_renderer_rate"]),
+            "joint_valid_rate": float(item["validity"]["joint_valid_rate"]),
+            "active_multivariate_energy_distance": float(
+                metrics["active_factors"]["multivariate_energy_distance"]
+            ),
+            "oracle_feature_fid": float(metrics["oracle_feature_fid"]),
+            "active_mean_normalized_wasserstein": float(statistics.mean(active_wasserstein)),
+            "active_mean_absolute_range_error": float(
+                statistics.mean(abs(value - 1.0) for value in active_ranges)
+            ),
+            "active_factor_metrics": {name: marginal[name] for name in active_names},
+        }
+
+    comparisons = []
+    for geometry in range(3):
+        baseline_id = f"g{geometry}_balanced"
+        intervention_id = f"g{geometry}_balanced_view_depth_3d"
+        intervention_evaluation = evaluations[intervention_id]
+        target_item = next(
+            (
+                item
+                for item in intervention_evaluation.get("classes", [])
+                if item["target_dimension_id"] == VIEW_DEPTH_DIMENSION_ID
+            ),
+            None,
+        )
+        if target_item is None:
+            raise ValueError(f"Intervention {intervention_id} has no view-depth class.")
+        target_class = int(target_item["requested_class"])
+        baseline_record = class_record(baselines[baseline_id], target_class)
+        intervention_record = class_record(intervention_evaluation, target_class)
+        if baseline_record["object_id"] != intervention_record["object_id"]:
+            raise ValueError("Factor-identity target object changed within a paired comparison.")
+        comparisons.append(
+            {
+                "geometry_rotation": geometry,
+                "class_id": target_class,
+                "object_id": baseline_record["object_id"],
+                "translation_xyz": baseline_record,
+                "depth_bounded_view": intervention_record,
+                "view_depth_minus_translation": {
+                    name: float(intervention_record[name] - baseline_record[name])
+                    for name in delta_metrics
+                },
+                "unchanged_class_deltas": {
+                    str(class_id): {
+                        name: float(
+                            class_record(intervention_evaluation, class_id)[name]
+                            - class_record(baselines[baseline_id], class_id)[name]
+                        )
+                        for name in delta_metrics[:5]
+                    }
+                    for class_id in range(3)
+                    if class_id != target_class
+                },
+                "artifacts": artifact_paths[intervention_id],
+            }
+        )
+    return {
+        "schema_version": 1,
+        "training_steps": steps,
+        "design": (
+            "three paired balanced rotations; replace only the 3D XYZ-translation class "
+            "with 3D depth plus bounded azimuth/elevation"
+        ),
+        "delta_convention": "depth_bounded_view_minus_translation_xyz",
+        "control_spec": control_spec,
+        "comparisons": comparisons,
+        "mean_target_delta_across_objects": {
+            name: float(
+                statistics.mean(item["view_depth_minus_translation"][name] for item in comparisons)
+            )
+            for name in delta_metrics
+        },
+        "interpretation_limit": (
+            "Nominal dimension and class count are fixed, but physical factor type and "
+            "object-specific pixel sensitivity intentionally differ."
+        ),
     }
 
 

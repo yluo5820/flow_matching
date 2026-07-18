@@ -15,6 +15,7 @@ from fm_lab.experiments.synthetic_long_tail_geometry import (
     SyntheticLongTailRunner,
     _balanced_pilot_gate,
     _bounded_rotation_followup_summary,
+    _factor_identity_summary,
     _frequency_factorial_summary,
     _paired_local_geometry_summary,
     build_matrix_commands,
@@ -226,6 +227,87 @@ def test_paired_local_geometry_summary_keeps_query_pairing_and_delta_direction()
     assert comparison["metrics"]["alignment_camera_elevation"][
         "tail_minus_head_mean"
     ] == pytest.approx(-0.2)
+
+
+def test_factor_identity_control_dry_run_lists_three_matched_runs() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.factor_identity_control(device="cpu", dry_run=True)
+
+    assert result["training_steps"] == 2_000
+    assert len(result["commands"]) == 3
+    assert {item["baseline_condition_id"] for item in result["commands"]} == {
+        "g0_balanced",
+        "g1_balanced",
+        "g2_balanced",
+    }
+    assert all("view_depth_3d" in item["condition_id"] for item in result["commands"])
+
+
+def test_factor_identity_summary_pairs_target_objects_and_averages_deltas() -> None:
+    objects = ("stepped_monument", "crooked_arch", "three_arm_vane")
+    mappings = (("high", "medium", "low"), ("medium", "low", "high"), ("low", "high", "medium"))
+
+    def evaluation(dimensions: tuple[str, str, str], offset: float) -> dict[str, object]:
+        classes = []
+        for class_id, (object_id, dimension) in enumerate(zip(objects, dimensions, strict=True)):
+            active = {
+                "low": ["tz"],
+                "medium": ["tx", "ty", "tz"],
+                "high": ["tx", "ty", "tz", "azimuth", "elevation"],
+                "depth_bounded_view": ["tz", "azimuth", "elevation"],
+            }[dimension]
+            classes.append(
+                {
+                    "requested_class": class_id,
+                    "object_id": object_id,
+                    "target_dimension_id": dimension,
+                    "true_dimension": len(active),
+                    "active_factor_names": active,
+                    "validity": {
+                        "class_leakage_rate": 0.0,
+                        "off_renderer_rate": offset,
+                        "joint_valid_rate": 1.0 - offset,
+                    },
+                    "all_requested": {
+                        "metrics": {
+                            "active_factors": {"multivariate_energy_distance": offset},
+                            "oracle_feature_fid": offset,
+                            "factor_metrics": {
+                                name: {
+                                    "normalized_wasserstein": offset,
+                                    "central_range_ratio": 1.0 - offset,
+                                }
+                                for name in ("tx", "ty", "tz", "azimuth", "elevation")
+                            },
+                        }
+                    },
+                }
+            )
+        return {"classes": classes}
+
+    baselines = {
+        f"g{geometry}_balanced": evaluation(dimensions, 0.1)
+        for geometry, dimensions in enumerate(mappings)
+    }
+    evaluations = {}
+    for geometry, dimensions in enumerate(mappings):
+        replaced = tuple(
+            "depth_bounded_view" if value == "medium" else value for value in dimensions
+        )
+        evaluations[f"g{geometry}_balanced_view_depth_3d"] = evaluation(replaced, 0.2)
+
+    result = _factor_identity_summary(
+        evaluations=evaluations,
+        baselines=baselines,
+        control_spec={"schema_version": 1},
+        training_steps=2_000,
+        artifact_paths={key: {"baseline": "a", "intervention": "b"} for key in evaluations},
+    )
+
+    assert {item["object_id"] for item in result["comparisons"]} == set(objects)
+    assert result["mean_target_delta_across_objects"]["joint_valid_rate"] == pytest.approx(-0.1)
+    assert result["mean_target_delta_across_objects"]["oracle_feature_fid"] == pytest.approx(0.1)
 
 
 def test_bounded_rotation_followup_summary_separates_frequency_and_exposure() -> None:
