@@ -1,0 +1,32 @@
+experiment:
+  name: fashion_mnist_geometry_frequency_stage0
+  seed: 26072026
+
+data:
+  root: data/fashion_mnist
+  download: true
+  partition_seed: 26072026
+  diagnostic_pool_per_class: 1000
+
+features:
+  pca_components: 50
+  pca_seed: 26072026
+  dinov2:
+    repo_id: facebook/dinov2-base
+    batch_size: 16
+    dtype: float16
+
+selection:
+  seed: 26072026
+  subsamples: 100
+  subsample_fraction: 0.8
+  stability:
+    min_finite_fraction: 0.8
+    max_probe_score_gap: 0.1
+    max_cell_iqr: 0.25
+    min_adjacent_score_gap: 0.15
+
+output:
+  root_dir: outputs/fashion_mnist_geometry_frequency
+  stage_name: stage0_class_selection
+

@@ -48,9 +48,26 @@ When adding or changing a CLI:
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
+| `fm-lab-fashion-geometry-frequency` | Select a stable three-class Fashion-MNIST geometry bridge before outcome training. | Frozen Stage-0 YAML | probe manifest, raw/DINO features, ID stability records, fail-closed class-selection gate |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
 | `fm-lab-long-tail-geometry-stage0` | Validate the counterfactual long-tail observation pipeline before measurement runs. | Ordinary-FM checkpoint and Stage-0 YAML config | fail-closed report, paired probe manifests, validated gradient rows |
 | `fm-lab-long-tail-geometry-observation0` | Establish the reproducible-gradient noise ceiling before any mapping experiment. | Locked Observation-0 preregistration and three raw-checkpoint runs | immutable manifests, checkpoint sketches, reliability table, noise-ceiling decision |
+
+## `fm-lab-fashion-geometry-frequency`
+
+Inspect or run the Fashion-MNIST geometry-selection gate. Stage 0 reserves disjoint
+500-image probes, leaves 5,000 training candidates per class, and does not train a
+generative model.
+
+```bash
+fm-lab-fashion-geometry-frequency \
+  --config configs/fashion_mnist_geometry_frequency/stage0.yaml \
+  stage0 --device auto --dry-run
+```
+
+Remove `--dry-run` to extract the raw-PCA and DINOv2-PCA features and apply the frozen
+split-half/subsample stability rule. A failed selection gate is a valid scientific
+outcome and does not enable downstream training.
 
 ## `fm-lab-synthetic-long-tail`
 

@@ -1,7 +1,7 @@
 # Fashion-MNIST geometry-by-frequency bridge
 
-Status: preregistration draft; no classes have been selected and no outcome model has
-been trained.
+Status: Stage 0 completed; the preregistered class-selection gate failed, no trio was
+selected, and no outcome model has been trained.
 
 ## Purpose
 
@@ -56,7 +56,13 @@ set.
 Use two already supported and deliberately different spaces:
 
 1. raw pixels after non-whitened PCA to 50 dimensions, Euclidean distance;
-2. normalized DINOv2 CLS features, cosine distance.
+2. normalized DINOv2 CLS features followed by non-whitened PCA to 50 dimensions,
+   Euclidean distance.
+
+Each PCA basis is fitted once on the union of probes A and B across all ten classes and
+then frozen for every class and subsample. Sharing the unsupervised basis makes the
+split-half ranks directly comparable; the ID estimates themselves remain disjoint
+between probes.
 
 The task-trained Fashion-MNIST evaluator representation is excluded from selection to
 avoid choosing classes in the same space used for the primary outcome. It may be added
@@ -185,6 +191,42 @@ confirmation is the balanced reference plus the three equal-exposure rotations (
 models). Empirical rotations need not be repeated unless their exposure effect fails to
 replicate the established synthetic phenomenon.
 
+## Stage-0 result
+
+Stage 0 completed on the two disjoint 500-image probes for all ten classes. DINOv2 and
+raw-pixel features were each reduced through one shared non-whitened 50-dimensional PCA
+basis. The run produced 4,000 paired subsample records, with all five planned estimates
+finite in every cell. The selection gate failed because no eligible class occupied the
+upper geometry-score third.
+
+| Class | Name | Geometry score | Probe gap | Cell IQR | Eligible |
+|---:|---|---:|---:|---:|---|
+| 0 | T-shirt/top | 0.60 | 0.05 | 0.3875 | no |
+| 1 | Trouser | 0.10 | 0.00 | 0.1000 | yes |
+| 2 | Pullover | 0.60 | 0.10 | 0.2500 | yes |
+| 3 | Dress | 0.70 | 0.10 | 0.3250 | no |
+| 4 | Coat | 0.60 | 0.05 | 0.1000 | yes |
+| 5 | Sandal | 0.70 | 0.10 | 0.3750 | no |
+| 6 | Shirt | 0.40 | 0.15 | 0.4750 | no |
+| 7 | Sneaker | 0.50 | 0.10 | 0.6750 | no |
+| 8 | Bag | 0.60 | 0.10 | 0.4000 | no |
+| 9 | Ankle boot | 0.40 | 0.20 | 0.4750 | no |
+
+The negative gate is not driven only by sampling noise. The median class ranks in raw
+PCA and DINOv2 PCA have Spearman correlation -0.168. Raw-versus-DINO correlations for
+matching estimators are 0.297 for TwoNN, 0.006 for MLE-LID at `k=10`, -0.091 for
+MLE-LID at `k=20`, 0.018 for participation ratio, and 0.585 for PCA-90 dimension.
+Trouser is a reproducible low-scoring class, while plausible high classes depend on the
+representation or estimator family. For example, Sneaker is highest under DINO neighbor
+estimators but is middle or low under DINO spectral and raw diagnostics; Sandal is high
+in raw space but only middle in DINO space.
+
+Therefore the proposed low/middle/high three-class outcome experiment is blocked. The
+thresholds will not be relaxed after seeing class identities. The scientifically clean
+fallback is to retain all ten classes and treat representation-specific geometry scores
+as competing predictors of frequency response, rather than forcing one consensus ID
+ordering. That fallback requires a new frozen outcome design before training.
+
 ## Required implementation before any outcome run
 
 - Add a three-class Fashion-MNIST adapter with an immutable original-to-conditional
@@ -210,8 +252,8 @@ variation, and semantic ambiguity. Frequency rotation makes the frequency contra
 within-class and therefore causal; the geometry contrast remains an observational
 comparison across three naturally different classes.
 
-If this bridge is successful, freeze the protocol and repeat it on CIFAR-10. Do not
-retune the selection score or endpoints on CIFAR-10.
+If a revised all-class bridge is successful, freeze the protocol and repeat it on
+CIFAR-10. Do not retune the geometry scores or endpoints on CIFAR-10.
 
 ## Related references
 

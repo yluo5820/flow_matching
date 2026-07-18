@@ -927,10 +927,16 @@ scratch rather than sharing mutable run state.
 
 ## Natural-image bridge protocol
 
-The next experiment is frozen at the design level in
-`docs/research/fashion_mnist_geometry_frequency_plan.md`. It selects low-, middle-, and
-high-scoring Fashion-MNIST classes only when split-half, estimator, representation, and
-subsample stability gates pass. The selected trio is then crossed with the cyclic
-5,000/500/50 frequency mapping under both empirical and equal class exposure. This
-preserves the synthetic experiment's central control while treating ID as an ordinal
-predictor rather than known ground truth. No Fashion-MNIST outcome run has started.
+The Fashion-MNIST Stage-0 selection in
+`docs/research/fashion_mnist_geometry_frequency_plan.md` is complete. It attempted to
+select low-, middle-, and high-scoring classes only when split-half, estimator,
+representation, and subsample stability gates passed. The gate failed: Trouser is a
+stable low-scoring class, Pullover and Coat are stable middle-scoring classes, and no
+class is stably high across raw-PCA and DINOv2-PCA representations. The aggregate
+raw-versus-DINO class-rank Spearman correlation is -0.168.
+
+No Fashion-MNIST outcome model has been trained. Do not relax the gate or manually pick
+a high class after seeing the identities. The clean fallback is a newly preregistered
+all-ten-class bridge that treats representation-specific geometry estimates as
+competing predictors of frequency sensitivity rather than assuming one consensus ID
+ordering.
