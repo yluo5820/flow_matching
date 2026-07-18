@@ -703,6 +703,58 @@ energy distance, and the five marginal central-range ratios. Unchanged-class met
 are retained as spillover checks. No additional factorial cells will be launched based
 only on an isolated metric reversal.
 
+## Targeted bounded-rotation follow-up results
+
+All four preregistered 2,000-step models are complete. The object replication confirms
+that the bounded-rotation effect is not confined to the stepped monument. For the
+crooked arch in `g2`, restricting azimuth raises 5D joint-valid rate from 0.0467 to
+0.6200, lowers FID from 14.2775 to 3.9240, and lowers active-factor energy distance
+from 0.2309 to 0.0671. Azimuth central-range coverage rises from 0.604 to 0.963; the
+bounded model still contracts elevation to 0.646. The large primary effect therefore
+replicates across a second object and a different class ID, while selective directional
+loss remains.
+
+Shared-model spillover is not uniformly beneficial. In the same `g2` comparison, the
+unchanged 1D class retains perfect validity and improves FID by 1.35, but the unchanged
+3D vane loses 10.7 validity points, its FID worsens from 3.65 to 14.39, and its depth
+central-range ratio falls from 1.053 to 0.572. This prevents interpreting the earlier
+unchanged-class improvements as a general law that simplifying one class always frees
+capacity for all others. Class-conditioned gradients can redistribute shared capacity
+in either direction.
+
+The targeted frequency slice gives a monotone empirical-sampling result:
+
+| Bounded 5D unique count | Training sampling | Joint-valid rate | FID | Active energy |
+|---:|---|---:|---:|---:|
+| 5,000 | Empirical | 0.8433 | 3.8916 | 0.0567 |
+| 500 | Empirical | 0.3900 | 11.5224 | 0.0909 |
+| 50 | Empirical | 0.0533 | 15.4943 | 0.2451 |
+| 50 | Class-balanced | 0.9133 | 4.4515 | 0.0368 |
+
+Reducing only the target class, while holding both other class datasets at 5,000,
+causes a 45.3-point validity loss at 500 examples and a 79.0-point loss at 50. FID
+worsens by 7.63 and 11.60, respectively. This reproduces the long-tail degradation
+after removing the full-rotation floor and without rotating the other classes' unique
+counts.
+
+At fixed 50-example support, equal class exposure recovers 86.0 validity points,
+reduces FID by 11.04, and reduces active energy distance by 0.208. With 2,000 updates
+and batch size 64, expected target-class draws are roughly 637 under empirical sampling
+versus 42,667 under equal class sampling: about 12.7 versus 853 presentations per unique
+tail point. This is direct evidence that class-conditioned update allocation is the
+dominant cause of the aggregate 50-example failure in this setup.
+
+Equal exposure does not establish genuine five-dimensional generalization from 50
+points. Relative to the 5,000-example bounded model, its validity is seven points
+higher and active energy is slightly lower, but FID is 0.56 worse. More importantly,
+azimuth central-range coverage falls from 0.956 to 0.834 and elevation from 0.518 to
+0.459. The empirical 500/50 models produce azimuth range ratios above three, which is
+out-of-support dispersion rather than useful coverage and accompanies their very high
+off-renderer rates. Repeated 50-point exposure therefore restores renderer-valid mass
+while retaining directional contraction and a strong risk of interpolation or
+memorization. The existing nearest-neighbor audit should be repeated on this bounded
+50-example model before attributing its recovery to manifold learning.
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
@@ -715,13 +767,18 @@ important for 5D, while aggressive tail reuse produces a measurable near-duplica
 regime. Separately, the 76-point bounded-rotation validity gain establishes that the
 original balanced 5D floor is dominated by more than the dimension integer alone.
 
-The targeted four-run bounded follow-up above should be completed before a fixed-3D
-factor-identity experiment. It directly re-tests the long-tail mechanism after removing
-the original full-azimuth floor. If it behaves as predicted, the next synthetic
-question should hold nominal dimension fixed while changing factor identity: compare
-balanced 3D translation against bounded view plus depth across all three objects. In
-parallel, Fashion-MNIST or a controlled pose dataset remains the more important bridge
-for external validity.
+The targeted bounded follow-up is complete and supports both primary directional
+predictions: azimuth extent is a robust source of baseline difficulty, and empirical
+update allocation dominates the bounded 5D long-tail failure. Do not rerun the full
+nine-cell factorial.
+
+Before claiming that 50 unique samples suffice, run the existing exact-copy and
+nearest-neighbor audit on the bounded class-balanced tail. After that audit, the next
+synthetic question should hold nominal dimension fixed while changing factor identity:
+compare balanced 3D translation against bounded view plus depth across all three
+objects. Fashion-MNIST or a controlled pose dataset remains the more important bridge
+for external validity, because additional synthetic frequency rotations now have low
+information value.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
