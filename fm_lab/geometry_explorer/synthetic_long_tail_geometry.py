@@ -212,6 +212,7 @@ def evaluate_local_geometry(
             "source_revision": source_revision,
             "query_sha256": _array_sha256(points.numpy()),
             "tangent_sha256": _array_sha256(tangents.numpy()),
+            "pushforward_centering": "same-solver unperturbed forward roundtrip",
             "context": dict(context or {}),
         },
     }

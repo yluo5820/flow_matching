@@ -1619,7 +1619,8 @@ class SyntheticLongTailRunner:
         times = (0.8, 0.9)
         budget_id = f"steps_{steps:08d}"
         setting_id = (
-            f"q{queries_requested:02d}_d{directions:02d}_nfe{function_evaluations:02d}_t0800_0900"
+            f"q{queries_requested:02d}_d{directions:02d}_nfe{function_evaluations:02d}"
+            "_t0800_0900_cycle_centered_v2"
         )
         head_run = (
             self.run_root

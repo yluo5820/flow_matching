@@ -185,17 +185,23 @@ class FMJacobianSpectrumEstimator:
             normalize=self.normalize_directions,
             generator=self.generator,
         )
-        x1_perturbed = self._integrate(
-            xt.unsqueeze(0) + self.eps * directions,
+        forward_inputs = torch.cat(
+            [xt.unsqueeze(0), xt.unsqueeze(0) + self.eps * directions],
+            dim=0,
+        )
+        x1_forward = self._integrate(
+            forward_inputs,
             t0=float(t),
             t1=1.0,
         )
+        base_forward = x1_forward[:1]
+        x1_perturbed = x1_forward[1:]
 
         if self.representation_fn is None:
-            base = x1_batch.reshape(1, -1)
+            base = base_forward.reshape(1, -1)
             perturbed = x1_perturbed.reshape(self.num_directions, -1)
         else:
-            base = self.representation_fn(x1_batch).reshape(1, -1)
+            base = self.representation_fn(base_forward).reshape(1, -1)
             perturbed = self.representation_fn(x1_perturbed).reshape(
                 self.num_directions,
                 -1,

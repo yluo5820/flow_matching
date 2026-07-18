@@ -126,6 +126,28 @@ def test_pushforward_matrix_preserves_existing_spectrum() -> None:
     assert torch.allclose(torch.linalg.svdvals(matrix), spectrum, atol=1e-6)
 
 
+def test_pushforward_centers_on_numerical_roundtrip_not_original_point() -> None:
+    estimator = FMJacobianSpectrumEstimator(
+        model=ZeroVelocity(),
+        ode_solver=ProjectionFlowSolver(tangent_dim=2),
+        t_values=[0.5],
+        eps=1e-2,
+        num_directions=32,
+        threshold=1e-5,
+        device="cpu",
+        nfe=4,
+        generator=torch.Generator().manual_seed(7),
+    )
+
+    matrix = estimator.compute_pushforward_matrix(
+        torch.tensor([0.2, -0.1, 0.4]),
+        t=0.5,
+    )
+
+    assert torch.count_nonzero(torch.linalg.svdvals(matrix) > 1e-5) == 2
+    assert torch.allclose(matrix[2], torch.zeros_like(matrix[2]))
+
+
 def test_fm_flipd_recovers_flat_subspace_dimensions_with_exact_divergence() -> None:
     x = torch.tensor([[1.0, -1.0, 0.0], [0.5, 2.0, 0.0]])
     estimator = FMFLIPDEstimator(

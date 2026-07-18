@@ -189,6 +189,7 @@ def test_bounded_rotation_geometry_dry_run_is_paired_and_does_not_retrain() -> N
     assert result["retraining"] is False
     assert "bounded_rotation_control" in result["head_5000_run"]
     assert "frequency_slice_class_balanced" in result["tail_50_class_balanced_run"]
+    assert result["analysis_dir"].endswith("cycle_centered_v2")
 
 
 def test_paired_local_geometry_summary_keeps_query_pairing_and_delta_direction() -> None:
