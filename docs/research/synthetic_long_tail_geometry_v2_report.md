@@ -619,11 +619,12 @@ The economical follow-up order is:
    original class-0 pool seed, so x/y/depth and elevation are exactly paired while only
    azimuth is compressed. The manifest, matching calculation, training config, run,
    evaluation, and paired summary use separate immutable paths.
-3. If factor identity remains important, compare two balanced 2,000-step models at
-   fixed dimension 3: all three classes using x/y/depth translation versus all three
-   using bounded view plus depth. This is two runs, averages over all three objects,
-   and directly tests whether a 3D viewpoint manifold is harder than a 3D translation
-   manifold without repeating the frequency factorial.
+3. The fixed-dimension factor-identity control is complete. It uses three paired
+   balanced 2,000-step interventions, one per geometry rotation. In each pair, only
+   the object occupying the 3D role changes from x/y/depth translation to depth plus
+   bounded azimuth/elevation; the 1D and 5D pools, counts, model seed, data-order seed,
+   and sampling seed are retained. This design tests every object without changing all
+   three class distributions in one model.
 4. Defer the shared-gray-material or similar-object variant until studying capacity
    borrowing. That variant deliberately changes interclass relatedness and would also
    require revalidating the object oracle, so it is a new mechanism experiment rather
@@ -842,6 +843,54 @@ distributional evidence—training proximity plus azimuth/elevation range contra
 remains stronger than the Jacobian evidence. Corrected immutable artifacts are under
 `q08_d16_nfe32_t0800_0900_cycle_centered_v2/`.
 
+## Fixed-dimension factor-identity control
+
+The preregistered 3D factor-identity control is complete at 2,000 updates and 5,000
+examples per class. The intervention replaces x/y/depth translation with depth plus
+bounded azimuth/elevation for exactly one class in each balanced geometry rotation.
+All 48 local renderer preflight queries were rank three. Median local Jacobian
+condition numbers were 2.44, 3.05, and 2.97, so a trivially degenerate 3D coordinate
+system is ruled out. The table reports the changed class only; deltas are bounded-view
+3D minus translation 3D.
+
+| Object | Translation validity | View/depth validity | Validity delta | Translation FID | View/depth FID | FID delta | Energy delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Crooked arch | 0.7700 | 0.3867 | -0.3833 | 3.8624 | 9.8258 | +5.9634 | +0.1864 |
+| Stepped monument | 0.9100 | 0.8733 | -0.0367 | 3.0635 | 1.8909 | -1.1726 | +0.0262 |
+| Three-arm vane | 0.9067 | 0.5800 | -0.3267 | 3.6549 | 6.6970 | +3.0421 | +0.1915 |
+| Mean | — | — | -0.2489 | — | — | +2.6109 | +0.1347 |
+
+The factor replacement is substantially harder for the crooked arch and three-arm
+vane, but nearly neutral for the stepped monument. All changed and unchanged classes
+retain zero class leakage. Across the six unchanged-class checks, the largest absolute
+validity shift is 0.0433, versus changed-class losses of 0.3833 and 0.3267 for the two
+affected objects. The generated grids agree with the metrics: the difficult view/depth
+classes retain object identity but contain distorted or off-renderer poses. Approximate
+independent-binomial 95% intervals for the validity deltas are [-0.456, -0.311],
+[-0.086, +0.013], and [-0.391, -0.262], respectively, using 300 generated samples per
+class. These intervals describe sampling uncertainty only; they do not include model-
+seed variation.
+
+This rejects the strong interpretation that the nominal dimension integer determines
+difficulty by itself. It also supplies a direct confound for the original nested
+1D/3D/5D ladder: adding viewpoint coordinates changes qualitative geometry at the
+same time as it increases dimension. The correct working hypothesis is that sample
+complexity depends on dimension jointly with factor identity and object-specific
+geometry. The present experiment does not identify which property of viewpoint
+variation is responsible. Pixel-space extent, curvature, occlusion, global
+injectivity, and object symmetry were intentionally not equated and remain candidate
+mechanisms. The object-dependent reversal is evidence against treating any one of
+these 3D factor sets as having a universal scalar difficulty.
+
+There is one execution caveat. The historical translation baselines were trained on
+CPU, whereas the new interventions were trained on MPS. Configured model, training,
+and sampling seeds match, final losses are comparable, and the unchanged-class
+validity controls are stable, so backend variation is unlikely to explain the two
+30-plus-point target-specific losses. Nevertheless, CPU and MPS need not follow an
+identical optimization trajectory. A same-backend baseline replicate is required
+before treating the numerical deltas as a fully isolated causal estimate. The current
+result is strong provisional evidence, not a multi-seed final estimate.
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
@@ -863,12 +912,12 @@ nine-cell factorial.
 
 The paired Jacobian/tangent screen is complete and inconclusive; do not scale it to
 hundreds of queries until an estimator configuration recovers a known low-rank positive
-control. The next synthetic question should instead hold nominal dimension fixed while
-changing factor identity: compare balanced 3D translation against bounded view plus
-depth across all three objects. This directly tests whether nominal intrinsic dimension
-or factor type drives the remaining difficulty. Fashion-MNIST or a controlled pose
-dataset remains the more important bridge for external validity, because additional
-synthetic frequency rotations now have low information value.
+control. The fixed-3D control is also complete and shows that factor identity and
+object-specific geometry materially alter difficulty at a constant nominal dimension.
+The smallest useful synthetic robustness check is now a same-backend translation
+baseline replicate, not another factor or frequency factorial. After that, Fashion-
+MNIST or a controlled pose dataset is the more important bridge for external validity,
+because additional synthetic rotations now have low information value.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
