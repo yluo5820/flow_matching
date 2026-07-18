@@ -438,6 +438,66 @@ rises from 8.8% to 26.6%, while FID falls from 16.10 to 6.12. Thus unique sample
 is not the only mechanism; optimization exposure and competition for shared model
 capacity also matter.
 
+## Class-balanced exposure ablation
+
+The nine imbalanced conditions were repeated for 5,000 updates with uniform class
+selection followed by within-class sampling from the unchanged 5,000/500/50 finite
+pools. The table directly compares empirical-frequency training with class-balanced
+training; balanced-data controls are unchanged.
+
+| Dimension | Role | Empirical validity | Balanced-sampling validity | Empirical FID | Balanced-sampling FID |
+| ---: | :--- | ---: | ---: | ---: | ---: |
+| 1 | head | 1.0000 | 1.0000 | 0.6582 | 1.1422 |
+| 1 | medium | 1.0000 | 1.0000 | 2.4187 | 0.7865 |
+| 1 | tail | 0.5511 | 1.0000 | 12.8921 | 0.9473 |
+| 3 | head | 0.9856 | 0.9467 | 1.5439 | 2.4523 |
+| 3 | medium | 0.8178 | 0.9333 | 8.0988 | 2.9288 |
+| 3 | tail | 0.2100 | 0.9756 | 11.0546 | 3.2410 |
+| 5 | head | 0.2656 | 0.0878 | 6.1237 | 11.5785 |
+| 5 | medium | 0.0911 | 0.1144 | 16.8452 | 15.9214 |
+| 5 | tail | 0.0067 | 0.4656 | 26.0978 | 10.9704 |
+
+Equal exposure completely removes the validity deficit for 1D tails and nearly does
+so for 3D tails. Their tail active-factor energy distances improve from 0.5470 to
+0.0233 and from 0.1242 to 0.0692. The 5D tail also recovers strongly: validity rises
+by 45.9 percentage points, FID improves by 15.13, and active-factor energy distance
+falls from 0.3171 to 0.0854. Its marginal central-range ratios become 0.918 azimuth,
+0.879 elevation, 0.967 x, 0.963 y, and 0.938 depth. This is recovery across all five
+directions rather than a single-factor improvement.
+
+The gain is a reallocation, not a free Pareto improvement. Empirical training devotes
+about 90.1%, 9.0%, and 0.9% of target draws to head, medium, and tail classes; uniform
+class sampling assigns about one third to each. Correspondingly, 5D head validity
+falls from 26.6% to 8.8% and head FID worsens from 6.12 to 11.58. The result causally
+identifies class-conditioned update allocation and shared-capacity competition as a
+dominant source of the observed long-tail failure under empirical sampling.
+
+The surprising result is that the 50-unique-example 5D tail reaches 46.6% validity,
+above the 8.8% 5,000-example balanced-data control. This occurs for all three objects
+(44.0%, 52.7%, and 43.0%), so it is not an object-specific reversal. It does not show
+that fewer unique examples are intrinsically better. Uniform sampling presents each
+tail point roughly 100 times more often than each head point, which can make the
+finite empirical target easier to fit, and the three models still share capacity with
+different surrounding empirical supports. Exact-copy, near-neighbor, and held-out
+factor-coverage diagnostics are required to distinguish smooth generalization from
+memorization or metric-insensitive interpolation.
+
+That audit was run on all three recovered 5D tails. Exact uint8 training-image copy
+rate was zero in every case, but the oracle-feature near-duplicate rates were 25.3%,
+28.7%, and 13.3%. Median generated-to-training feature distances were 2.51, 2.66, and
+2.54, compared with generated-to-held-out distances of 3.37, 3.95, and 3.41. Median
+factor distances showed the same ordering: 0.408 versus 0.577, 0.411 versus 0.538, and
+0.479 versus 0.561. This is especially notable because the training reference contains
+only 50 points while the held-out reference contains 300. The recovery is therefore
+not exact image copying, and most outputs are not near-duplicates, but repeated tail
+exposure does create substantial concentration around training examples. The broad
+marginal ranges coexist with this local attraction, so the result is a mixture of
+interpolation/generalization and memorization rather than either extreme alone.
+
+Artifacts are stored in each recovered tail run under `memorization_5d_tail/`; the
+near-duplicate threshold is the 0.5th percentile of independent held-out-to-held-out
+nearest oracle-feature distances.
+
 ## Effects
 
 <!-- GENERATED:effects:START -->
@@ -448,21 +508,23 @@ capacity also matter.
 
 ## Interpretation
 
-Both class frequency and intrinsic dimension are major sources of generative
-difficulty in this synthetic system. Their joint worst case is unambiguous: the
-five-dimensional tail is almost entirely invalid and has the worst FID. The rotations
-show that neither fixed object appearance nor class-label confusion explains the
-dominant pattern. The head-versus-balanced contrast additionally implicates allocation
-of optimization exposure or shared capacity, because own-class unique sample count is
-held at 5,000 while the surrounding frequency context changes.
+Under empirical sampling, class frequency and geometric complexity jointly produce a
+large generative quality gap. The class-balanced intervention shows that the dominant
+frequency mechanism in this experiment is not finite cardinality alone, but the
+optimization exposure and shared capacity induced by that cardinality. Fixed object
+appearance and class-label confusion remain ruled out as dominant explanations by the
+rotations and negligible leakage. Dimension 5 remains difficult under every sampling
+policy, but the class-balanced reversal prevents a simple monotonic claim that fewer
+unique samples necessarily cause worse learned geometry.
 
 The stronger claim of a superadditive dimension-by-frequency interaction remains
 suggestive rather than established. The 5D renderer-validity outcome is bounded near
 zero before frequency is reduced, and the interaction is not monotone across FID,
 active-factor energy, and validity. All results use one model seed and one set of
-generated samples per cell. The contracted factor ranges and visual tail failures are
-compatible with geometric memorization, but a Jacobian/tangent-rank probe is still
-needed to demonstrate loss of learned manifold directions directly.
+generated samples per cell. The empirical-sampling contraction and its recovery under
+equal exposure are compatible with directional geometric memorization, but an explicit
+memorization audit and Jacobian/tangent-rank probe are still needed to distinguish
+learned manifold recovery from interpolation around repeatedly presented endpoints.
 
 ## Scope, confounds, and economical robustness tests
 
@@ -503,8 +565,9 @@ than as a required repair of the present internal comparison.
 
 The economical follow-up order is:
 
-1. Complete the class-balanced-sampling factorial already in progress. This isolates
-   update allocation from finite unique coverage without changing the renderer.
+1. The completed class-balanced-sampling factorial establishes that update allocation
+   is dominant, but its 5D tail reversal requires an exact-copy and nearest-neighbor
+   memorization audit before further training results are interpreted.
 2. Run one paired 2,000-step `g0_balanced` screen in which only the 5D azimuth range is
    restricted. A pullback-matched total span is approximately 0.37 radians (about 21
    degrees, centered at the canonical view), because it gives azimuth a rough extent
@@ -524,11 +587,15 @@ The economical follow-up order is:
 For external validity, a controlled real-image bridge should precede an unconstrained
 semantic dataset. Small NORB or MPI3D-real retain known pose and appearance factors in
 photographs of physical objects, allowing the same coverage tests without relying on
-pixel-space synthetic geometry. A subsequent CIFAR-10 screen can estimate class
-intrinsic dimension on the original balanced data in several frozen feature spaces,
-select classes whose low/medium/high ordering is stable, and only then impose rotated
-5,000/500/50 frequencies. Such estimates would be representation-dependent proxies,
-not ground-truth dimensions.
+pixel-space synthetic geometry. Fashion-MNIST is a useful next rung: its within-class
+shape variation is semantic and object-level, while grayscale, alignment, and simple
+backgrounds avoid much of CIFAR-10's texture and scene compounding. Intrinsic dimension
+should be estimated on its full balanced source using multiple representations,
+estimators, and bootstrap samples before any long-tail subsets are selected. A
+subsequent CIFAR-10 screen can use the same protocol, retain only classes whose
+low/medium/high ordering is stable across reasonable feature spaces, and then impose
+rotated 5,000/500/50 frequencies. All Fashion-MNIST and CIFAR estimates would be
+representation-dependent proxies, not ground-truth dimensions.
 
 The emerging remedy hypothesis has two parts. Equal or complexity-aware class exposure
 can correct optimization allocation, whereas missing manifold coverage requires new
@@ -561,23 +628,13 @@ Do not launch the 36-run, 40,000-step matrix. The reduced factorial already esta
 the descriptive frequency phenomenon, while the larger matrix would be extremely
 costly and would not remove the 5D floor or single-seed limitation.
 
-The most informative next causal ablation is a class-balanced sampler on the same nine
-finite datasets at the same total update budget. Under the present empirical sampler,
-all three imbalanced classes receive roughly the same number of dataset passes, but
-the head receives about 100 times as many class-conditioned training examples as the
-tail. Equalizing class-conditioned update exposure while retaining 5,000/500/50 unique
-examples would separate finite manifold coverage from optimization/capacity allocation.
-If tails remain poor, unique geometric coverage is the dominant mechanism; if they
-recover substantially, allocation is dominant. Solver accuracy and direct latent
-projection remain useful validity checks for the balanced 5D residual, followed by a
-Jacobian/tangent-rank probe for direct evidence of lost directions.
-
-The ablation is implemented as `frequency-pilots --training-sampling class_balanced`.
-It selects the training class uniformly and then samples with replacement only from
-that class's unchanged finite pool. Configs, runs, ledger entries, and summaries are
-isolated under `frequency_factorial_class_balanced`, while the existing balanced 5k
-controls are reused because empirical sampling is already uniform when class counts
-are equal.
+The class-balanced causal ablation and its memorization audit are complete. Allocation
+is dominant for the 1D and 3D tail failures and important for 5D, but aggressive tail
+reuse also produces a measurable near-duplicate regime. The next training experiment
+is the single restricted-azimuth 2,000-step screen, which addresses the separate
+dimension-versus-manifold-extent confound under balanced data. Its evaluation should
+include the same nearest-neighbor audit. Only a large paired effect should trigger the
+remaining object rotations or a 5,000-step confirmation.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
