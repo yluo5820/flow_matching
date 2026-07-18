@@ -954,3 +954,11 @@ every class and the preregistered convergence rule selects a common budget. A lo
 benchmark projected the 2,000-step training pass at about 40 minutes and was stopped at
 26 updates, so the actual calibration is handed to an MPS-capable user terminal. No
 Fashion-MNIST frequency outcome has yet been observed.
+
+The MPS 2,000-step balanced calibration subsequently completed. Generated objects are
+recognizable but blurred: macro classwise FID is 107.88, overall recall is 0.684, and
+requested-class accuracy is 82.29%. Shirt accuracy is only 43.4%, with T-shirt/top,
+Pullover, Dress, and Coat also below the frozen 80% per-class threshold. The 2,000-step
+budget is therefore ineligible, and the next calibration resumes the same trajectory to
+5,000 steps. This is a calibration result only; cyclic frequency outcomes remain
+unobserved.

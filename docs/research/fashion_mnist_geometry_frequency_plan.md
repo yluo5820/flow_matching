@@ -276,6 +276,33 @@ projected the 2,000-step calibration at roughly 40 minutes, so the incomplete 26
 benchmark was stopped and preserved separately; the real calibration is assigned to an
 MPS-capable user terminal under the 30-minute handoff rule.
 
+### Balanced calibration at 2,000 steps
+
+The MPS run completed and produced 10,000 balanced generated samples. The model is
+recognizable but not eligible for the frozen budget: macro classwise FID is 107.88,
+overall generative recall is 0.684, requested-class accuracy is 82.29%, and the minimum
+per-class accuracy is only 43.4% for Shirt. The real split-half reference has FID 6.96
+and recall 0.969, confirming substantial remaining model error rather than evaluator
+noise.
+
+| Class | FID | Recall | Requested accuracy |
+|---|---:|---:|---:|
+| T-shirt/top | 76.64 | 0.665 | 0.762 |
+| Trouser | 128.93 | 0.627 | 0.976 |
+| Pullover | 118.66 | 0.690 | 0.792 |
+| Dress | 130.32 | 0.720 | 0.761 |
+| Coat | 130.37 | 0.721 | 0.791 |
+| Sandal | 126.37 | 0.550 | 0.837 |
+| Shirt | 161.72 | 0.564 | 0.434 |
+| Sneaker | 33.83 | 0.775 | 0.979 |
+| Bag | 117.44 | 0.705 | 0.947 |
+| Ankle boot | 54.48 | 0.758 | 0.950 |
+
+Because five classes are below the preregistered 80% threshold, 2,000 steps cannot be
+selected even if its average metrics later appear converged. The 5,000-step candidate
+resumes exactly from this checkpoint and is the next required calibration run. No
+frequency-rotation outcome has been trained or inspected.
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts
