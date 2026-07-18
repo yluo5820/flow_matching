@@ -962,3 +962,11 @@ Pullover, Dress, and Coat also below the frozen 80% per-class threshold. The 2,0
 budget is therefore ineligible, and the next calibration resumes the same trajectory to
 5,000 steps. This is a calibration result only; cyclic frequency outcomes remain
 unobserved.
+
+The exact 5,000-step continuation improved macro FID by 29.7% to 75.86 and recall to
+0.716, so training is not yet converged under the frozen rule. Overall requested-class
+accuracy reached 83.76%, but Shirt remained at 52.9%; its errors concentrate in
+T-shirt/top, Pullover, and Coat. T-shirt/top, Pullover, and Coat themselves also remain
+below 80%. The 5,000-step budget therefore fails both the convergence and minimum-class
+accuracy conditions. The final allowed calibration candidate is the exact continuation
+to 10,000 steps; rotations remain blocked.

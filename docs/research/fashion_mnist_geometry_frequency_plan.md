@@ -303,6 +303,22 @@ selected even if its average metrics later appear converged. The 5,000-step cand
 resumes exactly from this checkpoint and is the next required calibration run. No
 frequency-rotation outcome has been trained or inspected.
 
+### Balanced calibration at 5,000 steps
+
+The exact continuation from 2,000 to 5,000 steps reduced macro classwise FID from
+107.88 to 75.86, a 29.7% improvement that is much larger than the frozen 10%
+convergence threshold. Overall recall increased from 0.684 to 0.716 and requested-class
+accuracy increased from 82.29% to 83.76%. The model is visibly sharper, but minimum
+per-class accuracy remains only 52.9% for Shirt. T-shirt/top (76.0%), Pullover (75.2%),
+and Coat (76.9%) also remain below 80%.
+
+Shirt errors are concentrated among visually adjacent upper-body categories: of 1,000
+requested Shirt samples, 163 are classified as T-shirt/top, 159 as Pullover, and 93 as
+Coat. This supports treating the failure as unresolved semantic class overlap rather
+than an isolated numerical instability. Because both the convergence and per-class
+accuracy gates fail, 5,000 steps cannot be selected. The final preregistered calibration
+candidate resumes the same trajectory to 10,000 steps.
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts
