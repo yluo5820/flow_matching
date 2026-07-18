@@ -56,6 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=2_000,
         help="Training budget; must have a completed g0_balanced evaluation at this budget.",
     )
+    bounded_followups = subparsers.add_parser("bounded-rotation-followups")
+    _device(bounded_followups)
+    _dry_run(bounded_followups)
+    bounded_followups.add_argument(
+        "--training-steps",
+        type=int,
+        default=2_000,
+        help="Matched budget for the four targeted bounded-rotation follow-up runs.",
+    )
     smoke = subparsers.add_parser("smoke")
     smoke.add_argument("--condition", required=True)
     smoke.add_argument("--replicate", type=int, required=True)
@@ -110,6 +119,12 @@ def _dispatch(runner: SyntheticLongTailRunner, args: argparse.Namespace) -> Any:
         )
     if args.stage == "bounded-rotation-control":
         return runner.bounded_rotation_control(
+            device=args.device,
+            dry_run=args.dry_run,
+            training_steps=args.training_steps,
+        )
+    if args.stage == "bounded-rotation-followups":
+        return runner.bounded_rotation_followups(
             device=args.device,
             dry_run=args.dry_run,
             training_steps=args.training_steps,

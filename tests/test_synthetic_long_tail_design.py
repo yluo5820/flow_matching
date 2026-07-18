@@ -6,10 +6,14 @@ from typing import Any
 import numpy as np
 import pytest
 
+from fm_lab.data import SyntheticLongTailImages
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_AZIMUTH_DIMENSION_ID,
     BOUNDED_AZIMUTH_HALF_RANGE,
     BOUNDED_ROTATION_CONDITION_ID,
+    BOUNDED_ROTATION_G2_CONDITION_ID,
+    BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+    BOUNDED_ROTATION_TAIL_CONDITION_ID,
     DIMENSION_IDS,
     FACTOR_COLUMNS,
     OBJECT_IDS,
@@ -17,6 +21,7 @@ from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     _object_configs,
     _render_map,
     build_bounded_rotation_control,
+    build_bounded_rotation_followups,
     build_condition_manifests,
     build_condition_specs,
     build_factor_space,
@@ -230,3 +235,49 @@ def test_bounded_rotation_control_changes_only_paired_class_zero_azimuth(
 
     with pytest.raises(FileExistsError, match="Bounded-rotation control"):
         build_bounded_rotation_control(config, tmp_path, replicate=0)
+
+
+def test_bounded_rotation_followups_render_one_pool_and_publish_three_conditions(
+    tmp_path: Path,
+) -> None:
+    config = _design_config(master_count=20, counts=(20, 5, 2), image_size=16)
+    build_master_pools(config, tmp_path, replicate=0)
+    build_bounded_rotation_control(config, tmp_path, replicate=0)
+
+    artifacts = build_bounded_rotation_followups(config, tmp_path, replicate=0)
+    manifests = artifacts["manifests"]
+    assert set(manifests) == {
+        BOUNDED_ROTATION_G2_CONDITION_ID,
+        BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+        BOUNDED_ROTATION_TAIL_CONDITION_ID,
+    }
+    assert SyntheticLongTailImages(manifests[BOUNDED_ROTATION_G2_CONDITION_ID]).class_counts == (
+        20,
+        20,
+        20,
+    )
+    assert SyntheticLongTailImages(
+        manifests[BOUNDED_ROTATION_MEDIUM_CONDITION_ID]
+    ).class_counts == (
+        5,
+        20,
+        20,
+    )
+    assert SyntheticLongTailImages(manifests[BOUNDED_ROTATION_TAIL_CONDITION_ID]).class_counts == (
+        2,
+        20,
+        20,
+    )
+
+    baseline = np.load(tmp_path / "replicate_00/pools/crooked_arch/high/factors.npy")
+    bounded = np.load(
+        tmp_path
+        / "replicate_00/bounded_rotation_followups/pools/crooked_arch"
+        / BOUNDED_AZIMUTH_DIMENSION_ID
+        / "factors.npy"
+    )
+    np.testing.assert_array_equal(baseline[:, (0, 1, 2, 4)], bounded[:, (0, 1, 2, 4)])
+    assert np.max(np.abs(bounded[:, 3])) <= BOUNDED_AZIMUTH_HALF_RANGE
+
+    with pytest.raises(FileExistsError, match="Bounded-rotation follow-up"):
+        build_bounded_rotation_followups(config, tmp_path, replicate=0)

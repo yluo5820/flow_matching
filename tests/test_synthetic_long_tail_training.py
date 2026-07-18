@@ -281,6 +281,44 @@ def test_reduced_writer_supports_an_explicit_imbalanced_condition(tmp_path: Path
     assert config["data"]["sampling_policy"] == "class_balanced"
 
 
+def test_reduced_writer_requires_explicit_opt_in_for_changed_class_counts(
+    tmp_path: Path,
+) -> None:
+    manifests = write_tiny_factorial_manifests(tmp_path)
+    matrix_paths = write_condition_training_configs(**training_kwargs(manifests, tmp_path))
+    source_path = next(path for path in matrix_paths if path.stem == "g0_balanced")
+    target_manifest = next(path for path in manifests if path.stem == "g0_f0")
+    pilot = {
+        "training_steps": 100,
+        "batch_size": 64,
+        "warmup_steps": 10,
+        "log_every": 5,
+        "samples_per_class": 3,
+        "nfe": 8,
+        "sample_batch_size": 3,
+        "n_trajectories": 3,
+    }
+
+    with pytest.raises(ValueError, match="share class counts"):
+        write_pilot_training_config(
+            source_config_path=source_path,
+            output_root=tmp_path / "rejected-counts",
+            run_root=tmp_path / "runs",
+            pilot=pilot,
+            condition_manifest_override=target_manifest,
+        )
+
+    config_path = write_pilot_training_config(
+        source_config_path=source_path,
+        output_root=tmp_path / "accepted-counts",
+        run_root=tmp_path / "runs",
+        pilot=pilot,
+        condition_manifest_override=target_manifest,
+        require_matching_class_counts=False,
+    )
+    assert load_config(config_path)["data"]["condition_manifest"].endswith("g0_f0.json")
+
+
 def test_writer_rejects_traversal_wrong_tree_and_non_32_manifest_before_publish(
     tmp_path: Path,
 ) -> None:

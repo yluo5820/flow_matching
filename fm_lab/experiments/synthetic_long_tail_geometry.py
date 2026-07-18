@@ -25,6 +25,10 @@ from typing import Any
 from fm_lab.data import SyntheticLongTailImages
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_CONDITION_ID,
+    BOUNDED_ROTATION_CONDITION_IDS,
+    BOUNDED_ROTATION_G2_CONDITION_ID,
+    BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+    BOUNDED_ROTATION_TAIL_CONDITION_ID,
 )
 from fm_lab.utils.config import load_config, save_config
 
@@ -32,7 +36,7 @@ _BALANCED_DATASET_SIZE = 15_000
 _IMBALANCED_DATASET_SIZE = 5_550
 _IMAGE_SHAPE = (3, 32, 32)
 _CONDITION_ID_PATTERN = re.compile(
-    rf"(?:g[0-2]_(?:balanced|f[0-2])|{re.escape(BOUNDED_ROTATION_CONDITION_ID)})\Z"
+    rf"(?:g[0-2]_(?:balanced|f[0-2])|{'|'.join(map(re.escape, BOUNDED_ROTATION_CONDITION_IDS))})\Z"
 )
 _CANONICAL_CONDITION_IDS = frozenset(
     f"g{geometry}_{frequency}"
@@ -375,6 +379,7 @@ def write_pilot_training_config(
     require_balanced: bool = True,
     training_sampling_policy: str | None = None,
     condition_manifest_override: str | Path | None = None,
+    require_matching_class_counts: bool = True,
 ) -> Path:
     """Publish an immutable reduced-budget config derived from a matrix config."""
 
@@ -395,7 +400,9 @@ def write_pilot_training_config(
     )
     if plan.replicate != source_plan.replicate:
         raise ValueError("Source and override condition manifests must share a replicate.")
-    if plan.class_counts != source_plan.class_counts:
+    if not isinstance(require_matching_class_counts, bool):
+        raise ValueError("require_matching_class_counts must be a boolean.")
+    if require_matching_class_counts and plan.class_counts != source_plan.class_counts:
         raise ValueError("Source and override condition manifests must share class counts.")
     if training_sampling_policy not in {None, "empirical", "class_balanced"}:
         raise ValueError("training_sampling_policy must be None, 'empirical', or 'class_balanced'.")
@@ -497,9 +504,9 @@ def _read_condition_plan(raw_path: str | Path) -> _ConditionPlan:
         path.parent.name == "conditions" and path.parent.parent.name == expected_replicate_dir
     )
     control_location = (
-        condition_id == BOUNDED_ROTATION_CONDITION_ID
+        condition_id in BOUNDED_ROTATION_CONDITION_IDS
         and path.parent.name == "conditions"
-        and path.parent.parent.name == "bounded_rotation_control"
+        and path.parent.parent.name in {"bounded_rotation_control", "bounded_rotation_followups"}
         and path.parent.parent.parent.name == expected_replicate_dir
     )
     if not canonical_location and not control_location:
@@ -1322,6 +1329,241 @@ class SyntheticLongTailRunner:
             )
         return summary
 
+    def bounded_rotation_followups(
+        self,
+        *,
+        device: str,
+        training_steps: int = 2_000,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Run one object replication and a one-class bounded-5D frequency slice."""
+
+        self._require_pretraining_gates(include_pilot=False, dry_run=dry_run)
+        steps = _positive_int("training_steps", training_steps)
+        budget_id = f"steps_{steps:08d}"
+        followup_root = self.output_root / "replicate_00" / "bounded_rotation_followups"
+        manifest_root = followup_root / "conditions"
+        followup_spec_path = followup_root / "followup_spec.json"
+        run_specs = (
+            {
+                "key": "g2_bounded_empirical",
+                "experiment_id": "bounded_rotation_object_replication",
+                "condition_id": BOUNDED_ROTATION_G2_CONDITION_ID,
+                "source_condition_id": "g2_balanced",
+                "sampling_policy": "empirical",
+            },
+            {
+                "key": "g0_medium_empirical",
+                "experiment_id": "bounded_rotation_frequency_slice",
+                "condition_id": BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+                "source_condition_id": "g0_balanced",
+                "sampling_policy": "empirical",
+            },
+            {
+                "key": "g0_tail_empirical",
+                "experiment_id": "bounded_rotation_frequency_slice",
+                "condition_id": BOUNDED_ROTATION_TAIL_CONDITION_ID,
+                "source_condition_id": "g0_balanced",
+                "sampling_policy": "empirical",
+            },
+            {
+                "key": "g0_tail_class_balanced",
+                "experiment_id": "bounded_rotation_frequency_slice_class_balanced",
+                "condition_id": BOUNDED_ROTATION_TAIL_CONDITION_ID,
+                "source_condition_id": "g0_balanced",
+                "sampling_policy": "class_balanced",
+            },
+        )
+        pilot = copy.deepcopy(self.config["pilot"])
+        pilot["training_steps"] = steps
+        commands: dict[str, TrainingCommand] = {}
+        for spec in run_specs:
+            config_root = (
+                self.output_root
+                / "training_configs"
+                / spec["experiment_id"]
+                / budget_id
+                / f"{spec['condition_id']}_set"
+            )
+            config_path = config_root / "replicate_00" / f"{spec['condition_id']}.yaml"
+            run_dir = (
+                self.run_root
+                / spec["experiment_id"]
+                / budget_id
+                / "replicate_00"
+                / spec["condition_id"]
+            )
+            commands[str(spec["key"])] = TrainingCommand(
+                replicate=0,
+                condition_id=str(spec["condition_id"]),
+                config_path=config_path,
+                run_dir=run_dir,
+            )
+        if dry_run:
+            return {
+                "training_steps": steps,
+                "design": "one g2 replication plus 500/50 empirical and 50 balanced exposure",
+                "commands": [
+                    self._command_record(commands[str(spec["key"])], device)
+                    | {
+                        "run_key": spec["key"],
+                        "training_sampling_policy": spec["sampling_policy"],
+                    }
+                    for spec in run_specs
+                ],
+            }
+
+        if not followup_spec_path.is_file():
+            from fm_lab.geometry_explorer.synthetic_long_tail_design import (
+                build_bounded_rotation_followups,
+            )
+
+            build_bounded_rotation_followups(self.config, self.output_root, replicate=0)
+        if not followup_spec_path.is_file():
+            raise FileNotFoundError(f"Bounded follow-up spec is missing: {followup_spec_path}")
+
+        evaluations: dict[str, dict[str, Any]] = {}
+        condition_counts: dict[str, tuple[int, int, int]] = {}
+        for spec in run_specs:
+            key = str(spec["key"])
+            condition_id = str(spec["condition_id"])
+            manifest_path = manifest_root / f"{condition_id}.json"
+            target = SyntheticLongTailImages(manifest_path)
+            condition_counts[key] = tuple(int(value) for value in target.class_counts)
+            source_config_path = next(
+                path for path in self.config_paths()[0] if path.stem == spec["source_condition_id"]
+            )
+            command = commands[key]
+            config_root = command.config_path.parents[1]
+            if not command.config_path.is_file():
+                config_path = write_pilot_training_config(
+                    source_config_path=source_config_path,
+                    output_root=config_root,
+                    run_root=command.run_dir.parents[1],
+                    pilot=pilot,
+                    training_sampling_policy=(
+                        None
+                        if spec["sampling_policy"] == "empirical"
+                        else str(spec["sampling_policy"])
+                    ),
+                    condition_manifest_override=manifest_path,
+                    require_matching_class_counts=False,
+                )
+                command = TrainingCommand(
+                    replicate=0,
+                    condition_id=condition_id,
+                    config_path=config_path,
+                    run_dir=command.run_dir,
+                )
+                commands[key] = command
+
+            stage = f"{spec['experiment_id'].replace('_', '-')}-{budget_id}"
+            entry_id = f"{stage}:replicate-00:{condition_id}"
+            config_hash = _training_config_hash(command.config_path)
+            if not self.ledger.is_complete(entry_id, config_hash=config_hash):
+                self._run(command, device=device, stage=stage, resume=False)
+            evaluations[key] = self._evaluate_bounded_followup_run(
+                command=command,
+                device=device,
+                pilot=pilot,
+                ledger_key=f"{spec['experiment_id']}:{budget_id}:{condition_id}",
+                sampling_policy=str(spec["sampling_policy"]),
+            )
+
+        g0_head_metrics_path = (
+            self.run_root
+            / "bounded_rotation_control"
+            / budget_id
+            / "replicate_00"
+            / BOUNDED_ROTATION_CONDITION_ID
+            / "evaluation"
+            / "factor_metrics.json"
+        )
+        g2_baseline_metrics_path = (
+            self._balanced_run_dir("g2_balanced", steps) / "evaluation" / "factor_metrics.json"
+        )
+        for path in (g0_head_metrics_path, g2_baseline_metrics_path):
+            if not path.is_file():
+                raise FileNotFoundError(f"Required paired baseline evaluation is missing: {path}")
+        evaluations["g0_head_empirical"] = json.loads(
+            g0_head_metrics_path.read_text(encoding="utf-8")
+        )
+        evaluations["g2_full_empirical"] = json.loads(
+            g2_baseline_metrics_path.read_text(encoding="utf-8")
+        )
+        condition_counts["g0_head_empirical"] = (int(self.config["counts"][0]),) * 3
+        followup_spec = json.loads(followup_spec_path.read_text(encoding="utf-8"))
+        summary = _bounded_rotation_followup_summary(
+            evaluations=evaluations,
+            condition_counts=condition_counts,
+            followup_spec=followup_spec,
+            training_steps=steps,
+        )
+        summary_path = (
+            self.output_root / "analysis" / "bounded_rotation_followups" / f"{budget_id}.json"
+        )
+        if summary_path.is_file():
+            if json.loads(summary_path.read_text(encoding="utf-8")) != summary:
+                raise FileExistsError(
+                    f"Refusing to replace a different bounded follow-up summary: {summary_path}"
+                )
+        else:
+            _write_json_atomic(summary, summary_path)
+        summary_entry = f"bounded-rotation-followups-summary:{budget_id}"
+        if not self.ledger.is_complete(summary_entry):
+            self.ledger.complete(
+                summary_entry,
+                {"summary": str(summary_path)},
+                metadata={"stage": "bounded-rotation-followups-summary", "training_steps": steps},
+            )
+        return summary
+
+    def _evaluate_bounded_followup_run(
+        self,
+        *,
+        command: TrainingCommand,
+        device: str,
+        pilot: dict[str, Any],
+        ledger_key: str,
+        sampling_policy: str,
+    ) -> dict[str, Any]:
+        evaluation_dir = command.run_dir / "evaluation"
+        metrics_path = evaluation_dir / "factor_metrics.json"
+        if metrics_path.is_file():
+            return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+        from fm_lab.geometry_explorer.synthetic_long_tail_metrics import (
+            evaluate_generated_distribution,
+        )
+
+        reduced_config = load_config(command.config_path)
+        count = int(pilot["samples_per_class"])
+        evaluation = evaluate_generated_distribution(
+            generated_root=command.run_dir,
+            oracle_checkpoint=self.output_root / "calibration" / "oracle" / "factor_oracle.pt",
+            oracle_gate=self.output_root / "calibration" / "oracle" / "oracle_gate.json",
+            output_dir=evaluation_dir,
+            device=device,
+            samples_per_class=count,
+            reference_samples_per_class=count,
+            seed=int(self.config["seed"]) + 8_000_000,
+            generated_seed=int(reduced_config["sampling"]["seed"]),
+            source_revision=_source_revision(),
+            clip_generated_to_value_range=True,
+            condition_manifest=reduced_config["data"]["condition_manifest"],
+            inference_batch_size=min(256, count),
+        )
+        self.ledger.complete(
+            f"bounded-rotation-followup-evaluation:{ledger_key}",
+            {"evaluation": str(metrics_path)},
+            metadata={
+                "stage": "bounded-rotation-followup-evaluation",
+                "condition": command.condition_id,
+                "training_sampling_policy": sampling_policy,
+            },
+        )
+        return evaluation
+
     def _balanced_run_dir(self, condition_id: str, training_steps: int) -> Path:
         configured_steps = int(self.config["pilot"]["training_steps"])
         if training_steps == configured_steps:
@@ -1765,6 +2007,159 @@ def _bounded_rotation_summary(
             "nuisance_check": (
                 "Changes in classes 1 and 2 reveal model-wide optimization spillover even "
                 "though their underlying pool files are unchanged."
+            ),
+        },
+    }
+
+
+def _bounded_rotation_followup_summary(
+    *,
+    evaluations: dict[str, dict[str, Any]],
+    condition_counts: dict[str, tuple[int, int, int]],
+    followup_spec: dict[str, Any],
+    training_steps: int,
+) -> dict[str, Any]:
+    """Summarize the bounded object replication and targeted frequency slice."""
+
+    expected = {
+        "g2_full_empirical",
+        "g2_bounded_empirical",
+        "g0_head_empirical",
+        "g0_medium_empirical",
+        "g0_tail_empirical",
+        "g0_tail_class_balanced",
+    }
+    if set(evaluations) != expected:
+        raise ValueError("Bounded follow-up summary requires all six paired evaluations.")
+    steps = _positive_int("training_steps", training_steps)
+    metric_names = (
+        "class_leakage_rate",
+        "off_renderer_rate",
+        "joint_valid_rate",
+        "active_multivariate_energy_distance",
+        "oracle_feature_fid",
+    )
+
+    def class_record(key: str, class_id: int) -> dict[str, Any]:
+        item = next(
+            (
+                value
+                for value in evaluations[key].get("classes", [])
+                if int(value["requested_class"]) == class_id
+            ),
+            None,
+        )
+        if item is None:
+            raise ValueError(f"Evaluation {key} is missing class {class_id}.")
+        metrics = item["all_requested"]["metrics"]
+        return {
+            "class_id": class_id,
+            "object_id": str(item["object_id"]),
+            "target_dimension_id": str(item["target_dimension_id"]),
+            "true_dimension": int(item["true_dimension"]),
+            "class_leakage_rate": float(item["validity"]["class_leakage_rate"]),
+            "off_renderer_rate": float(item["validity"]["off_renderer_rate"]),
+            "joint_valid_rate": float(item["validity"]["joint_valid_rate"]),
+            "active_multivariate_energy_distance": float(
+                metrics["active_factors"]["multivariate_energy_distance"]
+            ),
+            "oracle_feature_fid": float(metrics["oracle_feature_fid"]),
+        }
+
+    def delta(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
+        return {name: float(left[name] - right[name]) for name in metric_names}
+
+    g2_full = class_record("g2_full_empirical", 1)
+    g2_bounded = class_record("g2_bounded_empirical", 1)
+    object_replication = {
+        "class_id": 1,
+        "object_id": g2_full["object_id"],
+        "full_azimuth": g2_full,
+        "bounded_azimuth": g2_bounded,
+        "bounded_minus_full": delta(g2_bounded, g2_full),
+        "unchanged_class_deltas": {
+            str(class_id): delta(
+                class_record("g2_bounded_empirical", class_id),
+                class_record("g2_full_empirical", class_id),
+            )
+            for class_id in (0, 2)
+        },
+    }
+
+    frequency_keys = (
+        ("g0_head_empirical", "empirical"),
+        ("g0_medium_empirical", "empirical"),
+        ("g0_tail_empirical", "empirical"),
+        ("g0_tail_class_balanced", "class_balanced"),
+    )
+    frequency_records = []
+    for key, policy in frequency_keys:
+        counts = condition_counts.get(key)
+        if counts is None or len(counts) != 3:
+            raise ValueError(f"Frequency slice is missing counts for {key}.")
+        frequency_records.append(
+            {
+                "run_key": key,
+                "training_sampling_policy": policy,
+                "class_counts": list(counts),
+                "bounded_5d_unique_count": int(counts[0]),
+                "bounded_5d": class_record(key, 0),
+            }
+        )
+    by_key = {item["run_key"]: item for item in frequency_records}
+    head = by_key["g0_head_empirical"]["bounded_5d"]
+    medium = by_key["g0_medium_empirical"]["bounded_5d"]
+    tail_empirical = by_key["g0_tail_empirical"]["bounded_5d"]
+    tail_balanced = by_key["g0_tail_class_balanced"]["bounded_5d"]
+    frequency_slice = {
+        "records": frequency_records,
+        "medium_minus_head": delta(medium, head),
+        "tail_empirical_minus_head": delta(tail_empirical, head),
+        "tail_balanced_minus_tail_empirical": delta(tail_balanced, tail_empirical),
+        "tail_balanced_minus_head": delta(tail_balanced, head),
+        "unchanged_class_deltas_from_head": {
+            key: {
+                str(class_id): delta(
+                    class_record(key, class_id),
+                    class_record("g0_head_empirical", class_id),
+                )
+                for class_id in (1, 2)
+            }
+            for key in (
+                "g0_medium_empirical",
+                "g0_tail_empirical",
+                "g0_tail_class_balanced",
+            )
+        },
+    }
+    return {
+        "schema_version": 1,
+        "training_steps": steps,
+        "design": (
+            "one g2 bounded-azimuth replication plus a g0 one-class 5000/500/50 "
+            "frequency slice and a 50-example class-balanced exposure control"
+        ),
+        "followup_spec": followup_spec,
+        "object_replication": object_replication,
+        "frequency_slice": frequency_slice,
+        "delta_convention": "first_named_condition_minus_second_named_condition",
+        "interpretation": {
+            "object_replication": (
+                "Tests whether the original g0 bounded recovery transfers to a different "
+                "object and class ID."
+            ),
+            "empirical_frequency_slice": (
+                "Combines unique-support reduction with reduced empirical update exposure "
+                "while holding the other two class datasets fixed."
+            ),
+            "tail_exposure_control": (
+                "At exactly 50 unique bounded-5D examples, class-balanced minus empirical "
+                "isolates the effect of update allocation."
+            ),
+            "finite_support_contrast": (
+                "The residual class-balanced-50 versus empirical-5000 difference is "
+                "associated with finite support, but still occurs in different shared-model "
+                "optimization contexts."
             ),
         },
     }

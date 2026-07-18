@@ -31,6 +31,17 @@ OBJECT_IDS = ("stepped_monument", "crooked_arch", "three_arm_vane")
 DIMENSION_IDS = ("high", "medium", "low")
 BOUNDED_AZIMUTH_DIMENSION_ID = "high_bounded_azimuth"
 BOUNDED_ROTATION_CONDITION_ID = "g0_balanced_bounded_azimuth"
+BOUNDED_ROTATION_G2_CONDITION_ID = "g2_balanced_bounded_azimuth"
+BOUNDED_ROTATION_MEDIUM_CONDITION_ID = "g0_bounded_azimuth_medium"
+BOUNDED_ROTATION_TAIL_CONDITION_ID = "g0_bounded_azimuth_tail"
+BOUNDED_ROTATION_CONDITION_IDS = frozenset(
+    {
+        BOUNDED_ROTATION_CONDITION_ID,
+        BOUNDED_ROTATION_G2_CONDITION_ID,
+        BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+        BOUNDED_ROTATION_TAIL_CONDITION_ID,
+    }
+)
 FACTOR_COLUMNS = ("tx", "ty", "tz", "azimuth", "elevation")
 GEOMETRY_MAPPINGS = (
     ("high", "medium", "low"),
@@ -146,26 +157,81 @@ def bounded_rotation_condition_spec(
     class_count = int(count)
     if class_count <= 0:
         raise ValueError("Bounded-rotation class count must be positive.")
-    dimensions = (BOUNDED_AZIMUTH_DIMENSION_ID, "medium", "low")
+    return _bounded_rotation_spec(
+        condition_id=BOUNDED_ROTATION_CONDITION_ID,
+        replicate=replicate,
+        geometry_index=0,
+        class_counts=(class_count, class_count, class_count),
+        frequency_mapping="balanced",
+    )
+
+
+def bounded_rotation_followup_condition_specs(
+    replicate: int,
+    *,
+    counts: tuple[int, int, int] = (5000, 500, 50),
+) -> tuple[ConditionManifest, ...]:
+    """Return the object replication and one-class frequency slice conditions."""
+
+    head, medium, tail = (int(value) for value in counts)
+    if not head > medium > tail > 0:
+        raise ValueError("Bounded follow-up counts must be strictly descending.")
+    return (
+        _bounded_rotation_spec(
+            condition_id=BOUNDED_ROTATION_G2_CONDITION_ID,
+            replicate=replicate,
+            geometry_index=2,
+            class_counts=(head, head, head),
+            frequency_mapping="balanced",
+        ),
+        _bounded_rotation_spec(
+            condition_id=BOUNDED_ROTATION_MEDIUM_CONDITION_ID,
+            replicate=replicate,
+            geometry_index=0,
+            class_counts=(medium, head, head),
+            frequency_mapping="class_0_medium_only",
+        ),
+        _bounded_rotation_spec(
+            condition_id=BOUNDED_ROTATION_TAIL_CONDITION_ID,
+            replicate=replicate,
+            geometry_index=0,
+            class_counts=(tail, head, head),
+            frequency_mapping="class_0_tail_only",
+        ),
+    )
+
+
+def _bounded_rotation_spec(
+    *,
+    condition_id: str,
+    replicate: int,
+    geometry_index: int,
+    class_counts: tuple[int, int, int],
+    frequency_mapping: str,
+) -> ConditionManifest:
+    dimensions = tuple(
+        BOUNDED_AZIMUTH_DIMENSION_ID if item == "high" else item
+        for item in GEOMETRY_MAPPINGS[geometry_index]
+    )
     classes = tuple(
         ConditionClass(
             class_id=class_id,
             object_id=object_id,
             dimension_id=dimension_id,
             true_dimension=int(build_factor_space(dimension_id).dim),
-            count=class_count,
+            count=int(count),
             image_path="",
             factor_path="",
         )
-        for class_id, (object_id, dimension_id) in enumerate(
-            zip(OBJECT_IDS, dimensions, strict=True)
+        for class_id, (object_id, dimension_id, count) in enumerate(
+            zip(OBJECT_IDS, dimensions, class_counts, strict=True)
         )
     )
     return ConditionManifest(
-        condition_id=BOUNDED_ROTATION_CONDITION_ID,
+        condition_id=condition_id,
         replicate=int(replicate),
-        geometry_mapping="geometry_0_bounded_azimuth",
-        frequency_mapping="balanced",
+        geometry_mapping=f"geometry_{geometry_index}_bounded_azimuth",
+        frequency_mapping=frequency_mapping,
         image_shape=(3, 32, 32),
         classes=classes,
         config_hash="",
@@ -556,6 +622,196 @@ def build_bounded_rotation_control(
         "root": control_root,
         "manifest": final_condition_dir / f"{BOUNDED_ROTATION_CONDITION_ID}.json",
         "control_spec": control_root / "control_spec.json",
+    }
+
+
+def build_bounded_rotation_followups(
+    config: dict[str, Any],
+    root: str | Path,
+    *,
+    replicate: int = 0,
+) -> dict[str, Any]:
+    """Build one new g2 pool and immutable manifests for the targeted follow-ups."""
+
+    master_count = int(config["master_count"])
+    image_size = int(config["image_size"])
+    counts = tuple(int(value) for value in config["counts"])
+    if master_count <= 0 or image_size <= 0 or len(counts) != 3:
+        raise ValueError("Follow-ups require positive master_count/image_size and three counts.")
+    if counts[0] != master_count or not counts[0] > counts[1] > counts[2] > 0:
+        raise ValueError("Follow-up counts must be master_count > medium > tail > 0.")
+    replicate_id = int(replicate)
+    if replicate_id < 0:
+        raise ValueError("replicate must be non-negative.")
+    render_batch_size = int(config.get("render", {}).get("render_batch_size", 128))
+    if render_batch_size <= 0:
+        raise ValueError("render.render_batch_size must be positive.")
+
+    replicate_root = Path(root).resolve() / f"replicate_{replicate_id:02d}"
+    canonical_pool_root = replicate_root / "pools"
+    original_control_root = replicate_root / "bounded_rotation_control"
+    g0_bounded_cell = original_control_root / "pools" / OBJECT_IDS[0] / BOUNDED_AZIMUTH_DIMENSION_ID
+    g2_baseline_cell = canonical_pool_root / OBJECT_IDS[1] / "high"
+    required_cells = (
+        g0_bounded_cell,
+        g2_baseline_cell,
+        canonical_pool_root / OBJECT_IDS[0] / "low",
+        canonical_pool_root / OBJECT_IDS[1] / "medium",
+        canonical_pool_root / OBJECT_IDS[2] / "low",
+        canonical_pool_root / OBJECT_IDS[2] / "medium",
+    )
+    for cell_dir in required_cells:
+        for filename in ("images.npy", "factors.npy"):
+            if not (cell_dir / filename).is_file():
+                raise FileNotFoundError(
+                    f"Required pool is missing before bounded follow-ups: {cell_dir / filename}"
+                )
+
+    followup_root = replicate_root / "bounded_rotation_followups"
+    _refuse_existing(followup_root, kind="Bounded-rotation follow-up")
+    staging_root = Path(tempfile.mkdtemp(prefix=".bounded-followups-", dir=replicate_root))
+    condition_dir = staging_root / "conditions"
+    new_cell_dir = staging_root / "pools" / OBJECT_IDS[1] / BOUNDED_AZIMUTH_DIMENSION_ID
+    final_condition_dir = followup_root / "conditions"
+    published = False
+    try:
+        condition_dir.mkdir(parents=True)
+        new_cell_dir.mkdir(parents=True)
+        factor = build_factor_space(BOUNDED_AZIMUTH_DIMENSION_ID)
+        seed = int(config["seed"]) + replicate_id * 100_000 + 1_000
+        values = sample_values(factor.sample(master_count, seed=seed))
+        image_path = new_cell_dir / "images.npy"
+        factor_path = new_cell_dir / "factors.npy"
+        images = np.lib.format.open_memmap(
+            image_path,
+            mode="w+",
+            dtype=np.uint8,
+            shape=(master_count, 3, image_size, image_size),
+        )
+        factors = np.lib.format.open_memmap(
+            factor_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(master_count, len(FACTOR_COLUMNS)),
+        )
+        render_map = _render_map(config, _object_configs(config)[OBJECT_IDS[1]], factor)
+        for start in range(0, master_count, render_batch_size):
+            stop = min(master_count, start + render_batch_size)
+            rendered = _as_hwc_batch(
+                render_map.render_batch(values[start:stop], batch_size=render_batch_size),
+                image_size=image_size,
+            )
+            images[start:stop] = np.rint(
+                np.clip(rendered.transpose(0, 3, 1, 2), 0.0, 1.0) * 255.0
+            ).astype(np.uint8)
+            factors[start:stop] = canonical_factor_rows(factor, values[start:stop])
+        images.flush()
+        factors.flush()
+        del images, factors
+
+        baseline_factors = np.load(g2_baseline_cell / "factors.npy", mmap_mode="r")
+        bounded_factors = np.load(factor_path, mmap_mode="r")
+        if baseline_factors.shape != bounded_factors.shape or not np.array_equal(
+            np.asarray(baseline_factors[:, (0, 1, 2, 4)]),
+            np.asarray(bounded_factors[:, (0, 1, 2, 4)]),
+        ):
+            raise ValueError("g2 bounded XYZ/elevation factors are not paired with baseline.")
+        del baseline_factors, bounded_factors
+
+        linked_cells = {
+            (OBJECT_IDS[0], BOUNDED_AZIMUTH_DIMENSION_ID): g0_bounded_cell,
+            (OBJECT_IDS[0], "low"): canonical_pool_root / OBJECT_IDS[0] / "low",
+            (OBJECT_IDS[1], "medium"): canonical_pool_root / OBJECT_IDS[1] / "medium",
+            (OBJECT_IDS[2], "low"): canonical_pool_root / OBJECT_IDS[2] / "low",
+            (OBJECT_IDS[2], "medium"): canonical_pool_root / OBJECT_IDS[2] / "medium",
+        }
+        for (object_id, dimension_id), target in linked_cells.items():
+            link = staging_root / "pools" / object_id / dimension_id
+            link.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(os.path.relpath(target, link.parent), link, target_is_directory=True)
+
+        followup_spec = {
+            "schema_version": 1,
+            "replicate": replicate_id,
+            "training_runs": 4,
+            "object_replication": {
+                "condition_id": BOUNDED_ROTATION_G2_CONDITION_ID,
+                "changed_class_id": 1,
+                "object_id": OBJECT_IDS[1],
+                "baseline_condition_id": "g2_balanced",
+            },
+            "frequency_slice": {
+                "changed_class_id": 0,
+                "object_id": OBJECT_IDS[0],
+                "unique_counts": [counts[0], counts[1], counts[2]],
+                "other_class_counts": [counts[0], counts[0]],
+                "tail_sampling_policies": ["empirical", "class_balanced"],
+            },
+            "azimuth_bounds_radians": [
+                -BOUNDED_AZIMUTH_HALF_RANGE,
+                BOUNDED_AZIMUTH_HALF_RANGE,
+            ],
+            "pairing": {
+                "g2_seed": seed,
+                "identical_factor_columns": ["tx", "ty", "tz", "elevation"],
+                "model_initialization_and_sampling_seeds": "shared across runs",
+            },
+            "decision": (
+                "Use fewer condition cells at the existing 2000-step comparison budget; "
+                "do not repeat the nine-condition factorial."
+            ),
+        }
+        followup_hash = _config_hash({"base_config": config, "followup": followup_spec})
+        manifests: dict[str, Path] = {}
+        for spec in bounded_rotation_followup_condition_specs(
+            replicate_id,
+            counts=counts,
+        ):
+            classes = tuple(
+                replace(
+                    entry,
+                    image_path=os.path.relpath(
+                        followup_root
+                        / "pools"
+                        / entry.object_id
+                        / entry.dimension_id
+                        / "images.npy",
+                        final_condition_dir,
+                    ),
+                    factor_path=os.path.relpath(
+                        followup_root
+                        / "pools"
+                        / entry.object_id
+                        / entry.dimension_id
+                        / "factors.npy",
+                        final_condition_dir,
+                    ),
+                )
+                for entry in spec.classes
+            )
+            manifest = replace(
+                spec,
+                image_shape=(3, image_size, image_size),
+                classes=classes,
+                config_hash=followup_hash,
+            )
+            filename = f"{manifest.condition_id}.json"
+            manifest.write(condition_dir / filename)
+            manifests[manifest.condition_id] = final_condition_dir / filename
+        write_json(
+            followup_spec | {"config_hash": followup_hash},
+            staging_root / "followup_spec.json",
+        )
+        staging_root.replace(followup_root)
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+    return {
+        "root": followup_root,
+        "manifests": manifests,
+        "followup_spec": followup_root / "followup_spec.json",
     }
 
 

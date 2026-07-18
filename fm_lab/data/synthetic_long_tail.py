@@ -14,10 +14,12 @@ import torch
 from fm_lab.geometry_explorer.latent_factors import sample_values
 from fm_lab.geometry_explorer.synthetic_long_tail_design import (
     BOUNDED_ROTATION_CONDITION_ID,
+    BOUNDED_ROTATION_CONDITION_IDS,
     FACTOR_COLUMNS,
     ConditionClass,
     ConditionManifest,
     bounded_rotation_condition_spec,
+    bounded_rotation_followup_condition_specs,
     build_condition_specs,
     build_factor_space,
     canonical_factor_rows,
@@ -306,6 +308,11 @@ def _manifest_from_raw(raw: dict[str, Any], path: Path) -> ConditionManifest:
 def _expected_condition_manifest(manifest: ConditionManifest) -> ConditionManifest:
     if manifest.condition_id == BOUNDED_ROTATION_CONDITION_ID:
         expected = bounded_rotation_condition_spec(manifest.replicate)
+    elif manifest.condition_id in BOUNDED_ROTATION_CONDITION_IDS:
+        expected = {
+            condition.condition_id: condition
+            for condition in bounded_rotation_followup_condition_specs(manifest.replicate)
+        }.get(manifest.condition_id)
     else:
         expected = {
             condition.condition_id: condition

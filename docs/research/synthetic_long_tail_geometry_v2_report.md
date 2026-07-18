@@ -667,6 +667,42 @@ as an imbalance measure
 ([*Intrinsic dimensionality as a model-free measure of class imbalance*,
 2026](https://doi.org/10.1016/j.neucom.2026.132938)).
 
+## Targeted bounded-rotation follow-up (recorded before execution)
+
+The next stage uses four new 2,000-step models rather than repeating the nine-cell
+frequency factorial. The existing bounded `g0` model supplies the 5,000-example
+frequency endpoint.
+
+| New run | Bounded 5D class | Unique count | Other class counts | Training exposure |
+|---|---|---:|---:|---|
+| Object replication | Crooked arch (`g2`, class 1) | 5,000 | 5,000 / 5,000 | Empirical |
+| Frequency medium | Stepped monument (`g0`, class 0) | 500 | 5,000 / 5,000 | Empirical |
+| Frequency tail | Stepped monument (`g0`, class 0) | 50 | 5,000 / 5,000 | Empirical |
+| Tail exposure control | Stepped monument (`g0`, class 0) | 50 | 5,000 / 5,000 | Class-balanced |
+
+All runs retain the 2,000-step budget, model initialization, sampling seed, bounded
+azimuth range, and evaluation protocol. The new `g2` pool uses the original crooked
+arch 5D seed, pairing x/y/depth and elevation exactly with its full-azimuth baseline.
+The two non-target class pools are unchanged within each frequency-slice comparison.
+
+The directional predictions are fixed as follows:
+
+1. If the bounded-rotation result is not object-specific, the `g2` bounded model will
+   improve 5D joint validity and FID relative to the existing full-azimuth `g2`
+   baseline.
+2. Under empirical sampling, reducing only the bounded 5D class from 5,000 to 500 to
+   50 unique examples will reduce validity or factor coverage and increase FID.
+3. At exactly 50 unique examples, class-balanced exposure will recover part of the
+   empirical-tail deficit. This contrast isolates update allocation at fixed support.
+4. Any remaining gap between class-balanced 50 and empirical 5,000 is associated with
+   finite unique support, although the shared model still sees different class-prior
+   contexts and therefore prevents a pure single-class causal claim.
+
+The primary endpoints remain joint-valid rate, oracle-feature FID, active-factor
+energy distance, and the five marginal central-range ratios. Unchanged-class metrics
+are retained as spillover checks. No additional factorial cells will be launched based
+only on an isolated metric reversal.
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
@@ -679,13 +715,13 @@ important for 5D, while aggressive tail reuse produces a measurable near-duplica
 regime. Separately, the 76-point bounded-rotation validity gain establishes that the
 original balanced 5D floor is dominated by more than the dimension integer alone.
 
-The next synthetic question should hold nominal dimension fixed while changing factor
-identity: compare balanced 3D translation against bounded view plus depth across all
-three objects. That directly tests whether viewpoint geometry remains harder after
-range matching. Repeating the present bounded intervention across the remaining two
-object rotations is justified only if object-level robustness is needed before that
-factor-identity test. In parallel, Fashion-MNIST or a controlled pose dataset remains
-the more important bridge for external validity.
+The targeted four-run bounded follow-up above should be completed before a fixed-3D
+factor-identity experiment. It directly re-tests the long-tail mechanism after removing
+the original full-azimuth floor. If it behaves as predicted, the next synthetic
+question should hold nominal dimension fixed while changing factor identity: compare
+balanced 3D translation against bounded view plus depth across all three objects. In
+parallel, Fashion-MNIST or a controlled pose dataset remains the more important bridge
+for external validity.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each

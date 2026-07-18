@@ -13,6 +13,7 @@ from fm_lab.experiments.synthetic_long_tail_geometry import (
     StageBlockedError,
     SyntheticLongTailRunner,
     _balanced_pilot_gate,
+    _bounded_rotation_followup_summary,
     _frequency_factorial_summary,
     build_matrix_commands,
     require_gate,
@@ -140,6 +141,87 @@ def test_bounded_rotation_control_rejects_invalid_budget(training_steps: object)
             dry_run=True,
             training_steps=training_steps,  # type: ignore[arg-type]
         )
+
+
+def test_bounded_rotation_followups_dry_run_lists_only_four_targeted_runs() -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+
+    result = runner.bounded_rotation_followups(device="cpu", dry_run=True)
+
+    assert result["training_steps"] == 2_000
+    assert len(result["commands"]) == 4
+    assert [item["training_sampling_policy"] for item in result["commands"]] == [
+        "empirical",
+        "empirical",
+        "empirical",
+        "class_balanced",
+    ]
+    assert [item["condition_id"] for item in result["commands"]].count(
+        "g0_bounded_azimuth_tail"
+    ) == 2
+    assert all("steps_00002000" in item["run_dir"] for item in result["commands"])
+
+
+def test_bounded_rotation_followup_summary_separates_frequency_and_exposure() -> None:
+    objects = ("stepped_monument", "crooked_arch", "three_arm_vane")
+
+    def evaluation(error: float) -> dict[str, object]:
+        return {
+            "classes": [
+                {
+                    "requested_class": class_id,
+                    "object_id": object_id,
+                    "target_dimension_id": "high_bounded_azimuth",
+                    "true_dimension": 5,
+                    "validity": {
+                        "class_leakage_rate": 0.0,
+                        "off_renderer_rate": error,
+                        "joint_valid_rate": 1.0 - error,
+                    },
+                    "all_requested": {
+                        "metrics": {
+                            "active_factors": {
+                                "multivariate_energy_distance": error,
+                            },
+                            "oracle_feature_fid": error,
+                        }
+                    },
+                }
+                for class_id, object_id in enumerate(objects)
+            ]
+        }
+
+    evaluations = {
+        "g2_full_empirical": evaluation(0.8),
+        "g2_bounded_empirical": evaluation(0.2),
+        "g0_head_empirical": evaluation(0.1),
+        "g0_medium_empirical": evaluation(0.3),
+        "g0_tail_empirical": evaluation(0.7),
+        "g0_tail_class_balanced": evaluation(0.4),
+    }
+    counts = {
+        "g0_head_empirical": (5_000, 5_000, 5_000),
+        "g0_medium_empirical": (500, 5_000, 5_000),
+        "g0_tail_empirical": (50, 5_000, 5_000),
+        "g0_tail_class_balanced": (50, 5_000, 5_000),
+    }
+
+    summary = _bounded_rotation_followup_summary(
+        evaluations=evaluations,
+        condition_counts=counts,
+        followup_spec={"schema_version": 1},
+        training_steps=2_000,
+    )
+
+    assert summary["object_replication"]["bounded_minus_full"]["joint_valid_rate"] == (
+        pytest.approx(0.6)
+    )
+    assert summary["frequency_slice"]["tail_empirical_minus_head"][
+        "joint_valid_rate"
+    ] == pytest.approx(-0.6)
+    assert summary["frequency_slice"]["tail_balanced_minus_tail_empirical"][
+        "joint_valid_rate"
+    ] == pytest.approx(0.3)
 
 
 def test_frequency_factorial_summary_computes_paired_frequency_changes() -> None:
