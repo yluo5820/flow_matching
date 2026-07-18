@@ -464,6 +464,97 @@ generated samples per cell. The contracted factor ranges and visual tail failure
 compatible with geometric memorization, but a Jacobian/tangent-rank probe is still
 needed to demonstrate loss of learned manifold directions directly.
 
+## Scope, confounds, and economical robustness tests
+
+The current factor ladder is nested but not factor-exchangeable: dimension 1 is depth
+translation, dimension 3 is x/y/depth translation, and dimension 5 adds azimuth and
+elevation. Translation and view are sampled independently, and 98.61% of renderer
+Jacobians passed the local full-rank criterion. This rules out latent correlation and
+most local degeneracy as trivial explanations, but it does not make rotation and
+translation equally difficult. The view factor is also not the full sphere: azimuth
+covers the full circle while elevation is bounded to -30 to +30 degrees.
+
+The renderer calibration makes the scale issue concrete. Median pixel-space pullback
+norms were 119.4 for azimuth, 30.5 for elevation, 41.9 for x translation, 35.2 for y
+translation, and 29.5 for depth. Multiplying these local norms by their coordinate
+ranges gives rough one-axis extents of about 750, 32, 21, 18, and 44, respectively.
+These products are not manifold volumes, but they show that full-circle azimuth adds
+far more global image-space extent than one ordinary Euclidean coordinate. The present
+result should therefore be stated as an effect of manifold dimension together with
+factor identity, extent, curvature, and topology, rather than an isolated effect of
+the dimension integer.
+
+A no-training marginal audit also shows selective rather than uniform contraction.
+For 5D tail classes, mean central-range ratios were 0.696 for azimuth, 0.812 for
+elevation, 1.078 for x, 1.025 for y, and 0.762 for depth. Thus the lateral translation
+axes remain covered while viewpoint and depth are contracted; nevertheless, the almost
+zero joint-valid rate is much worse than these marginal numbers suggest. This points
+to failures of joint factor coordination and off-manifold image structure, not simply
+collapse of every coordinate. It is consistent with directional geometric
+memorization, but is not yet a direct tangent-rank measurement.
+
+Fixed class color is part of the rendered training data, not merely a visualization
+overlay. It cannot create the averaged dimension or frequency effects because color
+and object identity are rotated through every experimental role, and measured class
+leakage is negligible. It can still reduce interclass overlap and change how a shared
+network partitions or transfers capacity. Removing color or returning to similar
+objects is therefore best treated as a later interclass-sharing experiment, rather
+than as a required repair of the present internal comparison.
+
+The economical follow-up order is:
+
+1. Complete the class-balanced-sampling factorial already in progress. This isolates
+   update allocation from finite unique coverage without changing the renderer.
+2. Run one paired 2,000-step `g0_balanced` screen in which only the 5D azimuth range is
+   restricted. A pullback-matched total span is approximately 0.37 radians (about 21
+   degrees, centered at the canonical view), because it gives azimuth a rough extent
+   comparable to the current depth coordinate. Compare it with the existing 2,000-step
+   `g0_balanced` run. Only if the recovery is large should the other object rotations
+   or a 5,000-step confirmation be run.
+3. If factor identity remains important, compare two balanced 2,000-step models at
+   fixed dimension 3: all three classes using x/y/depth translation versus all three
+   using bounded view plus depth. This is two runs, averages over all three objects,
+   and directly tests whether a 3D viewpoint manifold is harder than a 3D translation
+   manifold without repeating the frequency factorial.
+4. Defer the shared-gray-material or similar-object variant until studying capacity
+   borrowing. That variant deliberately changes interclass relatedness and would also
+   require revalidating the object oracle, so it is a new mechanism experiment rather
+   than a cheap nuisance control.
+
+For external validity, a controlled real-image bridge should precede an unconstrained
+semantic dataset. Small NORB or MPI3D-real retain known pose and appearance factors in
+photographs of physical objects, allowing the same coverage tests without relying on
+pixel-space synthetic geometry. A subsequent CIFAR-10 screen can estimate class
+intrinsic dimension on the original balanced data in several frozen feature spaces,
+select classes whose low/medium/high ordering is stable, and only then impose rotated
+5,000/500/50 frequencies. Such estimates would be representation-dependent proxies,
+not ground-truth dimensions.
+
+The emerging remedy hypothesis has two parts. Equal or complexity-aware class exposure
+can correct optimization allocation, whereas missing manifold coverage requires new
+directions, not repeated presentation of the same 50 examples. In the synthetic study,
+known-factor tail augmentation or a shared geometric module with class-specific
+appearance residuals can test whether geometric variation can be borrowed from head
+classes. The natural-image analogue would use approximately label-preserving
+transformations or a pretrained shared representation. This distinction prevents a
+successful sampler ablation from being overinterpreted as a complete solution.
+
+This framing is consistent with several nearby results in the literature. *Losing
+dimensions: Geometric memorization in generative diffusion* predicts direction-specific
+losses whose critical sample sizes depend on variance, rather than a uniform collapse
+of all tangent directions ([Achilli et al., 2024](https://arxiv.org/abs/2410.08727)).
+The broader manifold-memorization hypothesis explicitly compares the learned and data
+manifold dimensions ([Ross et al., ICLR 2025](https://proceedings.iclr.cc/paper_files/paper/2025/file/560f7d557a41e54a64b43cb052766557-Paper-Conference.pdf)).
+For long-tail remedies, class-prior adjustment in
+[Class-Balancing Diffusion Models](https://arxiv.org/abs/2305.00562) is closest to the
+sampler/allocation question, whereas
+[overlap optimization](https://arxiv.org/abs/2402.10821) targets interclass confusion
+and is more relevant to the later similar-object variant. Recent classification work
+also reports that intrinsic dimension complements, rather than replaces, cardinality
+as an imbalance measure
+([*Intrinsic dimensionality as a model-free measure of class imbalance*,
+2026](https://doi.org/10.1016/j.neucom.2026.132938)).
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
