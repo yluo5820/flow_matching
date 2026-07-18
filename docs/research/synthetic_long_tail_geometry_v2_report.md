@@ -498,6 +498,48 @@ Artifacts are stored in each recovered tail run under `memorization_5d_tail/`; t
 near-duplicate threshold is the 0.5th percentile of independent held-out-to-held-out
 nearest oracle-feature distances.
 
+## Bounded-rotation paired control
+
+The 2,000-step bounded-rotation screen is complete. It compares the existing balanced
+`g0` model, whose 5D class covers a full azimuth circle, with one model whose 5D class
+uses a pullback-matched 0.371-radian total azimuth span (21.25 degrees). The nominal
+dimension remains five. The x/y/depth and elevation samples are exactly paired with
+the baseline through a shared seed, and the 3D and 1D pool files are reused unchanged.
+
+| Class role | Metric | Full azimuth | Bounded azimuth | Change |
+|---|---|---:|---:|---:|
+| 5D intervention | Joint-valid rate | 0.0833 | 0.8433 | +0.7600 |
+| 5D intervention | Oracle-feature FID | 9.6327 | 3.8916 | -5.7411 |
+| 5D intervention | Active-factor energy distance | 0.1380 | 0.0567 | -0.0813 |
+| Unchanged 3D pool | Joint-valid rate | 0.7700 | 0.7767 | +0.0067 |
+| Unchanged 3D pool | Oracle-feature FID | 3.8624 | 2.9596 | -0.9029 |
+| Unchanged 1D pool | Joint-valid rate | 1.0000 | 1.0000 | 0.0000 |
+| Unchanged 1D pool | Oracle-feature FID | 0.7555 | 0.4787 | -0.2768 |
+
+The 5D validity gain is 76 percentage points, FID falls by 59.6%, and active-factor
+energy distance falls by 58.9%. Class leakage remains zero. The unchanged classes do
+not lose validity, so this is not a simple transfer of failures into another label;
+their lower FID and energy distance instead suggest that simplifying the hardest class
+also reduces shared optimization pressure. Final scalar training loss barely changes
+(0.05441 to 0.05391), showing that the aggregate loss does not expose this large
+class-conditional geometric difference.
+
+The factor marginals prevent overinterpreting the recovery. Relative to each model's
+own target distribution, 5D azimuth central-range coverage improves from 0.856 to
+0.956, x/y/depth remain close to one, but elevation falls from 0.833 to 0.518. Thus
+the model learns the narrow azimuth interval well while retaining a strong selective
+elevation contraction. High renderer validity therefore does not mean uniform recovery
+of all five directions.
+
+This result rejects a raw-dimension-only account of the original balanced 5D deficit.
+The full-circle factor's extent, periodic topology, and view-dependent appearance or
+occlusion changes were a dominant component of difficulty for this object. It does not
+identify which of those properties is causal, and it does not show that intrinsic
+dimension is irrelevant: the bounded support remains locally 5D, uses one object and
+one model seed, and still has worse FID than the 1D class. The justified claim is that
+nominal intrinsic dimension must be interpreted jointly with the identity and metric
+extent of its factors.
+
 ## Effects
 
 <!-- GENERATED:effects:START -->
@@ -568,12 +610,11 @@ The economical follow-up order is:
 1. The completed class-balanced-sampling factorial establishes that update allocation
    is dominant, but its 5D tail reversal requires an exact-copy and nearest-neighbor
    memorization audit before further training results are interpreted.
-2. Run one paired 2,000-step `g0_balanced` screen in which only the 5D azimuth range is
-   restricted. A pullback-matched total span is approximately 0.37 radians (about 21
-   degrees, centered at the canonical view), because it gives azimuth a rough extent
-   comparable to the current depth coordinate. Compare it with the existing 2,000-step
-   `g0_balanced` run. Only if the recovery is large should the other object rotations
-   or a 5,000-step confirmation be run. This screen is now implemented as
+2. The paired 2,000-step `g0_balanced` screen in which only the 5D azimuth range is
+   restricted is complete. Its pullback-matched total span is approximately 0.37
+   radians (about 21 degrees, centered at the canonical view), giving azimuth a rough
+   extent comparable to the current depth coordinate. The 76-point validity recovery
+   is large, but elevation remains selectively contracted. The screen runs as
    `bounded-rotation-control`: it reuses the class-1 and class-2 pool files and uses the
    original class-0 pool seed, so x/y/depth and elevation are exactly paired while only
    azimuth is compressed. The manifest, matching calculation, training config, run,
@@ -632,13 +673,19 @@ Do not launch the 36-run, 40,000-step matrix. The reduced factorial already esta
 the descriptive frequency phenomenon, while the larger matrix would be extremely
 costly and would not remove the 5D floor or single-seed limitation.
 
-The class-balanced causal ablation and its memorization audit are complete. Allocation
-is dominant for the 1D and 3D tail failures and important for 5D, but aggressive tail
-reuse also produces a measurable near-duplicate regime. The next training experiment
-is the now-implemented single restricted-azimuth 2,000-step screen, which addresses the separate
-dimension-versus-manifold-extent confound under balanced data. Its evaluation should
-include the same nearest-neighbor audit. Only a large paired effect should trigger the
-remaining object rotations or a 5,000-step confirmation.
+The class-balanced causal ablation, its memorization audit, and the bounded-rotation
+screen are complete. Allocation is dominant for the 1D and 3D tail failures and
+important for 5D, while aggressive tail reuse produces a measurable near-duplicate
+regime. Separately, the 76-point bounded-rotation validity gain establishes that the
+original balanced 5D floor is dominated by more than the dimension integer alone.
+
+The next synthetic question should hold nominal dimension fixed while changing factor
+identity: compare balanced 3D translation against bounded view plus depth across all
+three objects. That directly tests whether viewpoint geometry remains harder after
+range matching. Repeating the present bounded intervention across the remaining two
+object rotations is justified only if object-level robustness is needed before that
+factor-identity test. In parallel, Fashion-MNIST or a controlled pose dataset remains
+the more important bridge for external validity.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
