@@ -1544,7 +1544,7 @@ class SyntheticLongTailRunner:
             / "conditions"
             / f"{BOUNDED_ROTATION_TAIL_CONDITION_ID}.json"
         )
-        output_dir = run_dir / "memorization_bounded_5d_tail"
+        output_dir = run_dir / "memorization_bounded_5d_tail_v2"
         summary_path = output_dir / "summary.json"
         if dry_run:
             return {
@@ -1583,13 +1583,13 @@ class SyntheticLongTailRunner:
             source_revision=_source_revision(),
             inference_batch_size=min(256, int(self.config["pilot"]["samples_per_class"])),
         )
-        entry_id = f"bounded-rotation-memorization:{budget_id}"
+        entry_id = f"bounded-rotation-memorization-v2:{budget_id}"
         if not self.ledger.is_complete(entry_id):
             self.ledger.complete(
                 entry_id,
                 {"summary": str(summary_path)},
                 metadata={
-                    "stage": "bounded-rotation-memorization",
+                    "stage": "bounded-rotation-memorization-v2",
                     "training_steps": steps,
                     "condition": BOUNDED_ROTATION_TAIL_CONDITION_ID,
                     "training_sampling_policy": "class_balanced",

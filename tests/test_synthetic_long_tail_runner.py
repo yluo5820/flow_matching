@@ -172,7 +172,7 @@ def test_bounded_rotation_memorization_dry_run_reuses_completed_tail_run() -> No
     assert result["training_unique_count"] == 50
     assert result["retraining"] is False
     assert "bounded_rotation_frequency_slice_class_balanced" in result["generated_run"]
-    assert result["output_dir"].endswith("memorization_bounded_5d_tail")
+    assert result["output_dir"].endswith("memorization_bounded_5d_tail_v2")
 
 
 def test_bounded_rotation_followup_summary_separates_frequency_and_exposure() -> None:

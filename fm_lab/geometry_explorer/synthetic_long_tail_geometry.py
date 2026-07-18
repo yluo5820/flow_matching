@@ -298,9 +298,13 @@ def evaluate_memorization(
     heldout_feature_distance = _nearest_distances(
         generated_features, heldout_features, distance_chunk_size
     )
-    calibration = cdist(heldout_features, heldout_features)
-    np.fill_diagonal(calibration, np.inf)
-    threshold_value = float(np.percentile(calibration.min(axis=1), 0.5))
+    heldout_to_training_factor_distance = _nearest_distances(
+        heldout_factors, training_factors, distance_chunk_size
+    )
+    heldout_to_training_feature_distance = _nearest_distances(
+        heldout_features, training_features, distance_chunk_size
+    )
+    threshold_value = float(np.percentile(heldout_to_training_feature_distance, 0.5))
     exact_copy = _exact_copy_flags(generated_images, training_images)
     near_duplicate = train_feature_distance <= threshold_value
     frame = pd.DataFrame(
@@ -319,18 +323,38 @@ def evaluate_memorization(
     for class_id, group in frame.groupby("class_id", sort=True):
         class_summary.append(_memorization_summary(group, int(class_id)))
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "summary": {
             **_memorization_summary(frame, None),
             "near_duplicate_threshold": threshold_value,
+            "heldout_count": int(len(heldout_images)),
+            "median_heldout_to_training_factor_distance": float(
+                np.median(heldout_to_training_factor_distance)
+            ),
+            "median_heldout_to_training_feature_distance": float(
+                np.median(heldout_to_training_feature_distance)
+            ),
+            "generated_to_heldout_training_proximity_factor_ratio": _median_ratio(
+                train_factor_distance,
+                heldout_to_training_factor_distance,
+            ),
+            "generated_to_heldout_training_proximity_feature_ratio": _median_ratio(
+                train_feature_distance,
+                heldout_to_training_feature_distance,
+            ),
         },
         "class_summary": class_summary,
         "provenance": {
             "source_revision": source_revision,
             "distance_chunk_size": int(distance_chunk_size),
             "near_duplicate_definition": (
-                "0.5th percentile of independent heldout-to-heldout nearest "
-                "oracle-feature distances"
+                "generated-to-training oracle-feature distance no greater than the "
+                "0.5th percentile of independent heldout-to-the-same-training distances"
+            ),
+            "training_proximity_ratio_definition": (
+                "median generated-to-training distance divided by median independent "
+                "heldout-to-the-same-training distance; one is distribution-matched, "
+                "below one is unusually training-proximal"
             ),
             "generated_images_sha256": _array_sha256(generated_images),
             "training_images_sha256": _array_sha256(training_images),
@@ -347,6 +371,8 @@ def evaluate_memorization(
             nearest_heldout_factor=heldout_factor_distance,
             nearest_training_feature=train_feature_distance,
             nearest_heldout_feature=heldout_feature_distance,
+            heldout_to_training_factor=heldout_to_training_factor_distance,
+            heldout_to_training_feature=heldout_to_training_feature_distance,
             exact_training_copy=exact_copy,
             near_training_duplicate=near_duplicate,
         )
@@ -386,6 +412,13 @@ def _memorization_summary(frame: pd.DataFrame, class_id: int | None) -> dict[str
     if class_id is not None:
         result["class_id"] = class_id
     return result
+
+
+def _median_ratio(numerator: np.ndarray, denominator: np.ndarray) -> float:
+    baseline = float(np.median(denominator))
+    if baseline <= 0.0:
+        raise ValueError("heldout-to-training median distance must be positive.")
+    return float(np.median(numerator)) / baseline
 
 
 def _nearest_distances(query: np.ndarray, reference: np.ndarray, chunk: int) -> np.ndarray:

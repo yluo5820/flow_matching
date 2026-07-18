@@ -130,6 +130,10 @@ def test_memorization_keeps_copy_and_geometry_metrics_separate(tmp_path: Path) -
 
     assert result["summary"]["exact_copy_rate"] == 0.5
     assert result["summary"]["generated_count"] == 2
+    assert result["schema_version"] == 2
+    assert result["summary"]["heldout_count"] == 3
+    assert result["summary"]["median_heldout_to_training_feature_distance"] == 1.0
+    assert result["summary"]["generated_to_heldout_training_proximity_feature_ratio"] < 1.0
     assert "geometric_deficit" not in result["summary"]
     assert result["summary"]["near_duplicate_threshold"] > 0.0
     destination = tmp_path / "memorization"
