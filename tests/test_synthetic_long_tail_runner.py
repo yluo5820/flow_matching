@@ -7,12 +7,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import fm_lab.experiments.synthetic_long_tail_geometry as runner_module
 import fm_lab.geometry_explorer.synthetic_factor_oracle as oracle_module
 import fm_lab.geometry_explorer.synthetic_long_tail_metrics as metrics_module
 from fm_lab.experiments.synthetic_long_tail_geometry import (
     RunLedger,
     StageBlockedError,
     SyntheticLongTailRunner,
+    TrainingCommand,
     _balanced_pilot_gate,
     _bounded_rotation_followup_summary,
     _factor_identity_summary,
@@ -572,3 +574,53 @@ def test_ledger_resume_requires_matching_config_hash(tmp_path: Path) -> None:
 
     assert ledger.is_complete("rep00_g0_f0", config_hash="abc") is True
     assert ledger.is_complete("rep00_g0_f0", config_hash="different") is False
+
+
+def test_ledger_retries_preserve_failed_terminal_entries(tmp_path: Path) -> None:
+    ledger = RunLedger(tmp_path / "run_ledger.json")
+    ledger.start("rep00_g0_f0")
+    ledger.fail("rep00_g0_f0", "interrupted")
+
+    retry_id = ledger.next_attempt_id("rep00_g0_f0")
+    assert retry_id == "rep00_g0_f0:retry-01"
+    ledger.start(retry_id)
+    ledger.complete(retry_id, {}, config_hash="abc")
+
+    assert ledger.is_attempt_complete("rep00_g0_f0", config_hash="abc") is True
+    assert ledger.is_attempt_complete("rep00_g0_f0", config_hash="different") is False
+    payload = json.loads((tmp_path / "run_ledger.json").read_text(encoding="utf-8"))
+    assert [entry["status"] for entry in payload["entries"]] == ["failed", "complete"]
+
+
+def test_runner_retry_archives_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = SyntheticLongTailRunner("configs/synthetic_long_tail_geometry/experiment_v2.yaml")
+    runner.ledger = RunLedger(tmp_path / "run_ledger.json")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("experiment: {}\n", encoding="utf-8")
+    config_path.with_suffix(".sha256").write_text("0" * 64, encoding="utf-8")
+    run_dir = tmp_path / "condition"
+    run_dir.mkdir()
+    (run_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    command = TrainingCommand(0, "condition", config_path, run_dir)
+    entry_id = "stage:replicate-00:condition"
+    runner.ledger.start(entry_id)
+    runner.ledger.fail(entry_id, "interrupted")
+
+    def fake_training(observed: TrainingCommand, *, device: str) -> None:
+        assert device == "cpu"
+        assert not observed.run_dir.exists()
+        observed.run_dir.mkdir()
+        (observed.run_dir / "checkpoint.pt").write_bytes(b"complete")
+
+    monkeypatch.setattr(runner_module, "run_training_command", fake_training)
+    runner._run(command, device="cpu", stage="stage", resume=False)
+
+    assert (tmp_path / "condition.failed-01" / "metadata.json").is_file()
+    assert (run_dir / "checkpoint.pt").is_file()
+    assert runner.ledger.is_attempt_complete(
+        entry_id,
+        config_hash=runner_module._training_config_hash(config_path),
+    )

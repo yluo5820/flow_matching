@@ -94,6 +94,35 @@ class RunLedger:
             and (config_hash is None or entry.get("config_hash") == config_hash)
         )
 
+    def is_attempt_complete(
+        self,
+        entry_id: str,
+        *,
+        config_hash: str | None = None,
+    ) -> bool:
+        """Return whether the base entry or one of its retries completed."""
+
+        normalized = _entry_id(entry_id)
+        prefix = f"{normalized}:retry-"
+        return any(
+            entry.get("status") == "complete"
+            and (entry.get("id") == normalized or str(entry.get("id", "")).startswith(prefix))
+            and (config_hash is None or entry.get("config_hash") == config_hash)
+            for entry in self.entries()
+        )
+
+    def next_attempt_id(self, entry_id: str) -> str:
+        """Return an unused retry ID while preserving every terminal attempt."""
+
+        normalized = _entry_id(entry_id)
+        existing_ids = {str(entry.get("id", "")) for entry in self.entries()}
+        if normalized not in existing_ids:
+            return normalized
+        retry = 1
+        while f"{normalized}:retry-{retry:02d}" in existing_ids:
+            retry += 1
+        return f"{normalized}:retry-{retry:02d}"
+
     def start(self, entry_id: str, metadata: dict[str, Any] | None = None) -> None:
         now = _timestamp()
         entry = {
@@ -2145,8 +2174,9 @@ class SyntheticLongTailRunner:
     ) -> None:
         config_hash = _training_config_hash(command.config_path)
         entry_id = f"{stage}:replicate-{command.replicate:02d}:{command.condition_id}"
-        if resume and self.ledger.is_complete(entry_id, config_hash=config_hash):
+        if self.ledger.is_attempt_complete(entry_id, config_hash=config_hash):
             return
+        attempt_id = self.ledger.next_attempt_id(entry_id)
         metadata = {
             "stage": stage,
             "condition": command.condition_id,
@@ -2155,14 +2185,26 @@ class SyntheticLongTailRunner:
             "command": command.argv(device),
             "output_path": str(command.run_dir),
         }
-        self.ledger.start(entry_id, metadata)
+        if attempt_id != entry_id and command.run_dir.exists():
+            retry_number = int(attempt_id.rsplit(":retry-", maxsplit=1)[1])
+            archived_run_dir = command.run_dir.with_name(
+                f"{command.run_dir.name}.failed-{retry_number:02d}"
+            )
+            if archived_run_dir.exists() or archived_run_dir.is_symlink():
+                raise FileExistsError(
+                    f"Refusing to overwrite archived failed run: {archived_run_dir}"
+                )
+            command.run_dir.replace(archived_run_dir)
+            metadata["archived_failed_output"] = str(archived_run_dir)
+            metadata["retry_of"] = entry_id
+        self.ledger.start(attempt_id, metadata)
         try:
             run_training_command(command, device=device)
         except BaseException as exc:
-            self.ledger.fail(entry_id, f"{type(exc).__name__}: {exc}", metadata=metadata)
+            self.ledger.fail(attempt_id, f"{type(exc).__name__}: {exc}", metadata=metadata)
             raise
         self.ledger.complete(
-            entry_id,
+            attempt_id,
             {"run_dir": str(command.run_dir)},
             config_hash=config_hash,
             metadata=metadata,
