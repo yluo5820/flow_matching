@@ -788,6 +788,60 @@ missing coverage. The immutable audit artifacts are stored under
 `memorization_bounded_5d_tail_v2/`; the first-pass audit is retained separately because
 its unmatched 50-versus-300 reference comparison is descriptive but not causal.
 
+## Paired local-geometry screen
+
+A no-retraining local-geometry screen now compares the bounded 5,000-example model
+against the class-balanced 50-example model. Both checkpoints are evaluated on the
+same eight interior held-out poses, the same 16 random pushforward directions, Euler
+NFE 32, and times 0.8 and 0.9. Each renderer tangent is a centered finite difference
+with respect to normalized `tx`, `ty`, `tz`, azimuth, or elevation. The comparison is
+therefore paired at the query, tangent, random-direction, solver, and time levels.
+
+The first screen failed its numerical positive control: both models appeared almost
+exactly rank one. Inspection showed that the pushforward estimator subtracted the
+original data point after an imperfect backward-forward ODE cycle. The shared cycle
+error then appeared in every finite-difference column and created one artificial
+dominant singular vector. The corrected estimator subtracts an unperturbed forward
+round trip computed in the same solver batch. The failed artifact is retained, but all
+numbers below use the cycle-centered `v2` output.
+
+| Time | Metric | 5,000 examples | 50 examples | Tail minus head |
+|---:|---|---:|---:|---:|
+| 0.8 | Participation rank | 13.975 | 12.801 | -1.174 |
+| 0.9 | Participation rank | 15.765 | 15.701 | -0.064 |
+| 0.8 | Entropy rank | 14.988 | 14.179 | -0.809 |
+| 0.9 | Entropy rank | 15.884 | 15.854 | -0.030 |
+| 0.8 | Azimuth alignment | 0.104 | 0.095 | -0.010 |
+| 0.9 | Azimuth alignment | 0.050 | 0.050 | -0.0004 |
+| 0.8 | Elevation alignment | 0.059 | 0.082 | +0.024 |
+| 0.9 | Elevation alignment | 0.022 | 0.028 | +0.006 |
+
+The apparent rank reduction at time 0.8 is not stable enough to establish a learned
+dimension deficit. Its paired-query median is only -0.20, versus the -1.17 mean, and
+two of eight queries contribute reductions near four to five directions. A paired
+query bootstrap gives a 95% interval of approximately [-2.64, +0.03]. At time 0.9 the
+mean gap is -0.064 and the median is -0.006. The renderer-direction result also fails
+the directional prediction: azimuth alignment is essentially unchanged, elevation
+alignment is higher in the 50-example model, most translation alignments are slightly
+higher, and principal angles show no consistent degradation.
+
+Absolute diagnostic values limit the conclusion further. Effective rank approaches
+the 16-direction probe ceiling for both models, while individual renderer-tangent
+projection scores remain low (roughly 0.02 to 0.20). The FM-FLIPD estimates range from
+hundreds to more than one thousand despite a known renderer rank of five, so they fail
+a basic scale check and are excluded from scientific interpretation. A deterministic
+ODE also remains formally full-dimensional; this screen can reveal effective
+contraction, but it should not be treated as a literal intrinsic-dimension estimator
+without a validated positive control.
+
+The defensible conclusion is therefore negative but limited: this eight-query screen
+does not support directional tangent-space loss as the explanation for the bounded
+50-example model. It also does not disprove geometric memorization, because the probe
+has weak absolute renderer alignment and limited rank resolution. The direct
+distributional evidence—training proximity plus azimuth/elevation range contraction—
+remains stronger than the Jacobian evidence. Corrected immutable artifacts are under
+`q08_d16_nfe32_t0800_0900_cycle_centered_v2/`.
+
 ## Next decision
 
 Do not launch the 36-run, 40,000-step matrix. The reduced factorial already establishes
@@ -807,14 +861,14 @@ predictions: azimuth extent is a robust source of baseline difficulty, and empir
 update allocation dominates the bounded 5D long-tail failure. Do not rerun the full
 nine-cell factorial.
 
-The next synthetic question should hold nominal dimension fixed while changing factor
-identity: compare balanced 3D translation against bounded view plus depth across all
-three objects. This directly tests whether nominal intrinsic dimension or factor type
-drives the remaining difficulty. A local Jacobian/tangent-rank probe on the existing
-50-versus-5,000 bounded pair would be the most direct geometric follow-up and requires
-no retraining. Fashion-MNIST or a controlled pose dataset remains the more important
-bridge for external validity, because additional synthetic frequency rotations now
-have low information value.
+The paired Jacobian/tangent screen is complete and inconclusive; do not scale it to
+hundreds of queries until an estimator configuration recovers a known low-rank positive
+control. The next synthetic question should instead hold nominal dimension fixed while
+changing factor identity: compare balanced 3D translation against bounded view plus
+depth across all three objects. This directly tests whether nominal intrinsic dimension
+or factor type drives the remaining difficulty. Fashion-MNIST or a controlled pose
+dataset remains the more important bridge for external validity, because additional
+synthetic frequency rotations now have low information value.
 
 The `balanced-pilots --training-steps N` interface now creates an immutable config,
 run directory, evaluation, and rotation summary isolated under `steps_N` for each
