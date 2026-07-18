@@ -970,3 +970,13 @@ T-shirt/top, Pullover, and Coat. T-shirt/top, Pullover, and Coat themselves also
 below 80%. The 5,000-step budget therefore fails both the convergence and minimum-class
 accuracy conditions. The final allowed calibration candidate is the exact continuation
 to 10,000 steps; rotations remain blocked.
+
+The 10,000-step continuation is complete and fails the terminal budget gate. Macro
+classwise FID improves only 2.3% from 75.86 to 74.13, recall rises to 0.801, and average
+requested-class accuracy reaches 84.52%, so the average image-quality metrics are near
+converged. The remaining failure is conditional separability: Shirt accuracy is only
+48.8% and Coat is 75.2%. Shirt samples are mostly reassigned to Pullover, T-shirt/top,
+and Coat, while Coat is often reassigned to Pullover and Shirt. The all-class
+Fashion-MNIST frequency rotations therefore remain unrun by design; under this model
+they would confound class frequency with unresolved semantic overlap in the conditional
+generator.

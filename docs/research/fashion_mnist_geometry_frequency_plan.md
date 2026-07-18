@@ -319,6 +319,40 @@ than an isolated numerical instability. Because both the convergence and per-cla
 accuracy gates fail, 5,000 steps cannot be selected. The final preregistered calibration
 candidate resumes the same trajectory to 10,000 steps.
 
+### Balanced calibration at 10,000 steps
+
+The exact continuation from 5,000 to 10,000 steps reduced macro classwise FID only from
+75.86 to 74.13, a 2.3% improvement, and raised overall recall from 0.716 to 0.801.
+Average requested-class accuracy increased modestly from 83.76% to 84.52%. This is
+close to convergence by the average-metric rule, but the minimum per-class accuracy
+gate still fails: Shirt falls to 48.8% and Coat remains at 75.2%.
+
+| Class | FID | Recall | Requested accuracy |
+|---|---:|---:|---:|
+| T-shirt/top | 93.62 | 0.757 | 0.811 |
+| Trouser | 72.89 | 0.751 | 0.963 |
+| Pullover | 59.44 | 0.837 | 0.873 |
+| Dress | 56.73 | 0.886 | 0.834 |
+| Coat | 79.60 | 0.837 | 0.752 |
+| Sandal | 98.75 | 0.713 | 0.860 |
+| Shirt | 92.93 | 0.787 | 0.488 |
+| Sneaker | 55.69 | 0.727 | 0.944 |
+| Bag | 86.94 | 0.823 | 0.958 |
+| Ankle boot | 44.69 | 0.838 | 0.969 |
+
+Shirt remains a semantic-overlap failure rather than a broad image-quality failure. Of
+1,000 requested Shirt samples, the oracle classifies only 488 as Shirt, with 226 as
+Pullover, 158 as T-shirt/top, and 97 as Coat. Coat has the complementary issue: 160 of
+1,000 requested Coat samples are classified as Pullover and 73 as Shirt. The generated
+sample grid is visually recognizable, but label control is unreliable for overlapping
+upper-body clothing categories.
+
+The balanced budget gate therefore fails with no selected step count, and the ten
+frequency rotations remain blocked. Running them under this calibration would mix the
+intended support-frequency effect with an unresolved conditional-generation failure.
+The next bridge experiment should either revise the Fashion-MNIST conditional model or
+move to a class subset/dataset whose balanced conditional generation passes this gate.
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts
