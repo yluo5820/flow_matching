@@ -13,11 +13,17 @@ from fm_lab.experiments.fashion_mnist_frequency_response import (
     prepare_stage1,
     stage1_conditions,
 )
-from fm_lab.utils.config import save_config
+from fm_lab.utils.config import load_config, save_config
 from fm_lab.utils.logging import write_json
 
 
-def _stage1_config(tmp_path: Path):
+def _stage1_config(
+    tmp_path: Path,
+    *,
+    class_ids: list[int] | None = None,
+    frequency_multiplier: int = 3,
+):
+    class_ids = class_ids or list(range(10))
     stage0 = tmp_path / "stage0"
     stage0.mkdir()
     write_json(
@@ -88,10 +94,11 @@ def _stage1_config(tmp_path: Path):
                 "subset_seed": 17,
                 "diagnostic_pool_per_class": 1000,
                 "imbalance_factor": 0.01,
+                "class_ids": class_ids,
             },
             "design": {
-                "frequency_multiplier": 3,
-                "rotation_offsets": list(range(10)),
+                "frequency_multiplier": frequency_multiplier,
+                "rotation_offsets": list(range(len(class_ids))),
                 "sampling_policies": ["class_balanced"],
             },
             "training": {
@@ -183,6 +190,31 @@ def test_prepare_stage1_freezes_all_competing_geometry_predictors(tmp_path: Path
     assert len(geometry) == 100
     assert len(manifest["conditions"]) == 11
     assert prepare_stage1(config)["reused"] is True
+
+
+def test_stage1_subset_protocol_uses_compact_five_class_rotations(
+    tmp_path: Path,
+) -> None:
+    config = _stage1_config(tmp_path, class_ids=[1, 5, 7, 8, 9], frequency_multiplier=2)
+
+    result = prepare_stage1(config)
+    conditions = stage1_conditions(config)
+    geometry = pd.read_csv(config.output_dir / "frozen_geometry_predictors.csv")
+    generated = load_config(
+        config.output_dir
+        / "condition_configs"
+        / "class_balanced_offset_00.yaml"
+    )
+
+    assert result["class_ids"] == [1, 5, 7, 8, 9]
+    assert result["geometry_predictor_count"] == 50
+    assert len(conditions) == 6
+    assert conditions[0].class_counts == (5000,) * 5
+    assert sorted(conditions[1].class_counts) == [50, 158, 500, 1581, 5000]
+    assert set(geometry["class_id"]) == set(range(5))
+    assert set(geometry["original_class_id"]) == {1, 5, 7, 8, 9}
+    assert generated["conditioning"]["num_classes"] == 5
+    assert generated["sampling"]["classes"] == [0, 1, 2, 3, 4]
 
 
 def test_calibration_gate_selects_earliest_converged_budget(tmp_path: Path) -> None:

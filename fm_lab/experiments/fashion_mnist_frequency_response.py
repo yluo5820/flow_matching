@@ -71,6 +71,8 @@ class FashionFrequencyStage1Config:
     stage0_dir: Path
     data_root: Path
     download: bool
+    class_ids: tuple[int, ...]
+    class_names: tuple[str, ...]
     subset_seed: int
     diagnostic_pool_per_class: int
     imbalance_factor: float
@@ -111,12 +113,15 @@ def load_stage1_config(
     evaluation = _mapping(raw, "evaluation")
     output = _mapping(raw, "output")
 
-    offsets = tuple(int(value) for value in design.get("rotation_offsets", range(10)))
-    if offsets != tuple(range(_NUM_CLASSES)):
-        raise ValueError("design.rotation_offsets must be exactly 0..9 in order.")
+    class_ids = _class_ids(data.get("class_ids"))
+    num_classes = len(class_ids)
+    class_names = tuple(_CLASS_NAMES[class_id] for class_id in class_ids)
+    offsets = tuple(int(value) for value in design.get("rotation_offsets", range(num_classes)))
+    if offsets != tuple(range(num_classes)):
+        raise ValueError("design.rotation_offsets must be exactly 0..K-1 in order.")
     multiplier = int(design.get("frequency_multiplier", 3))
-    if math.gcd(multiplier, _NUM_CLASSES) != 1:
-        raise ValueError("design.frequency_multiplier must be coprime with ten classes.")
+    if math.gcd(multiplier, num_classes) != 1:
+        raise ValueError("design.frequency_multiplier must be coprime with class count.")
     policies = tuple(str(value) for value in design.get("sampling_policies", []))
     if not policies or len(set(policies)) != len(policies):
         raise ValueError("design.sampling_policies must be a non-empty unique list.")
@@ -154,6 +159,8 @@ def load_stage1_config(
         stage0_dir=_resolve(root, stage0.get("output_dir")),
         data_root=_resolve(root, data.get("root", "data/fashion_mnist")),
         download=bool(data.get("download", False)),
+        class_ids=class_ids,
+        class_names=class_names,
         subset_seed=_nonnegative_int("data.subset_seed", data.get("subset_seed", 0)),
         diagnostic_pool_per_class=diagnostic_pool,
         imbalance_factor=imbalance_factor,
@@ -218,9 +225,10 @@ def load_stage1_config(
 def stage1_conditions(config: FashionFrequencyStage1Config) -> tuple[Stage1Condition, ...]:
     """Return the balanced reference and complete cyclic rotations."""
 
+    num_classes = len(config.class_ids)
     n_max = 6000 - config.diagnostic_pool_per_class
     balanced_ranks = frequency_rank_mapping(
-        _NUM_CLASSES,
+        num_classes,
         multiplier=config.frequency_multiplier,
         offset=0,
     )
@@ -230,13 +238,13 @@ def stage1_conditions(config: FashionFrequencyStage1Config) -> tuple[Stage1Condi
         balanced=True,
         offset=0,
         class_ranks=tuple(int(value) for value in balanced_ranks),
-        class_counts=(n_max,) * _NUM_CLASSES,
+        class_counts=(n_max,) * num_classes,
     )
     rotations = []
     for policy in config.sampling_policies:
         for offset in config.rotation_offsets:
             ranks = frequency_rank_mapping(
-                _NUM_CLASSES,
+                num_classes,
                 multiplier=config.frequency_multiplier,
                 offset=offset,
             )
@@ -246,7 +254,7 @@ def stage1_conditions(config: FashionFrequencyStage1Config) -> tuple[Stage1Condi
                     int(
                         n_max
                         * config.imbalance_factor
-                        ** (float(rank) / (_NUM_CLASSES - 1.0))
+                        ** (float(rank) / (num_classes - 1.0))
                     ),
                 )
                 for rank in ranks
@@ -272,7 +280,7 @@ def prepare_stage1(
     """Freeze geometry predictors, conditions, and generated training configs."""
 
     gate, rank_path = _validated_stage0(config)
-    geometry = _frozen_geometry_predictors(rank_path)
+    geometry = _frozen_geometry_predictors(config, rank_path)
     conditions = stage1_conditions(config)
     payload = _protocol_payload(config, gate, geometry, conditions)
     if dry_run:
@@ -336,6 +344,8 @@ def _protocol_payload(
         "stage0_gate_passed": bool(gate["passed"]),
         "stage0_gate_reasons": gate["reasons"],
         "primary_sampling_policy": _PRIMARY_POLICY,
+        "class_ids": list(config.class_ids),
+        "class_names": list(config.class_names),
         "condition_count": len(conditions),
         "rotation_count_per_policy": len(config.rotation_offsets),
         "geometry_predictor_count": predictor_count,
@@ -347,7 +357,8 @@ def _protocol_payload(
         "no_correlation_p_values": True,
         "evidence_rule": {
             "support_effect": (
-                "at least 8/10 classes have positive tail-minus-head FID degradation "
+                f"at least {_support_effect_threshold(len(config.class_ids))}/"
+                f"{len(config.class_ids)} classes have positive tail-minus-head FID degradation "
                 "and positive head-minus-tail recall degradation"
             ),
             "geometry_effect_per_representation": (
@@ -389,6 +400,7 @@ def _condition_config(
             "imbalance_factor": 1.0 if condition.balanced else config.imbalance_factor,
             "subset_seed": config.subset_seed,
             "sampling_policy": condition.sampling_policy,
+            "class_ids": list(config.class_ids),
             "frequency_mapping": {
                 "offset": condition.offset,
                 "multiplier": config.frequency_multiplier,
@@ -402,14 +414,15 @@ def _condition_config(
             "early_stopping": {"enabled": False},
         },
         "sampling": {
-            "n_samples": config.samples_per_class * _NUM_CLASSES,
+            "n_samples": config.samples_per_class * len(config.class_ids),
             "n_trajectories": 20,
             "nfe": 64,
             "sample_batch_size": 500,
-            "classes": list(range(_NUM_CLASSES)),
+            "classes": list(range(len(config.class_ids))),
             "seed": config.experiment_seed + 1,
             "classifier_free_guidance": {"scale": 1.0},
         },
+        "conditioning": {"num_classes": len(config.class_ids)},
     }
     return deep_update(base, updates)
 
@@ -764,7 +777,9 @@ def _evaluate_condition(
         "--samples-per-class",
         str(config.samples_per_class),
         "--overall-samples",
-        str(config.samples_per_class * _NUM_CLASSES),
+        str(config.samples_per_class * len(config.class_ids)),
+        "--class-ids",
+        ",".join(str(value) for value in config.class_ids),
         "--class-counts",
         ",".join(str(value) for value in condition.class_counts),
         "--imbalance-factor",
@@ -841,6 +856,7 @@ def analyze_frequency_response(
             report = _read_json(report_path)
         response_rows.extend(
             _response_rows(
+                config,
                 condition,
                 report,
                 run_dir=run_dir,
@@ -865,7 +881,7 @@ def analyze_frequency_response(
             "geometry": "observational across natural classes",
             "model_seed": "one discovery seed; evaluation repeats are not model seeds",
             "multiple_geometry_predictors": (
-                "all ten frozen predictors reported; none selected by outcome"
+                "all frozen predictors reported; none selected by outcome"
             ),
         },
         "artifacts": {
@@ -885,6 +901,7 @@ def analyze_frequency_response(
 
 
 def _response_rows(
+    config: FashionFrequencyStage1Config,
     condition: Stage1Condition,
     report: dict[str, Any],
     *,
@@ -894,7 +911,7 @@ def _response_rows(
     metrics = report["metrics"]
     conditional = report["conditional"]["per_class"]
     rows = []
-    for class_id in range(_NUM_CLASSES):
+    for class_id in range(len(condition.class_counts)):
         class_key = f"class_{class_id}"
         rows.append(
             {
@@ -903,7 +920,8 @@ def _response_rows(
                 "balanced": condition.balanced,
                 "offset": condition.offset,
                 "class_id": class_id,
-                "class_name": _CLASS_NAMES[class_id],
+                "original_class_id": config.class_ids[class_id],
+                "class_name": config.class_names[class_id],
                 "frequency_rank": condition.class_ranks[class_id],
                 "unique_support": condition.class_counts[class_id],
                 "log10_unique_support": math.log10(condition.class_counts[class_id]),
@@ -934,13 +952,14 @@ def _class_degradations(
         subset = responses[
             (~responses["balanced"]) & (responses["sampling_policy"] == policy)
         ]
-        for class_id in range(_NUM_CLASSES):
+        num_classes = int(responses["class_id"].nunique())
+        for class_id in range(num_classes):
             class_rows = subset[subset["class_id"] == class_id].sort_values(
                 "unique_support"
             )
-            if len(class_rows) != _NUM_CLASSES:
+            if len(class_rows) != num_classes:
                 raise ValueError(
-                    f"Class {class_id} under {policy} lacks all ten support ranks."
+                    f"Class {class_id} under {policy} lacks all support ranks."
                 )
             tail = class_rows.iloc[0]
             head = class_rows.iloc[-1]
@@ -953,7 +972,8 @@ def _class_degradations(
                 {
                     "sampling_policy": policy,
                     "class_id": class_id,
-                    "class_name": _CLASS_NAMES[class_id],
+                    "original_class_id": int(head["original_class_id"]),
+                    "class_name": str(head["class_name"]),
                     "head_support": int(head["unique_support"]),
                     "tail_support": int(tail["unique_support"]),
                     "fid_tail_minus_head": float(
@@ -1004,7 +1024,7 @@ def _geometry_correlations(
                 predictor["class_id"].to_numpy(),
                 outcomes["class_id"].to_numpy(),
             ):
-                raise ValueError("Frozen geometry predictors do not cover classes 0..9.")
+                raise ValueError("Frozen geometry predictors do not cover outcome classes.")
             ranks = predictor["median_percentile_rank"].to_numpy(dtype=float)
             rows.append(
                 {
@@ -1041,7 +1061,12 @@ def _evidence_summary(
             & (primary["recall_head_minus_tail"] > 0)
         )
     )
-    support_effect = positive_fid >= 8 and positive_recall >= 8 and both >= 8
+    support_threshold = _support_effect_threshold(len(primary))
+    support_effect = (
+        positive_fid >= support_threshold
+        and positive_recall >= support_threshold
+        and both >= support_threshold
+    )
     geometry_evidence = {}
     primary_correlations = correlations[
         correlations["sampling_policy"] == _PRIMARY_POLICY
@@ -1068,6 +1093,7 @@ def _evidence_summary(
             "positive_fid_classes": positive_fid,
             "positive_recall_classes": positive_recall,
             "positive_both_classes": both,
+            "required_positive_classes": support_threshold,
             "supported": support_effect,
         },
         "geometry_effect_by_representation": geometry_evidence,
@@ -1091,7 +1117,10 @@ def _validated_stage0(
     return gate, rank_path
 
 
-def _frozen_geometry_predictors(rank_path: Path) -> pd.DataFrame:
+def _frozen_geometry_predictors(
+    config: FashionFrequencyStage1Config,
+    rank_path: Path,
+) -> pd.DataFrame:
     ranks = pd.read_csv(rank_path)
     required = {
         "representation",
@@ -1107,9 +1136,16 @@ def _frozen_geometry_predictors(rank_path: Path) -> pd.DataFrame:
         raise ValueError("Stage-0 rank artifact has unexpected representations.")
     if set(ranks["estimator"]) != _REQUIRED_ESTIMATORS:
         raise ValueError("Stage-0 rank artifact has unexpected estimators.")
+    ranks = ranks[ranks["class_id"].isin(config.class_ids)].copy()
+    compact_lookup = {
+        int(original): compact for compact, original in enumerate(config.class_ids)
+    }
+    ranks["original_class_id"] = ranks["class_id"].astype(int)
+    ranks["class_id"] = ranks["original_class_id"].map(compact_lookup).astype(int)
     grouped = (
         ranks.groupby(["representation", "estimator", "class_id"], as_index=False)
         .agg(
+            original_class_id=("original_class_id", "first"),
             median_percentile_rank=("percentile_rank", "median"),
             percentile_rank_iqr=(
                 "percentile_rank",
@@ -1120,17 +1156,40 @@ def _frozen_geometry_predictors(rank_path: Path) -> pd.DataFrame:
         .sort_values(["representation", "estimator", "class_id"])
         .reset_index(drop=True)
     )
-    expected_rows = len(_REQUIRED_REPRESENTATIONS) * len(_REQUIRED_ESTIMATORS) * 10
-    if len(grouped) != expected_rows or set(grouped["class_id"]) != set(range(10)):
-        raise ValueError("Stage-0 ranks do not provide all ten frozen predictors per class.")
+    expected_rows = (
+        len(_REQUIRED_REPRESENTATIONS)
+        * len(_REQUIRED_ESTIMATORS)
+        * len(config.class_ids)
+    )
+    if len(grouped) != expected_rows or set(grouped["class_id"]) != set(
+        range(len(config.class_ids))
+    ):
+        raise ValueError("Stage-0 ranks do not provide all frozen predictors per class.")
     return grouped
+
+
+def _class_ids(raw: Any) -> tuple[int, ...]:
+    if raw is None:
+        return tuple(range(_NUM_CLASSES))
+    values = tuple(int(value) for value in raw)
+    if len(values) < 3:
+        raise ValueError("data.class_ids must contain at least three classes.")
+    if len(set(values)) != len(values):
+        raise ValueError("data.class_ids must be unique.")
+    if any(value < 0 or value >= _NUM_CLASSES for value in values):
+        raise ValueError("data.class_ids must be Fashion-MNIST IDs in [0, 9].")
+    return values
+
+
+def _support_effect_threshold(num_classes: int) -> int:
+    return int(math.ceil(0.8 * num_classes))
 
 
 def _calibration_summary(report: dict[str, Any]) -> dict[str, Any]:
     per_class = report["conditional"]["per_class"]
     accuracies = [
         float(per_class[f"class_{class_id}"]["requested_class_accuracy"])
-        for class_id in range(_NUM_CLASSES)
+        for class_id in range(len(per_class))
     ]
     return {
         "macro_fid": float(report["metrics"]["macro_classwise_fid"]["mean"]),

@@ -8,8 +8,10 @@ import pytest
 from fm_lab.diagnostics.mnist_eval import _classifier_checkpoint_path
 from fm_lab.evaluation.cache import FeatureCache, save_feature_cache
 from fm_lab.experiments.run_fashion_mnist_lt_eval import (
+    _parse_class_ids,
     _resolve_class_counts,
     _sha256_file,
+    _subset_probability_cache,
     main,
     parse_args,
 )
@@ -53,6 +55,7 @@ def _cache(
             "train": False,
             "n_images": len(labels),
             "class_counts": [samples_per_class] * 10,
+            "original_class_ids": list(range(10)),
             "subset_sha256": subset_sha256,
         }
     else:
@@ -166,7 +169,7 @@ def test_cached_fashion_cli_writes_balanced_report(tmp_path) -> None:
     save_feature_cache(generated_path, _cache())
     save_feature_cache(
         real_path,
-        _cache(samples_per_class=1000, split="official_test"),
+        _cache(samples_per_class=2, split="official_test"),
     )
     output_dir = tmp_path / "report"
 
@@ -223,5 +226,20 @@ def test_frequency_rotation_class_counts_are_explicit() -> None:
 
     assert counts == [50, 83, 139, 232, 387, 645, 1077, 1796, 2997, 5000]
 
-    with pytest.raises(ValueError, match="ten positive"):
+    with pytest.raises(ValueError, match="10 positive"):
         _resolve_class_counts("5000,50", 0.01)
+
+
+def test_subset_class_counts_and_probability_cache_are_compact() -> None:
+    assert _parse_class_ids("1,5,7,8,9") == (1, 5, 7, 8, 9)
+    counts = _resolve_class_counts("5000,1581,500,158,50", 0.01, num_classes=5)
+    cache = _cache()
+    cache.labels = np.repeat(np.arange(5), 4)
+    subset = _subset_probability_cache(cache, (1, 5, 7, 8, 9))
+
+    assert counts == [5000, 1581, 500, 158, 50]
+    assert subset.probabilities.shape == (20, 5)
+    assert subset.provenance["class_order"] == [1, 5, 7, 8, 9]
+
+    with pytest.raises(ValueError, match="5 positive"):
+        _resolve_class_counts("5000,50", 0.01, num_classes=5)

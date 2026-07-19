@@ -42,6 +42,7 @@ class LongTailedFashionMNIST:
     normalize: str = "minus_one_one"
     dequantize: bool = False
     sampling_policy: str = "empirical"
+    class_ids: tuple[int, ...] | list[int] | None = None
     frequency_mapping_offset: int | None = None
     frequency_mapping_multiplier: int = 3
     diagnostic_pool_per_class: int = 0
@@ -49,6 +50,7 @@ class LongTailedFashionMNIST:
     dim: int = field(default=28 * 28, init=False)
     image_shape: tuple[int, int, int] = field(default=(1, 28, 28), init=False)
     num_classes: int = field(default=10, init=False)
+    _original_class_ids: tuple[int, ...] = field(default=tuple(range(10)), init=False)
     _raw_images: torch.Tensor | None = field(default=None, init=False, repr=False)
     _labels: torch.Tensor | None = field(default=None, init=False, repr=False)
     _selected_indices: np.ndarray | None = field(default=None, init=False, repr=False)
@@ -65,6 +67,8 @@ class LongTailedFashionMNIST:
     _probe_b_indices: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._original_class_ids = _validate_class_ids(self.class_ids)
+        self.num_classes = len(self._original_class_ids)
         if self.imbalance_type not in {"exp", "balanced"}:
             raise ValueError("imbalance_type must be 'exp' or 'balanced'.")
         if not 0.0 < self.imbalance_factor <= 1.0:
@@ -158,6 +162,7 @@ class LongTailedFashionMNIST:
             "image_shape": list(self.image_shape),
             "image_value_range": list(_image_value_range(self.normalize)),
             "num_classes": self.num_classes,
+            "original_class_ids": list(self._original_class_ids),
             "n_images": int(len(self.labels)),
             "imbalance_type": self.imbalance_type,
             "imbalance_factor": self.imbalance_factor,
@@ -302,6 +307,21 @@ class LongTailedFashionMNIST:
             raise ValueError(
                 f"Fashion-MNIST image/label count mismatch: {len(images)} vs {len(labels)}."
             )
+        included = np.isin(labels, np.asarray(self._original_class_ids, dtype=np.int64))
+        if self._original_class_ids != tuple(range(10)):
+            index_map = {
+                int(original): compact
+                for compact, original in enumerate(self._original_class_ids)
+            }
+            selected_original_indices = np.flatnonzero(included).astype(np.int64)
+            labels = np.asarray(
+                [index_map[int(labels[index])] for index in selected_original_indices],
+                dtype=np.int64,
+            )
+            images = images[selected_original_indices].clone()
+            labels_tensor = torch.from_numpy(labels.copy())
+        else:
+            selected_original_indices = np.arange(len(labels), dtype=np.int64)
         if self.train and self.frequency_mapping_offset is not None:
             frequency_split = nested_frequency_split(
                 labels,
@@ -312,27 +332,36 @@ class LongTailedFashionMNIST:
                 multiplier=self.frequency_mapping_multiplier,
                 offset=self.frequency_mapping_offset,
             )
-            selected = frequency_split.train_indices.copy()
+            selected = selected_original_indices[frequency_split.train_indices].copy()
             self._class_ranks = frequency_split.class_ranks
-            self._probe_a_indices = frequency_split.probe_a_indices.copy()
-            self._probe_b_indices = frequency_split.probe_b_indices.copy()
-            self._probe_a_raw_images = images[self._probe_a_indices].clone()
-            self._probe_b_raw_images = images[self._probe_b_indices].clone()
-            self._probe_a_labels = labels_tensor[self._probe_a_indices].clone()
-            self._probe_b_labels = labels_tensor[self._probe_b_indices].clone()
+            self._probe_a_indices = selected_original_indices[
+                frequency_split.probe_a_indices
+            ].copy()
+            self._probe_b_indices = selected_original_indices[
+                frequency_split.probe_b_indices
+            ].copy()
+            probe_a_local = frequency_split.probe_a_indices.copy()
+            probe_b_local = frequency_split.probe_b_indices.copy()
+            self._probe_a_raw_images = images[probe_a_local].clone()
+            self._probe_b_raw_images = images[probe_b_local].clone()
+            self._probe_a_labels = labels_tensor[probe_a_local].clone()
+            self._probe_b_labels = labels_tensor[probe_b_local].clone()
+            local_selected = frequency_split.train_indices.copy()
         elif self.train:
-            selected = long_tail_indices(
+            local_selected = long_tail_indices(
                 labels,
                 num_classes=self.num_classes,
                 imbalance_type=self.imbalance_type,
                 imbalance_factor=self.imbalance_factor,
                 seed=self.subset_seed,
             )
+            selected = selected_original_indices[local_selected].copy()
         else:
-            selected = np.arange(len(labels), dtype=np.int64)
-        selected_labels = labels[selected]
+            local_selected = np.arange(len(labels), dtype=np.int64)
+            selected = selected_original_indices.copy()
+        selected_labels = labels[local_selected]
         self._selected_indices = selected
-        self._raw_images = images[selected].clone()
+        self._raw_images = images[local_selected].clone()
         self._labels = torch.from_numpy(selected_labels.astype(np.int64, copy=True))
         self._class_counts = tuple(
             int(np.sum(selected_labels == class_id)) for class_id in range(self.num_classes)
@@ -370,6 +399,19 @@ def _seeded_dequantize(
 
 def _indices_sha256(indices: np.ndarray) -> str:
     return hashlib.sha256(np.asarray(indices, dtype=np.int64).tobytes()).hexdigest()
+
+
+def _validate_class_ids(class_ids: tuple[int, ...] | list[int] | None) -> tuple[int, ...]:
+    if class_ids is None:
+        return tuple(range(10))
+    values = tuple(int(value) for value in class_ids)
+    if len(values) < 3:
+        raise ValueError("Fashion-MNIST class_ids must include at least three classes.")
+    if len(set(values)) != len(values):
+        raise ValueError("Fashion-MNIST class_ids must be unique.")
+    if any(value < 0 or value >= 10 for value in values):
+        raise ValueError("Fashion-MNIST class_ids must be in [0, 9].")
+    return values
 
 
 def _download_fashion_mnist(root: Path) -> None:

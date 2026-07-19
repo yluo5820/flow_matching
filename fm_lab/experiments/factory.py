@@ -118,6 +118,11 @@ def build_target(config: dict[str, Any]):
             normalize=str(data_config.get("normalize", "minus_one_one")),
             dequantize=bool(data_config.get("dequantize", False)),
             sampling_policy=str(data_config.get("sampling_policy", "empirical")),
+            class_ids=(
+                tuple(int(value) for value in data_config["class_ids"])
+                if "class_ids" in data_config
+                else None
+            ),
             frequency_mapping_offset=(
                 int(frequency_mapping["offset"])
                 if "offset" in frequency_mapping

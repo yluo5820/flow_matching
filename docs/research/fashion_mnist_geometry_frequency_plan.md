@@ -353,6 +353,29 @@ intended support-frequency effect with an unresolved conditional-generation fail
 The next bridge experiment should either revise the Fashion-MNIST conditional model or
 move to a class subset/dataset whose balanced conditional generation passes this gate.
 
+## Distinct five-class fallback
+
+The next Fashion-MNIST bridge is a deliberately narrower separability control, not a
+replacement for the failed all-class result. It uses original classes `[1, 5, 7, 8, 9]`
+-- Trouser, Sandal, Sneaker, Bag, and Ankle boot -- and remaps them to compact labels
+0..4 inside the generator and evaluator. This removes the upper-body semantic-overlap
+cluster that blocked the all-class calibration while preserving natural object-level
+variation, official Fashion-MNIST images, and the same frozen Stage-0 geometry estimates.
+
+The protocol is materialized by
+`configs/fashion_mnist_geometry_frequency/stage1_distinct5.yaml`. It contains one
+balanced reference plus five cyclic class-balanced IR-100 rotations. With a 1,000-image
+diagnostic pool, the support ranks are approximately 5,000, 1,581, 500, 158, and 50.
+The evidence rule is scaled to five classes: at least four of five classes must show
+worse tail-versus-head FID and recall. Geometry remains observational across classes;
+frequency remains causal within class through the cyclic support assignment.
+
+The first local 2,000-step timing attempt projected roughly 38-40 minutes and was
+stopped at 28 updates, then moved to
+`runs/fashion_mnist_geometry_frequency/stage1_distinct5/calibration/aborted_local_steps_00002000`.
+The real 2,000-step calibration should therefore be run in the user terminal under the
+30-minute handoff rule. No distinct-five calibration outcome has been evaluated yet.
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts
@@ -360,9 +383,9 @@ sensitivity to support. It cannot establish that estimated ID is the causal prop
 Class identity remains bundled with multimodality, curvature, topology, nuisance
 variation, and semantic ambiguity. Frequency rotation makes the frequency contrasts
 within-class and therefore causal; the geometry contrast remains an observational
-comparison across ten naturally different classes.
+comparison across naturally different classes.
 
-If a revised all-class bridge is successful, freeze the protocol and repeat it on
+If a revised Fashion-MNIST bridge is successful, freeze the protocol and repeat it on
 CIFAR-10. Do not retune the geometry scores or endpoints on CIFAR-10.
 
 ## Related references

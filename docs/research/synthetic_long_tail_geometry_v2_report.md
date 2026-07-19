@@ -980,3 +980,14 @@ and Coat, while Coat is often reassigned to Pullover and Shirt. The all-class
 Fashion-MNIST frequency rotations therefore remain unrun by design; under this model
 they would confound class frequency with unresolved semantic overlap in the conditional
 generator.
+
+A distinct five-class Fashion-MNIST fallback is now implemented as a separability
+control. It uses original classes `[1, 5, 7, 8, 9]` -- Trouser, Sandal, Sneaker, Bag,
+and Ankle boot -- remapped to compact labels 0..4. The protocol has one balanced
+reference, five cyclic class-balanced rotations, 50 frozen geometry-predictor rows, and
+a scaled support rule requiring four of five classes to degrade from head to tail. This
+does not erase the all-class failure; it asks whether the Fashion-MNIST bridge works
+once the known upper-body overlap cluster is removed. A local 2,000-step timing attempt
+projected roughly 38-40 minutes and was stopped at 28 updates, so the actual
+calibration is handed to the user terminal. No distinct-five outcome has yet been
+observed.

@@ -143,6 +143,29 @@ def test_fashion_mnist_long_tail_counts_and_alignment(tmp_path: Path) -> None:
     assert len(target.metadata()["subset_sha256"]) == 64
 
 
+def test_fashion_mnist_subset_remaps_original_classes_to_compact_labels(
+    tmp_path: Path,
+) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=10)
+
+    target = LongTailedFashionMNIST(
+        root=tmp_path,
+        imbalance_type="balanced",
+        imbalance_factor=1.0,
+        normalize="zero_one",
+        class_ids=(1, 5, 9),
+    )
+    images, labels, sample_ids = target.all_samples_with_labels()
+
+    assert target.num_classes == 3
+    assert target.class_counts == (10, 10, 10)
+    assert set(labels.tolist()) == {0, 1, 2}
+    assert target.metadata()["original_class_ids"] == [1, 5, 9]
+    original_from_compact = torch.tensor([1, 5, 9])[labels]
+    assert torch.equal(torch.round(images[:, 0] * 255).long(), original_from_compact)
+    assert np.array_equal(sample_ids, target.selected_indices.astype(str))
+
+
 def test_fashion_mnist_factory_builds_ir100_target(tmp_path: Path) -> None:
     write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
 
@@ -283,3 +306,23 @@ def test_class_balanced_sampling_changes_exposure_not_unique_support(
     assert torch.all(torch.abs(sampled_counts - 2000) < 175)
     assert torch.equal(torch.round(images[:, 0] * 255).long(), labels)
     assert target.metadata()["sampling_policy"] == "class_balanced"
+
+
+def test_subset_frequency_mapping_uses_compact_class_space(tmp_path: Path) -> None:
+    write_balanced_fashion_mnist(tmp_path, examples_per_class=100)
+    target = LongTailedFashionMNIST(
+        root=tmp_path,
+        imbalance_factor=0.01,
+        subset_seed=7,
+        normalize="zero_one",
+        class_ids=(1, 5, 9),
+        frequency_mapping_offset=0,
+        frequency_mapping_multiplier=2,
+        diagnostic_pool_per_class=20,
+    )
+
+    assert target.num_classes == 3
+    assert len(target.diagnostic_indices("a")) == 30
+    assert target.class_counts == (80, 1, 8)
+    assert target.metadata()["frequency_mapping"]["class_ranks"] == [0, 2, 1]
+    assert set(target.labels.tolist()) == {0, 1, 2}

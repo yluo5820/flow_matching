@@ -62,6 +62,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imbalance-factor", type=float, default=0.01)
     parser.add_argument(
+        "--class-ids",
+        default=None,
+        help=(
+            "Comma-separated original Fashion-MNIST class IDs to evaluate. Labels are "
+            "expected to be compact 0..K-1 in the generated arrays."
+        ),
+    )
+    parser.add_argument(
         "--class-counts",
         default=None,
         help=(
@@ -83,10 +91,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    class_ids = _parse_class_ids(args.class_ids)
     generated, real = _resolve_feature_caches(args)
     _validate_cache_pair(generated, real)
-    _validate_balanced_labels(generated.labels, samples_per_class=args.samples_per_class)
-    class_counts = _resolve_class_counts(args.class_counts, args.imbalance_factor)
+    _validate_canonical_real_cache(
+        real,
+        class_ids=class_ids,
+        samples_per_class=args.samples_per_class,
+    )
+    _validate_balanced_labels(
+        generated.labels,
+        samples_per_class=args.samples_per_class,
+        num_classes=len(class_ids),
+    )
+    class_counts = _resolve_class_counts(
+        args.class_counts,
+        args.imbalance_factor,
+        num_classes=len(class_ids),
+    )
     report = evaluate_feature_caches(
         generated,
         real,
@@ -108,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "samples_per_class": args.samples_per_class,
             "imbalance_factor": args.imbalance_factor,
             "class_counts": class_counts,
+            "class_ids": list(class_ids),
             "reference_split": "official_test",
         }
     )
@@ -125,10 +148,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, FeatureCache]:
+    class_ids = _parse_class_ids(args.class_ids)
     if args.generated_cache or args.real_cache:
         if not args.generated_cache or not args.real_cache:
             raise ValueError("Both --generated-cache and --real-cache are required together.")
-        return load_feature_cache(args.generated_cache), load_feature_cache(args.real_cache)
+        generated = load_feature_cache(args.generated_cache)
+        real = load_feature_cache(args.real_cache)
+        return (
+            _subset_probability_cache(generated, class_ids),
+            _subset_probability_cache(real, class_ids),
+        )
     if not args.generated_samples or not args.generated_labels:
         raise ValueError(
             "Provide paired feature caches or both --generated-samples and --generated-labels."
@@ -190,6 +219,7 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
         input_range=input_range,
         provenance=generated_provenance,
     )
+    generated = _subset_probability_cache(generated, class_ids)
     save_feature_cache(
         cache_dir / f"generated_fashion_mnist_lt_{generated.fingerprint[:16]}.npz",
         generated,
@@ -202,6 +232,7 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
         imbalance_type="balanced",
         imbalance_factor=1.0,
         normalize=args.normalize,
+        class_ids=class_ids,
     )
     real_images, real_labels, real_ids = real_dataset.all_samples_with_labels()
     real_provenance = dict(evaluator.provenance)
@@ -221,12 +252,12 @@ def _resolve_feature_caches(args: argparse.Namespace) -> tuple[FeatureCache, Fea
         input_range=input_range,
         provenance=real_provenance,
     )
+    real = _subset_probability_cache(real, class_ids)
     save_feature_cache(cache_dir / "real_fashion_mnist_test.npz", real)
     return generated, real
 
 
 def _validate_cache_pair(generated: FeatureCache, real: FeatureCache) -> None:
-    _validate_canonical_real_cache(real)
     for field in (
         "dataset",
         "extractor",
@@ -268,66 +299,118 @@ def _validate_cache_pair(generated: FeatureCache, real: FeatureCache) -> None:
         raise ValueError(f"Generated cache is missing protocol provenance: {sorted(missing)}")
 
 
-def _validate_canonical_real_cache(real: FeatureCache) -> None:
+def _validate_canonical_real_cache(
+    real: FeatureCache,
+    *,
+    class_ids: tuple[int, ...],
+    samples_per_class: int,
+) -> None:
     if real.provenance.get("split") != "official_test":
         raise ValueError("Real cache must use split 'official_test'.")
-    counts = np.bincount(real.labels, minlength=_NUM_CLASSES)
-    if len(counts) != _NUM_CLASSES or not np.array_equal(
-        counts, np.full(_NUM_CLASSES, 1000, dtype=np.int64)
+    counts = np.bincount(real.labels, minlength=len(class_ids))
+    if len(counts) != len(class_ids) or not np.array_equal(
+        counts, np.full(len(class_ids), samples_per_class, dtype=np.int64)
     ):
-        raise ValueError("Real cache must contain the full official test split: 1,000 per class.")
-    expected_ids = np.arange(10_000, dtype=np.int64)
+        raise ValueError(
+            "Real cache must contain the official test subset with equal samples per class."
+        )
     try:
         sample_ids = real.sample_ids.astype(np.int64)
     except ValueError as exc:
         raise ValueError("Real cache sample identifiers must be official test indices.") from exc
-    if not np.array_equal(sample_ids, expected_ids):
-        raise ValueError("Real cache sample identifiers must cover official indices 0..9999.")
     metadata = real.provenance.get("dataset_metadata")
     if not isinstance(metadata, dict):
         raise ValueError("Real cache is missing official dataset metadata.")
     expected_metadata = {
         "dataset": "fashion_mnist",
         "train": False,
-        "n_images": 10_000,
-        "class_counts": [1000] * _NUM_CLASSES,
-        "subset_sha256": hashlib.sha256(expected_ids.tobytes()).hexdigest(),
+        "n_images": samples_per_class * len(class_ids),
+        "class_counts": [samples_per_class] * len(class_ids),
+        "original_class_ids": list(class_ids),
+        "subset_sha256": hashlib.sha256(sample_ids.tobytes()).hexdigest(),
     }
     for field, value in expected_metadata.items():
         if metadata.get(field) != value:
             raise ValueError(f"Real cache dataset metadata mismatch for {field}.")
 
 
-def _validate_balanced_labels(labels: np.ndarray, *, samples_per_class: int) -> None:
+def _validate_balanced_labels(
+    labels: np.ndarray,
+    *,
+    samples_per_class: int,
+    num_classes: int,
+) -> None:
     if samples_per_class < 2:
         raise ValueError("--samples-per-class must be at least two.")
-    counts = np.bincount(np.asarray(labels, dtype=np.int64), minlength=_NUM_CLASSES)
-    expected = np.full(_NUM_CLASSES, samples_per_class, dtype=np.int64)
-    if len(counts) != _NUM_CLASSES or not np.array_equal(counts, expected):
+    counts = np.bincount(np.asarray(labels, dtype=np.int64), minlength=num_classes)
+    expected = np.full(num_classes, samples_per_class, dtype=np.int64)
+    if len(counts) != num_classes or not np.array_equal(counts, expected):
         raise ValueError(
             f"Generated labels must contain exactly {samples_per_class} samples per class."
         )
 
 
-def _long_tail_class_counts(imbalance_factor: float) -> list[int]:
+def _long_tail_class_counts(imbalance_factor: float, *, num_classes: int) -> list[int]:
     if not 0.0 < imbalance_factor <= 1.0:
         raise ValueError("--imbalance-factor must be in (0, 1].")
     return [
-        int(_TRAIN_CLASS_COUNT * imbalance_factor ** (class_id / (_NUM_CLASSES - 1.0)))
-        for class_id in range(_NUM_CLASSES)
+        int(_TRAIN_CLASS_COUNT * imbalance_factor ** (class_id / (num_classes - 1.0)))
+        for class_id in range(num_classes)
     ]
 
 
-def _resolve_class_counts(serialized: str | None, imbalance_factor: float) -> list[int]:
+def _resolve_class_counts(
+    serialized: str | None,
+    imbalance_factor: float,
+    *,
+    num_classes: int = _NUM_CLASSES,
+) -> list[int]:
     if serialized is None:
-        return _long_tail_class_counts(imbalance_factor)
+        return _long_tail_class_counts(imbalance_factor, num_classes=num_classes)
     try:
         counts = [int(value.strip()) for value in serialized.split(",")]
     except ValueError as exc:
         raise ValueError("--class-counts must be comma-separated integers.") from exc
-    if len(counts) != _NUM_CLASSES or any(value <= 0 for value in counts):
-        raise ValueError("--class-counts must contain ten positive integers.")
+    if len(counts) != num_classes or any(value <= 0 for value in counts):
+        raise ValueError(
+            f"--class-counts must contain {num_classes} positive integers."
+        )
     return counts
+
+
+def _parse_class_ids(serialized: str | None) -> tuple[int, ...]:
+    if serialized is None or not str(serialized).strip():
+        return tuple(range(_NUM_CLASSES))
+    try:
+        values = tuple(int(value.strip()) for value in str(serialized).split(","))
+    except ValueError as exc:
+        raise ValueError("--class-ids must be comma-separated integers.") from exc
+    if len(values) < 3:
+        raise ValueError("--class-ids must include at least three classes.")
+    if len(set(values)) != len(values) or any(value < 0 or value >= _NUM_CLASSES for value in values):
+        raise ValueError("--class-ids must be unique Fashion-MNIST class IDs in [0, 9].")
+    return values
+
+
+def _subset_probability_cache(cache: FeatureCache, class_ids: tuple[int, ...]) -> FeatureCache:
+    if class_ids == tuple(range(_NUM_CLASSES)):
+        return cache
+    probabilities = np.asarray(cache.probabilities)
+    if probabilities.shape[1] != _NUM_CLASSES:
+        raise ValueError("Subset Fashion-MNIST evaluation requires ten classifier outputs.")
+    labels = np.asarray(cache.labels, dtype=np.int64)
+    if np.any(labels < 0) or np.any(labels >= len(class_ids)):
+        raise ValueError("Subset cache labels must be compact 0..K-1 identifiers.")
+    provenance = dict(cache.provenance)
+    provenance["class_order"] = list(class_ids)
+    provenance["probability_class_order"] = list(class_ids)
+    return FeatureCache(
+        features=cache.features,
+        probabilities=probabilities[:, list(class_ids)],
+        labels=labels,
+        sample_ids=cache.sample_ids,
+        provenance=provenance,
+    )
 
 
 def _image_range(normalize: str) -> tuple[float, float]:
