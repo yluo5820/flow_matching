@@ -1004,3 +1004,9 @@ while keeping requested-class accuracy high at 95.68%. The 2,000-step budget is 
 not selected because macro FID improved by 12.46%, above the frozen 10% threshold. The
 distinct-five bridge is therefore pending the final 10,000-step calibration, not
 blocked by label control.
+
+The 10,000-step continuation passes the terminal gate and selects 10,000 updates as the
+frozen budget for distinct-five rotations. Macro classwise FID improves to 47.41,
+recall to 0.808, and requested-class accuracy to 96.40%; the minimum class accuracy is
+93.3% for Sandal. The five rotation outcomes can now be trained without the conditional
+separability confound that blocked the all-class Fashion-MNIST bridge.

@@ -408,6 +408,21 @@ gate is therefore pending the final 10,000-step calibration.
 | 3 | Bag | 67.92 | 0.872 | 0.979 |
 | 4 | Ankle boot | 90.88 | 0.718 | 0.893 |
 
+The 10,000-step continuation passes the terminal budget gate and fixes the training
+budget for the five frequency rotations at 10,000 updates. Macro classwise FID falls
+to 47.41, recall rises to 0.808, and requested-class accuracy reaches 96.40%. The
+minimum class accuracy is 93.3% for Sandal, safely above the 80% threshold. Although
+5,000 to 10,000 still improves macro FID by 30.8%, the preregistered terminal rule
+allows 10,000 once per-class label control passes.
+
+| Compact class | Original class | FID | Recall | Requested accuracy |
+|---:|---|---:|---:|---:|
+| 0 | Trouser | 65.82 | 0.742 | 0.989 |
+| 1 | Sandal | 50.97 | 0.788 | 0.933 |
+| 2 | Sneaker | 29.29 | 0.808 | 0.955 |
+| 3 | Bag | 57.34 | 0.833 | 0.988 |
+| 4 | Ankle boot | 33.63 | 0.867 | 0.955 |
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts
