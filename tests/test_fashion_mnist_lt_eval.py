@@ -239,7 +239,9 @@ def test_subset_class_counts_and_probability_cache_are_compact() -> None:
 
     assert counts == [5000, 1581, 500, 158, 50]
     assert subset.probabilities.shape == (20, 5)
+    assert np.allclose(subset.probabilities.sum(axis=1), 1.0)
     assert subset.provenance["class_order"] == [1, 5, 7, 8, 9]
+    assert subset.provenance["probabilities_renormalized_after_class_subset"] is True
 
     with pytest.raises(ValueError, match="5 positive"):
         _resolve_class_counts("5000,50", 0.01, num_classes=5)

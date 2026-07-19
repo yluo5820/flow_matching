@@ -373,8 +373,25 @@ frequency remains causal within class through the cyclic support assignment.
 The first local 2,000-step timing attempt projected roughly 38-40 minutes and was
 stopped at 28 updates, then moved to
 `runs/fashion_mnist_geometry_frequency/stage1_distinct5/calibration/aborted_local_steps_00002000`.
-The real 2,000-step calibration should therefore be run in the user terminal under the
-30-minute handoff rule. No distinct-five calibration outcome has been evaluated yet.
+The real 2,000-step calibration completed in the user terminal. Evaluation initially
+exposed a subset-probability bug: slicing the ten-way Fashion-MNIST classifier
+probabilities to the five selected classes left rows summing below one, which invalidated
+Inception Score. The evaluator now renormalizes probabilities after class subsetting
+and records this in cache provenance.
+
+At 2,000 steps, the distinct-five calibration clears the conditional separability
+criterion: average requested-class accuracy is 95.14%, and the minimum class accuracy
+is 91.3% for Sandal. Macro classwise FID is 78.28, worst class FID is 91.17, and recall
+is 0.704. The budget gate is therefore pending the 5,000-step comparison, not blocked
+by label control.
+
+| Compact class | Original class | FID | Recall | Requested accuracy |
+|---:|---|---:|---:|---:|
+| 0 | Trouser | 91.17 | 0.763 | 0.988 |
+| 1 | Sandal | 89.10 | 0.641 | 0.913 |
+| 2 | Sneaker | 50.00 | 0.643 | 0.958 |
+| 3 | Bag | 85.36 | 0.759 | 0.980 |
+| 4 | Ankle boot | 75.77 | 0.720 | 0.918 |
 
 ## Interpretation boundary
 

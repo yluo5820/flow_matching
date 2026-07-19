@@ -989,5 +989,12 @@ a scaled support rule requiring four of five classes to degrade from head to tai
 does not erase the all-class failure; it asks whether the Fashion-MNIST bridge works
 once the known upper-body overlap cluster is removed. A local 2,000-step timing attempt
 projected roughly 38-40 minutes and was stopped at 28 updates, so the actual
-calibration is handed to the user terminal. No distinct-five outcome has yet been
-observed.
+calibration is handed to the user terminal.
+
+The distinct-five 2,000-step calibration completed. A subset evaluator bug was fixed:
+after slicing the ten-way classifier probabilities to the five selected classes, the
+rows must be renormalized before Inception Score and conditional diagnostics are
+computed. With that fix, 2,000 steps already clears the label-control gate: average
+requested-class accuracy is 95.14%, the minimum class accuracy is 91.3%, macro classwise
+FID is 78.28, and recall is 0.704. The budget gate remains pending the 5,000-step
+comparison, but the all-class failure mode has been removed in this subset.

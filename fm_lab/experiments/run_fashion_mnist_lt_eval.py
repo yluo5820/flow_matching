@@ -401,12 +401,18 @@ def _subset_probability_cache(cache: FeatureCache, class_ids: tuple[int, ...]) -
     labels = np.asarray(cache.labels, dtype=np.int64)
     if np.any(labels < 0) or np.any(labels >= len(class_ids)):
         raise ValueError("Subset cache labels must be compact 0..K-1 identifiers.")
+    subset_probabilities = probabilities[:, list(class_ids)].copy()
+    row_sums = subset_probabilities.sum(axis=1, keepdims=True)
+    if np.any(row_sums <= 0.0):
+        raise ValueError("Subset classifier probabilities must have positive mass.")
+    subset_probabilities /= row_sums
     provenance = dict(cache.provenance)
     provenance["class_order"] = list(class_ids)
     provenance["probability_class_order"] = list(class_ids)
+    provenance["probabilities_renormalized_after_class_subset"] = True
     return FeatureCache(
         features=cache.features,
-        probabilities=probabilities[:, list(class_ids)],
+        probabilities=subset_probabilities,
         labels=labels,
         sample_ids=cache.sample_ids,
         provenance=provenance,
