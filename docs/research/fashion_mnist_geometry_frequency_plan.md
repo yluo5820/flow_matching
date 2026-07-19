@@ -393,6 +393,21 @@ by label control.
 | 3 | Bag | 85.36 | 0.759 | 0.980 |
 | 4 | Ankle boot | 75.77 | 0.720 | 0.918 |
 
+The exact 5,000-step continuation keeps the label-control result intact and improves
+average image quality, but not enough to select 2,000 steps. Macro classwise FID falls
+from 78.28 to 68.53, a 12.46% relative improvement, which is above the frozen 10%
+convergence threshold. Overall recall rises from 0.704 to 0.777. Requested-class
+accuracy is 95.68%, and the minimum class accuracy is 89.3% for Ankle boot. The budget
+gate is therefore pending the final 10,000-step calibration.
+
+| Compact class | Original class | FID | Recall | Requested accuracy |
+|---:|---|---:|---:|---:|
+| 0 | Trouser | 56.42 | 0.737 | 0.993 |
+| 1 | Sandal | 89.65 | 0.789 | 0.943 |
+| 2 | Sneaker | 37.76 | 0.767 | 0.976 |
+| 3 | Bag | 67.92 | 0.872 | 0.979 |
+| 4 | Ankle boot | 90.88 | 0.718 | 0.893 |
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts

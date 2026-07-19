@@ -998,3 +998,9 @@ computed. With that fix, 2,000 steps already clears the label-control gate: aver
 requested-class accuracy is 95.14%, the minimum class accuracy is 91.3%, macro classwise
 FID is 78.28, and recall is 0.704. The budget gate remains pending the 5,000-step
 comparison, but the all-class failure mode has been removed in this subset.
+
+The 5,000-step continuation improves macro classwise FID to 68.53 and recall to 0.777
+while keeping requested-class accuracy high at 95.68%. The 2,000-step budget is still
+not selected because macro FID improved by 12.46%, above the frozen 10% threshold. The
+distinct-five bridge is therefore pending the final 10,000-step calibration, not
+blocked by label control.
