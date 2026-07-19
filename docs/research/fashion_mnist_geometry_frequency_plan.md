@@ -423,6 +423,30 @@ allows 10,000 once per-class label control passes.
 | 3 | Bag | 57.34 | 0.833 | 0.988 |
 | 4 | Ankle boot | 33.63 | 0.867 | 0.955 |
 
+The five 10,000-step class-balanced rotations completed and passed the preregistered
+support-effect rule. Every class has worse tail-versus-head classwise FID and worse
+tail-versus-head recall. Tail-minus-head FID degradation is large for all five classes:
+67.58 for Sneaker, 98.92 for Ankle boot, 108.48 for Trouser, 161.17 for Bag, and
+195.42 for Sandal. Head-minus-tail recall degradation ranges from 0.239 to 0.349.
+
+| Original class | Head support | Tail support | Tail - head FID | Head - tail recall |
+|---|---:|---:|---:|---:|
+| Trouser | 5,000 | 50 | 108.48 | 0.239 |
+| Sandal | 5,000 | 50 | 195.42 | 0.341 |
+| Sneaker | 5,000 | 50 | 67.58 | 0.275 |
+| Bag | 5,000 | 50 | 161.17 | 0.254 |
+| Ankle boot | 5,000 | 50 | 98.92 | 0.349 |
+
+The frozen geometry-predictor rule is not satisfied. Raw-PCA geometry is suggestive:
+four of five estimators have positive FID and recall correlations, median recall rho is
+0.564, and median FID rho is 0.500 within rounding. But the strict rule requires median
+FID rho at least 0.5 and is not robust enough to declare support. DINOv2-PCA geometry
+does not support the rule: only two of five estimators are positive for both endpoints,
+with median FID rho -0.500 and median recall rho 0.300. Thus the supported conclusion is
+that unique support matters strongly under equal exposure; this distinct-five bridge
+does not establish that the frozen ID estimates explain which classes are most
+sensitive.
+
 ## Interpretation boundary
 
 This experiment can show that a preregistered class-geometry measurement predicts

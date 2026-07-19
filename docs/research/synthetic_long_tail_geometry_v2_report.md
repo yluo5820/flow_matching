@@ -1010,3 +1010,13 @@ frozen budget for distinct-five rotations. Macro classwise FID improves to 47.41
 recall to 0.808, and requested-class accuracy to 96.40%; the minimum class accuracy is
 93.3% for Sandal. The five rotation outcomes can now be trained without the conditional
 separability confound that blocked the all-class Fashion-MNIST bridge.
+
+The five distinct-five rotations completed. The support effect is strongly supported:
+all five classes degrade from head support to tail support in both classwise FID and
+recall. Tail-minus-head FID degradation is 108.48 for Trouser, 195.42 for Sandal, 67.58
+for Sneaker, 161.17 for Bag, and 98.92 for Ankle boot; head-minus-tail recall
+degradation ranges from 0.239 to 0.349. The geometry-predictor rule is not satisfied.
+Raw-PCA estimates are suggestive but not decisive under the strict rule, while DINOv2
+estimates do not support the rule. The defensible bridge conclusion is therefore that
+unique support has a strong causal effect under equal exposure in this natural-ish
+subset, but the frozen ID estimators do not yet explain class sensitivity.
