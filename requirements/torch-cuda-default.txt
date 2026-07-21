@@ -1,0 +1,4 @@
+# Current PyTorch Linux wheels use the default stable CUDA runtime on PyPI.
+# Prefer this for new drivers and RTX 50-series / Blackwell nodes.
+torch
+torchvision

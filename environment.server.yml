@@ -1,0 +1,14 @@
+# Minimal Miniconda environment for Linux CUDA experiment servers.
+#
+# Install PyTorch separately before the editable project install; see
+# docs/server_cuda_setup.md. Keeping torch out of this file avoids accidentally
+# resolving a CPU wheel or a CUDA wheel that does not match the server driver.
+name: fm_lab_cuda
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip>=24
+  - setuptools>=69
+  - wheel
+  - git

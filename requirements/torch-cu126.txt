@@ -1,0 +1,5 @@
+# Older-driver fallback. Useful for Ada/Hopper nodes when the default PyPI
+# CUDA wheel is newer than the installed NVIDIA driver supports.
+--index-url https://download.pytorch.org/whl/cu126
+torch
+torchvision
