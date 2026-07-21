@@ -79,15 +79,55 @@ PY
 For our new training acceleration flags, BF16 is preferred when supported.
 Otherwise `--mixed-precision auto` falls back to FP16 with a gradient scaler.
 
-## 5. Run a short CUDA smoke
+## 5. Stage CIFAR data on AutoDL
+
+AutoDL exposes common datasets under `/root/autodl-pub`, but that location is
+read-only and slower than the local data disk. Copy or extract CIFAR to
+`/root/autodl-tmp` before training:
+
+```bash
+mkdir -p /root/autodl-tmp/data/cifar10
+mkdir -p /root/autodl-tmp/data/cifar100
+
+tar -xzf /root/autodl-pub/cifar-10/cifar-10-python.tar.gz \
+  -C /root/autodl-tmp/data/cifar10
+
+tar -xzf /root/autodl-pub/cifar-100/cifar-100-python.tar.gz \
+  -C /root/autodl-tmp/data/cifar100
+```
+
+Verify without downloading from the internet:
+
+```bash
+python - <<'PY'
+from torchvision.datasets import CIFAR10, CIFAR100
+
+for cls, root in [
+    (CIFAR10, "/root/autodl-tmp/data/cifar10"),
+    (CIFAR100, "/root/autodl-tmp/data/cifar100"),
+]:
+    for train in [True, False]:
+        ds = cls(root=root, train=train, download=False)
+        print(cls.__name__, "train" if train else "test", len(ds))
+PY
+```
+
+The AutoDL-specific CIFAR-100 configs live under `configs/cifar100_lt/autodl/`.
+They set:
+
+- `data.root: /root/autodl-tmp/data/cifar100`
+- `data.download: false`
+- `experiment.output_dir: /root/autodl-tmp/runs/...`
+
+## 6. Run a short CUDA smoke
 
 Use the baseline first. This checks CUDA, AMP, channels-last layout, sampling,
 and basic artifact writing without spending a full experiment budget.
 
 ```bash
 python -m fm_lab.experiments.run_train \
-  --config configs/cifar100_lt/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
-  --output-dir runs/cifar100_lt_cuda_smoke/baseline_amp_channels_last \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
+  --output-dir /root/autodl-tmp/runs/cifar100_lt_cuda_smoke/baseline_amp_channels_last \
   --device cuda \
   --steps 50 \
   --batch-size 64 \
@@ -105,8 +145,8 @@ If that succeeds, test `torch.compile` separately:
 
 ```bash
 python -m fm_lab.experiments.run_train \
-  --config configs/cifar100_lt/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
-  --output-dir runs/cifar100_lt_cuda_smoke/baseline_amp_channels_last_compile \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
+  --output-dir /root/autodl-tmp/runs/cifar100_lt_cuda_smoke/baseline_amp_channels_last_compile \
   --device cuda \
   --steps 50 \
   --batch-size 64 \
@@ -124,7 +164,7 @@ python -m fm_lab.experiments.run_train \
 For only 50 steps, `torch.compile` may look slower because the compile cost is
 paid upfront. Treat this as a correctness smoke, not a throughput benchmark.
 
-## 6. Inspect runtime metadata
+## 7. Inspect runtime metadata
 
 Each run writes the selected runtime behavior into `metrics.json`:
 
@@ -134,7 +174,8 @@ import json
 from pathlib import Path
 
 metrics = json.loads(Path(
-    "runs/cifar100_lt_cuda_smoke/baseline_amp_channels_last/metrics.json"
+    "/root/autodl-tmp/runs/cifar100_lt_cuda_smoke/"
+    "baseline_amp_channels_last/metrics.json"
 ).read_text())
 print(json.dumps(metrics["runtime"], indent=2, sort_keys=True))
 PY
@@ -149,3 +190,44 @@ Expected CUDA smoke behavior:
 If `torch.compile` fails or gives no throughput benefit on the cluster, leave it
 off for the full paper-close runs. AMP plus channels-last are the safer default
 speedup path.
+
+## 8. Run the CIFAR-100-LT paper-close experiment set
+
+Run these after the CUDA smoke passes. The configs already enable AMP and
+channels-last on CUDA and keep `torch.compile` disabled.
+
+Baseline:
+
+```bash
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
+  --device cuda
+```
+
+CM without endpoint transfer:
+
+```bash
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm_no_oc.yaml \
+  --device cuda
+```
+
+CM with endpoint transfer:
+
+```bash
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm.yaml \
+  --device cuda
+```
+
+Default output directories:
+
+```text
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/baseline
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/cm_no_oc
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/cm_oc
+```
+
+If AutoDL storage pressure becomes an issue, preserve at least each run's
+`checkpoint.pt`, `metrics.json`, `config.yaml`, and final evaluation artifacts
+under persistent storage before releasing the instance.
