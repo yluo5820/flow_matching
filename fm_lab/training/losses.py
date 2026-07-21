@@ -10,7 +10,10 @@ from typing import Any, Protocol
 import torch
 from torch.nn import functional as F
 
-from fm_lab.integrations.official_imbdiff_cm import OfficialImbDiffCMObjective
+from fm_lab.integrations.official_imbdiff_cm import (
+    OfficialImbDiffCMObjective,
+    OfficialImbDiffObjective,
+)
 from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.long_tail import (
@@ -723,24 +726,52 @@ def build_objective(
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
-    if name in {"official_imbdiff_cm", "imbdiff_cm_official", "official_cm"}:
+    if name in {
+        "official_imbdiff",
+        "imbdiff_official",
+        "official_imbdiff_cm",
+        "imbdiff_cm_official",
+        "official_cm",
+    }:
         if class_counts is None:
-            raise ValueError("Official ImbDiff-CM requires class_counts.")
+            raise ValueError("Official ImbDiff requires class_counts.")
         diffusion_config = {} if diffusion_config is None else diffusion_config
         transfer_config = config.get("transfer", {}) or {}
         cm_config = config.get("cm", {}) or {}
-        return OfficialImbDiffCMObjective(
+        cbdm_config = config.get("cbdm", {}) or {}
+        if name in {"official_imbdiff_cm", "imbdiff_cm_official", "official_cm"}:
+            return OfficialImbDiffCMObjective(
+                class_counts=class_counts,
+                timesteps=int(diffusion_config.get("timesteps", 1000)),
+                beta_start=float(diffusion_config.get("beta_start", 1e-4)),
+                beta_end=float(diffusion_config.get("beta_end", 2e-2)),
+                cfg=bool(config.get("cfg", True)),
+                transfer_x0=transfer_config.get("transfer_x0"),
+                transfer_tr_tau=bool(transfer_config.get("transfer_tr_tau", False)),
+                transfer_mode=str(transfer_config.get("transfer_mode", "t2h")),
+                transfer_tau=float(transfer_config.get("tr_tau", 1.0)),
+                consistency_weight=float(cm_config.get("w_con", 1.0)),
+                diversity_weight=float(cm_config.get("w_div", 0.2)),
+                image_shape=tuple(config.get("image_shape", [3, 32, 32])),
+            )
+        return OfficialImbDiffObjective(
             class_counts=class_counts,
+            method=str(config.get("method", "ddpm")),
             timesteps=int(diffusion_config.get("timesteps", 1000)),
             beta_start=float(diffusion_config.get("beta_start", 1e-4)),
             beta_end=float(diffusion_config.get("beta_end", 2e-2)),
             cfg=bool(config.get("cfg", True)),
-            transfer_x0=bool(transfer_config.get("transfer_x0", True)),
+            transfer_x0=transfer_config.get("transfer_x0"),
             transfer_tr_tau=bool(transfer_config.get("transfer_tr_tau", False)),
             transfer_mode=str(transfer_config.get("transfer_mode", "t2h")),
             transfer_tau=float(transfer_config.get("tr_tau", 1.0)),
             consistency_weight=float(cm_config.get("w_con", 1.0)),
             diversity_weight=float(cm_config.get("w_div", 0.2)),
+            cbdm_target_distribution=str(
+                cbdm_config.get("target_distribution", "train")
+            ),
+            cbdm_tau=float(cbdm_config.get("tau", 0.001)),
+            cbdm_gamma=float(cbdm_config.get("gamma", 0.25)),
             image_shape=tuple(config.get("image_shape", [3, 32, 32])),
         )
     diffusion_prediction_aliases = {

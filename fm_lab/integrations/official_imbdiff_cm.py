@@ -18,12 +18,16 @@ from typing import Any
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 @dataclass(frozen=True)
 class OfficialImbDiffCMComponents:
     """Classes imported from the exact vendored release."""
 
+    unet: type[nn.Module]
+    trainer: type[nn.Module]
+    sampler: type[nn.Module]
     cm_unet: type[nn.Module]
     cm_trainer: type[nn.Module]
     cm_sampler: type[nn.Module]
@@ -44,23 +48,151 @@ def load_official_imbdiff_cm_components() -> OfficialImbDiffCMComponents:
     root_text = str(official_root)
     if root_text not in sys.path:
         sys.path.insert(0, root_text)
-    model_module = importlib.import_module("imbdiff_cm.model.model_cm")
-    diffusion_module = importlib.import_module("imbdiff_cm.diffusion_cm")
+    model_module = importlib.import_module("imbdiff_cm.model.model")
+    cm_model_module = importlib.import_module("imbdiff_cm.model.model_cm")
+    diffusion_module = importlib.import_module("imbdiff_cm.diffusion")
+    cm_diffusion_module = importlib.import_module("imbdiff_cm.diffusion_cm")
     return OfficialImbDiffCMComponents(
-        cm_unet=model_module.UNet_CM,
-        cm_trainer=diffusion_module.GaussianDiffusionTrainer,
+        unet=model_module.UNet,
+        trainer=diffusion_module.GaussianDiffusionTrainer,
+        # tools/sample_images.py imports this exact sampler for OC.
+        sampler=diffusion_module.GaussianDiffusionSamplerOld,
+        cm_unet=cm_model_module.UNet_CM,
+        cm_trainer=cm_diffusion_module.GaussianDiffusionTrainer,
         # tools/sample_images.py imports this exact sampler for CM.
-        cm_sampler=diffusion_module.GaussianDiffusionSamplerOld,
+        cm_sampler=cm_diffusion_module.GaussianDiffusionSamplerOld,
     )
 
 
 _MISSING = object()
 
 
+def _official_image_and_labels(
+    x: torch.Tensor,
+    *,
+    image_shape: tuple[int, ...],
+    context: dict[str, Any] | torch.Tensor | None,
+    y: torch.Tensor | None | object,
+) -> tuple[torch.Tensor, torch.Tensor | None, bool]:
+    input_was_flat = x.ndim == 2
+    if input_was_flat:
+        image = x.reshape(x.shape[0], *image_shape)
+    elif x.ndim == 4 and tuple(x.shape[1:]) == image_shape:
+        image = x
+    else:
+        raise ValueError(
+            "Official ImbDiff input must be flat [N, D] or NCHW with "
+            f"shape {image_shape}."
+        )
+
+    labels: torch.Tensor | None
+    if y is _MISSING:
+        if isinstance(context, torch.Tensor):
+            labels = context
+        elif isinstance(context, dict) and context.get("class_labels") is not None:
+            labels = context["class_labels"]
+        elif context is None:
+            labels = None
+        else:
+            raise ValueError("Official ImbDiff requires class labels or y=None.")
+    else:
+        labels = y  # type: ignore[assignment]
+
+    if labels is not None:
+        labels = labels.to(device=x.device, dtype=torch.long)
+        dropped = labels < 0
+        if bool(dropped.all()):
+            labels = None
+        elif bool(dropped.any()):
+            raise ValueError(
+                "The official model represents unconditional conditioning as y=None; "
+                "mixed per-sample label dropout is unsupported. Use batch dropout."
+            )
+    return image, labels, input_was_flat
+
+
+class OfficialImbDiffUNet(nn.Module):
+    """Exact released standard ``UNet`` used by DDPM, CBDM, and OC."""
+
+    is_class_conditional = True
+    is_official_imbdiff = True
+    is_official_imbdiff_cm = False
+
+    def __init__(
+        self,
+        *,
+        dim: int,
+        image_shape: Sequence[int] = (3, 32, 32),
+        timesteps: int = 1000,
+        base_channels: int = 128,
+        channel_multipliers: Sequence[int] = (1, 2, 2, 2),
+        attention_levels: Sequence[int] = (1,),
+        num_res_blocks: int = 2,
+        dropout: float = 0.1,
+        num_classes: int = 100,
+    ) -> None:
+        super().__init__()
+        shape = tuple(int(value) for value in image_shape)
+        if len(shape) != 3 or shape[0] != 3:
+            raise ValueError("Official ImbDiff requires RGB image_shape [3, H, W].")
+        if int(dim) != shape[0] * shape[1] * shape[2]:
+            raise ValueError(f"dim={dim} does not match image_shape={shape}.")
+        if int(num_classes) < 1:
+            raise ValueError("num_classes must be positive.")
+        self.dim = int(dim)
+        self.image_shape = shape
+        self.num_classes = int(num_classes)
+        self.num_timesteps = int(timesteps)
+
+        components = load_official_imbdiff_cm_components()
+        self.network = components.unet(
+            T=self.num_timesteps,
+            ch=int(base_channels),
+            ch_mult=[int(value) for value in channel_multipliers],
+            attn=[int(value) for value in attention_levels],
+            num_res_blocks=int(num_res_blocks),
+            dropout=float(dropout),
+            cond=True,
+            augm=False,
+            num_class=self.num_classes,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        context: dict[str, Any] | torch.Tensor | None = None,
+        *,
+        y: torch.Tensor | None | object = _MISSING,
+        augm: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        image, labels, input_was_flat = _official_image_and_labels(
+            x,
+            image_shape=self.image_shape,
+            context=context,
+            y=y,
+        )
+        output = self.network(
+            image,
+            t.to(device=x.device, dtype=torch.long),
+            y=labels,
+            augm=augm,
+        )
+        return output.reshape(x.shape[0], -1) if input_was_flat else output
+
+    def capacity_metadata(self) -> dict[str, object]:
+        return {
+            "enabled": False,
+            "adapter_layers": 0,
+            "implementation": "official_imbdiff",
+        }
+
+
 class OfficialImbDiffCMUNet(nn.Module):
     """Exact released ``UNet_CM`` behind the fm_lab model interface."""
 
     is_class_conditional = True
+    is_official_imbdiff = True
     is_official_imbdiff_cm = True
 
     def __init__(
@@ -122,49 +254,18 @@ class OfficialImbDiffCMUNet(nn.Module):
         self,
         x: torch.Tensor,
         t: torch.Tensor,
-        context: dict[str, Any] | None = None,
+        context: dict[str, Any] | torch.Tensor | None = None,
         *,
         y: torch.Tensor | None | object = _MISSING,
         augm: torch.Tensor | None = None,
         use_cm: bool = True,
     ) -> torch.Tensor:
-        input_was_flat = x.ndim == 2
-        if input_was_flat:
-            image = x.reshape(x.shape[0], *self.image_shape)
-        elif x.ndim == 4 and tuple(x.shape[1:]) == self.image_shape:
-            image = x
-        else:
-            raise ValueError(
-                "Official ImbDiff-CM input must be flat [N, D] or NCHW with "
-                f"shape {self.image_shape}."
-            )
-
-        labels: torch.Tensor | None
-        if y is _MISSING:
-            # The released samplers pass y as the third positional argument,
-            # while fm_lab passes a context dictionary.
-            if isinstance(context, torch.Tensor):
-                labels = context
-                context = None
-            elif isinstance(context, dict) and context.get("class_labels") is not None:
-                labels = context["class_labels"].to(device=x.device, dtype=torch.long)
-            elif context is None:
-                labels = None
-            else:
-                raise ValueError("Official ImbDiff-CM requires class labels or y=None.")
-        else:
-            labels = y  # type: ignore[assignment]
-
-        if labels is not None:
-            labels = labels.to(device=x.device, dtype=torch.long)
-            dropped = labels < 0
-            if bool(dropped.all()):
-                labels = None
-            elif bool(dropped.any()):
-                raise ValueError(
-                    "The official model represents unconditional conditioning as y=None; "
-                    "mixed per-sample label dropout is unsupported. Use batch dropout."
-                )
+        image, labels, input_was_flat = _official_image_and_labels(
+            x,
+            image_shape=self.image_shape,
+            context=context,
+            y=y,
+        )
 
         active_capacity = bool(use_cm)
         if isinstance(context, dict) and "use_capacity" in context:
@@ -194,10 +295,16 @@ class OfficialImbDiffCMUNet(nn.Module):
         }
 
 
-class OfficialImbDiffCMObjective:
-    """Exact released CM trainer exposed as an fm_lab objective."""
+class OfficialImbDiffObjective:
+    """Paper/release discrete objectives behind one controlled interface.
 
-    name = "official_imbdiff_cm"
+    DDPM and OC delegate to the released standard trainer. Released CM,
+    pure CM, and the capacity-only control delegate to the released CM
+    trainer. CBDM is implemented directly from Eq. (4) of Qin et al. because
+    ImbDiff-CM does not vendor or release a CBDM trainer.
+    """
+
+    name = "official_imbdiff"
     prediction_type = "epsilon"
     model_output = "source"
     loss_space = "source"
@@ -209,33 +316,101 @@ class OfficialImbDiffCMObjective:
         self,
         *,
         class_counts: Sequence[int],
+        method: str,
         timesteps: int = 1000,
         beta_start: float = 1e-4,
         beta_end: float = 2e-2,
         cfg: bool = True,
-        transfer_x0: bool = True,
+        transfer_x0: bool | None = None,
         transfer_tr_tau: bool = False,
         transfer_mode: str = "t2h",
         transfer_tau: float = 1.0,
         consistency_weight: float = 1.0,
         diversity_weight: float = 0.2,
+        cbdm_target_distribution: str = "train",
+        cbdm_tau: float = 0.001,
+        cbdm_gamma: float = 0.25,
         image_shape: Sequence[int] = (3, 32, 32),
     ) -> None:
         counts = tuple(int(value) for value in class_counts)
         if not counts or any(value <= 0 for value in counts):
-            raise ValueError("Official ImbDiff-CM requires positive class_counts.")
+            raise ValueError("Official ImbDiff requires positive class_counts.")
+        normalized_method = str(method).lower().replace("-", "_")
+        aliases = {
+            "baseline": "ddpm",
+            "cm": "released_cm",
+            "cm_released": "released_cm",
+            "pure": "pure_cm",
+            "cm_pure": "pure_cm",
+            "capacity_only": "oc_capacity_only",
+            "oc_capacity": "oc_capacity_only",
+        }
+        normalized_method = aliases.get(normalized_method, normalized_method)
+        supported = {
+            "ddpm",
+            "cbdm",
+            "oc",
+            "released_cm",
+            "pure_cm",
+            "oc_capacity_only",
+        }
+        if normalized_method not in supported:
+            raise ValueError(
+                "Official ImbDiff method must be ddpm, cbdm, oc, released_cm, "
+                "pure_cm, or oc_capacity_only."
+            )
+        self.method = normalized_method
+        self.name = f"official_imbdiff_{self.method}"
         self.class_counts = counts
         self.timesteps = int(timesteps)
         self.beta_start = float(beta_start)
         self.beta_end = float(beta_end)
         self.cfg = bool(cfg)
-        self.transfer_x0 = bool(transfer_x0)
+        canonical_transfer = {
+            "ddpm": False,
+            "cbdm": False,
+            "oc": True,
+            "released_cm": True,
+            "pure_cm": False,
+            "oc_capacity_only": True,
+        }[self.method]
+        if transfer_x0 is not None and bool(transfer_x0) != canonical_transfer:
+            raise ValueError(
+                f"Method {self.method!r} requires transfer_x0={canonical_transfer}."
+            )
+        self.transfer_x0 = canonical_transfer
         self.transfer_tr_tau = bool(transfer_tr_tau)
         self.transfer_mode = str(transfer_mode)
         self.transfer_tau = float(transfer_tau)
-        self.consistency_weight = float(consistency_weight)
-        self.diversity_weight = float(diversity_weight)
+        self.consistency_weight = (
+            0.0 if self.method == "oc_capacity_only" else float(consistency_weight)
+        )
+        self.diversity_weight = (
+            0.0 if self.method == "oc_capacity_only" else float(diversity_weight)
+        )
+        if self.consistency_weight < 0 or self.diversity_weight < 0:
+            raise ValueError("CM weights must be non-negative.")
+        self.cbdm_target_distribution = str(cbdm_target_distribution).lower()
+        if self.cbdm_target_distribution not in {"train", "sqrt", "uniform"}:
+            raise ValueError(
+                "CBDM target_distribution must be 'train', 'sqrt', or 'uniform'."
+            )
+        self.cbdm_tau = float(cbdm_tau)
+        self.cbdm_gamma = float(cbdm_gamma)
+        if self.cbdm_tau < 0 or self.cbdm_gamma < 0:
+            raise ValueError("CBDM tau and gamma must be non-negative.")
         self.image_shape = tuple(int(value) for value in image_shape)
+        betas = torch.linspace(self.beta_start, self.beta_end, self.timesteps).double()
+        self._sqrt_alpha_bars = torch.cumprod(1.0 - betas, dim=0).sqrt()
+        self._sqrt_one_minus_alpha_bars = (
+            1.0 - torch.cumprod(1.0 - betas, dim=0)
+        ).sqrt()
+        cbdm_counts = torch.tensor(self.class_counts, dtype=torch.float64)
+        if self.cbdm_target_distribution == "sqrt":
+            cbdm_counts = cbdm_counts.sqrt()
+        elif self.cbdm_target_distribution == "uniform":
+            cbdm_counts = torch.ones_like(cbdm_counts)
+        self._cbdm_probabilities = (cbdm_counts / cbdm_counts.sum()).float()
         self._trainer: nn.Module | None = None
         self._trainer_model: nn.Module | None = None
         self._trainer_device: torch.device | None = None
@@ -254,19 +429,102 @@ class OfficialImbDiffCMObjective:
     ) -> tuple[torch.Tensor, dict[str, float]]:
         del path, x0, t, compute_diagnostics, class_labels
         if original_class_labels is None:
-            raise ValueError("Official ImbDiff-CM requires original class labels.")
+            raise ValueError("Official ImbDiff requires original class labels.")
+        model_uses_capacity = bool(getattr(model, "is_official_imbdiff_cm", False))
+        if model_uses_capacity != self.uses_capacity_model:
+            expected = "CM U-Net" if self.uses_capacity_model else "standard U-Net"
+            raise ValueError(f"Method {self.method!r} requires the official {expected}.")
         clean = x1.reshape(x1.shape[0], *self.image_shape)
+        labels = original_class_labels.to(device=clean.device, dtype=torch.long)
+        if self.method == "cbdm":
+            return self._cbdm_loss(model=model, clean=clean, labels=labels)
         trainer = self._trainer_for(model, clean.device)
-        loss = trainer(
+        released_loss = trainer(
             clean,
-            original_class_labels.to(device=clean.device, dtype=torch.long),
+            labels,
             augm=None,
             uncond_flag_out=False,
         )
+        if isinstance(released_loss, tuple):
+            if len(released_loss) != 2:
+                raise TypeError("The released standard trainer returned an invalid tuple.")
+            denoising, auxiliary = released_loss
+            loss = denoising.mean() + auxiliary
+        else:
+            loss = released_loss
         if not isinstance(loss, torch.Tensor) or loss.ndim != 0:
-            raise TypeError("The official CM trainer must return one scalar loss tensor.")
+            raise TypeError("The official trainer must resolve to one scalar loss tensor.")
         value = float(loss.detach().cpu())
-        return loss, {"official_imbdiff_cm_loss": value, "loss": value}
+        return loss, {
+            "official_imbdiff_loss": value,
+            f"official_imbdiff_{self.method}_loss": value,
+            "loss": value,
+        }
+
+    @property
+    def uses_capacity_model(self) -> bool:
+        return self.method in {"released_cm", "pure_cm", "oc_capacity_only"}
+
+    @property
+    def sampler_family(self) -> str:
+        return "cm" if self.uses_capacity_model else "standard"
+
+    def _cbdm_loss(
+        self,
+        *,
+        model: nn.Module,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        batch_size = clean.shape[0]
+        discrete_t = torch.randint(self.timesteps, (batch_size,), device=clean.device)
+        noise = torch.randn_like(clean)
+        coefficient_shape = (batch_size,) + (1,) * (clean.ndim - 1)
+        signal = self._sqrt_alpha_bars.to(device=clean.device, dtype=clean.dtype)[
+            discrete_t
+        ].reshape(coefficient_shape)
+        sigma = self._sqrt_one_minus_alpha_bars.to(
+            device=clean.device, dtype=clean.dtype
+        )[discrete_t].reshape(coefficient_shape)
+        noisy = signal * clean + sigma * noise
+
+        # Match the release's whole-batch CFG dropout and CPU RNG stream.
+        dropped = self.cfg and bool(torch.rand(1)[0] < 0.1)
+        conditioned_labels = None if dropped else labels
+        prediction = model(noisy, discrete_t, y=conditioned_labels, augm=None)
+        base_loss = F.mse_loss(prediction, noise)
+
+        probabilities = self._cbdm_probabilities.to(device=clean.device)
+        auxiliary_labels = torch.multinomial(
+            probabilities,
+            num_samples=batch_size,
+            replacement=True,
+        )
+        auxiliary_prediction = model(
+            noisy,
+            discrete_t,
+            y=auxiliary_labels,
+            augm=None,
+        )
+        time_weight = self.cbdm_tau * discrete_t.to(dtype=prediction.dtype)
+        regularizer_distance = (
+            (prediction - auxiliary_prediction.detach()).square().flatten(1).mean(1)
+        )
+        commitment_distance = (
+            (prediction.detach() - auxiliary_prediction).square().flatten(1).mean(1)
+        )
+        regularizer = (time_weight * regularizer_distance).mean()
+        commitment = self.cbdm_gamma * (time_weight * commitment_distance).mean()
+        loss = base_loss + regularizer + commitment
+        return loss, {
+            "official_imbdiff_loss": float(loss.detach().cpu()),
+            "official_imbdiff_cbdm_loss": float(loss.detach().cpu()),
+            "cbdm_base_loss": float(base_loss.detach().cpu()),
+            "cbdm_regularizer": float(regularizer.detach().cpu()),
+            "cbdm_commitment": float(commitment.detach().cpu()),
+            "cbdm_unconditional_batch": float(dropped),
+            "loss": float(loss.detach().cpu()),
+        }
 
     def _trainer_for(self, model: nn.Module, device: torch.device) -> nn.Module:
         if (
@@ -275,6 +533,8 @@ class OfficialImbDiffCMObjective:
             and self._trainer_device == device
         ):
             return self._trainer
+        if self.method == "cbdm":
+            raise RuntimeError("CBDM uses its paper-derived objective, not a release trainer.")
         components = load_official_imbdiff_cm_components()
         probabilities = torch.tensor(self.class_counts, dtype=torch.float32)
         probabilities = probabilities / probabilities.sum()
@@ -282,22 +542,28 @@ class OfficialImbDiffCMObjective:
             probabilities.unsqueeze(1) @ probabilities.unsqueeze(0),
             self.transfer_tau,
         )
-        trainer = components.cm_trainer(
-            model=model,
-            beta_1=self.beta_start,
-            beta_T=self.beta_end,
-            T=self.timesteps,
-            dataset=None,
-            num_class=len(self.class_counts),
-            cfg=self.cfg,
-            weight=probabilities.unsqueeze(0),
-            transfer_x0=self.transfer_x0,
-            transfer_tr_tau=self.transfer_tr_tau,
-            transfer_mode=self.transfer_mode,
-            label_weight_tr=label_weight,
-            w_con=self.consistency_weight,
-            w_div=self.diversity_weight,
-        ).to(device)
+        trainer_kwargs = {
+            "model": model,
+            "beta_1": self.beta_start,
+            "beta_T": self.beta_end,
+            "T": self.timesteps,
+            "dataset": None,
+            "num_class": len(self.class_counts),
+            "cfg": self.cfg,
+            "weight": probabilities.unsqueeze(0),
+            "transfer_x0": self.transfer_x0,
+            "transfer_tr_tau": self.transfer_tr_tau,
+            "transfer_mode": self.transfer_mode,
+            "label_weight_tr": label_weight,
+        }
+        if self.uses_capacity_model:
+            trainer = components.cm_trainer(
+                **trainer_kwargs,
+                w_con=self.consistency_weight,
+                w_div=self.diversity_weight,
+            ).to(device)
+        else:
+            trainer = components.trainer(**trainer_kwargs).to(device)
         self._trainer = trainer
         self._trainer_model = model
         self._trainer_device = device
@@ -307,6 +573,8 @@ class OfficialImbDiffCMObjective:
         return {
             "name": self.name,
             "implementation": "vendored_official_release",
+            "method": self.method,
+            "model_family": "cm" if self.uses_capacity_model else "standard",
             "prediction_type": self.prediction_type,
             "timesteps": self.timesteps,
             "beta_start": self.beta_start,
@@ -323,11 +591,24 @@ class OfficialImbDiffCMObjective:
                 "consistency_weight": self.consistency_weight,
                 "diversity_weight": self.diversity_weight,
             },
+            "cbdm": {
+                "target_distribution": self.cbdm_target_distribution,
+                "tau": self.cbdm_tau,
+                "gamma": self.cbdm_gamma,
+                "implementation": "Qin_et_al_CVPR_2023_equation_4",
+            },
         }
 
 
+class OfficialImbDiffCMObjective(OfficialImbDiffObjective):
+    """Backward-compatible name for the released CM recipe."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(method="released_cm", **kwargs)
+
+
 @torch.no_grad()
-def sample_official_imbdiff_cm(
+def sample_official_imbdiff(
     *,
     model: nn.Module,
     initial_noise: torch.Tensor,
@@ -340,8 +621,9 @@ def sample_official_imbdiff_cm(
     method: str = "ddim",
     ddim_skip: int = 20,
     image_shape: Sequence[int] = (3, 32, 32),
+    sampler_family: str | None = None,
 ) -> torch.Tensor:
-    """Invoke the sampler used by the release's ``tools/sample_images.py``."""
+    """Invoke the standard or CM sampler used by ``tools/sample_images.py``."""
 
     shape = tuple(int(value) for value in image_shape)
     flat_input = initial_noise.ndim == 2
@@ -355,7 +637,18 @@ def sample_official_imbdiff_cm(
     if class_labels.shape != (noise.shape[0],):
         raise ValueError("class_labels must match the sampling batch.")
     components = load_official_imbdiff_cm_components()
-    sampler = components.cm_sampler(
+    if sampler_family is None:
+        family = (
+            "cm"
+            if bool(getattr(model, "is_official_imbdiff_cm", False))
+            else "standard"
+        )
+    else:
+        family = str(sampler_family).lower()
+    if family not in {"standard", "cm"}:
+        raise ValueError("sampler_family must be 'standard' or 'cm'.")
+    sampler_class = components.cm_sampler if family == "cm" else components.sampler
+    sampler = sampler_class(
         model,
         float(beta_start),
         float(beta_end),
@@ -378,3 +671,11 @@ def sample_official_imbdiff_cm(
     finally:
         model.train(was_training)
     return samples.reshape(samples.shape[0], -1) if flat_input else samples
+
+
+@torch.no_grad()
+def sample_official_imbdiff_cm(**kwargs: Any) -> torch.Tensor:
+    """Backward-compatible CM-sampler entry point."""
+
+    kwargs["sampler_family"] = "cm"
+    return sample_official_imbdiff(**kwargs)

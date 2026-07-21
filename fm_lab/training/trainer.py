@@ -861,7 +861,7 @@ def sample_official_imbdiff_cm_and_plot(
     objective: Any,
     device: torch.device,
 ) -> dict[str, Any]:
-    """Sample with the exact CM DDIM class used by the release tooling."""
+    """Sample with the exact standard/CM DDIM class used by release tooling."""
 
     from fm_lab.integrations.official_imbdiff_cm import (
         load_official_imbdiff_cm_components,
@@ -871,7 +871,7 @@ def sample_official_imbdiff_cm_and_plot(
     requested_samples = int(sampling_config.get("n_samples", 10_000))
     batch_size = int(sampling_config.get("sample_batch_size", 512))
     if requested_samples < 1 or batch_size < 1:
-        raise ValueError("Official ImbDiff-CM sampling counts must be positive.")
+        raise ValueError("Official ImbDiff sampling counts must be positive.")
     num_classes = int(getattr(model, "num_classes", len(objective.class_counts)))
     per_class = requested_samples // num_classes
     if per_class < 1:
@@ -882,7 +882,7 @@ def sample_official_imbdiff_cm_and_plot(
     labels = torch.arange(num_classes, device=device).repeat_interleave(per_class)
     method = str(sampling_config.get("sampler", "ddim")).lower()
     if method not in {"ddim", "ddpm"}:
-        raise ValueError("Official ImbDiff-CM sampler must be 'ddim' or 'ddpm'.")
+        raise ValueError("Official ImbDiff sampler must be 'ddim' or 'ddpm'.")
     ddim_skip = int(sampling_config.get("ddim_skip", 20))
     if ddim_skip < 1:
         raise ValueError("sampling.ddim_skip must be positive.")
@@ -894,7 +894,13 @@ def sample_official_imbdiff_cm_and_plot(
     variance = str(diffusion_config.get("variance", "fixed_large")).replace("_", "")
     sampling_model = ema_model if ema_model is not None else model
     components = load_official_imbdiff_cm_components()
-    sampler = components.cm_sampler(
+    sampler_family = str(getattr(objective, "sampler_family", "cm"))
+    if sampler_family not in {"standard", "cm"}:
+        raise ValueError("Official ImbDiff sampler family must be standard or cm.")
+    sampler_class = (
+        components.cm_sampler if sampler_family == "cm" else components.sampler
+    )
+    sampler = sampler_class(
         sampling_model,
         float(diffusion_config.get("beta_start", 1e-4)),
         float(diffusion_config.get("beta_end", 2e-2)),
@@ -958,7 +964,9 @@ def sample_official_imbdiff_cm_and_plot(
         "sample_batch_size": batch_size,
         "ddim_skip": ddim_skip if method == "ddim" else None,
         "paper_omega": omega,
-        "capacity_branch": "on",
+        "method": str(getattr(objective, "method", "released_cm")),
+        "sampler_family": sampler_family,
+        "capacity_branch": "on" if sampler_family == "cm" else "not_applicable",
         "seed": seed,
         "samples_path": str(sample_path),
         "labels_path": str(labels_path),
@@ -1951,6 +1959,8 @@ _DISCRETE_OBJECTIVE_NAMES = frozenset(
         "oc",
         "cm",
         "official_imbdiff_cm",
+        "official_imbdiff",
+        "imbdiff_official",
         "imbdiff_cm_official",
         "official_cm",
     }

@@ -347,6 +347,49 @@ def test_discrete_imbdiff_training_configs_are_removed() -> None:
     assert not list(Path("configs/imbdiff").rglob("*.yaml"))
 
 
+def test_official_imbdiff_60k_matrix_is_controlled_and_complete() -> None:
+    paths = sorted(Path("configs/cifar100_lt/autodl_matrix60k").glob("*.yaml"))
+    assert len(paths) == 6
+    configs = [load_config(path) for path in paths]
+    by_method = {config["objective"]["method"]: config for config in configs}
+    assert set(by_method) == {
+        "ddpm",
+        "cbdm",
+        "oc",
+        "released_cm",
+        "pure_cm",
+        "oc_capacity_only",
+    }
+
+    reference = by_method["ddpm"]
+    for method, config in by_method.items():
+        assert config["data"] == reference["data"]
+        assert config["source"] == reference["source"]
+        assert config["coupling"] == reference["coupling"]
+        assert config["path"] == reference["path"]
+        assert config["conditioning"] == reference["conditioning"]
+        assert config["diffusion"] == reference["diffusion"]
+        assert config["training"] == reference["training"]
+        assert config["sampling"] == reference["sampling"]
+        assert config["training"]["steps"] == 60_000
+        assert config["training"]["checkpoint_every"] == 20_000
+        objective = build_objective(
+            config["objective"],
+            diffusion_config=config["diffusion"],
+            class_counts=(100, 10),
+        )
+        assert objective.method == method
+
+    for method in {"ddpm", "cbdm", "oc"}:
+        assert by_method[method]["model"]["name"] == "official_imbdiff_unet"
+    for method in {"released_cm", "pure_cm", "oc_capacity_only"}:
+        assert by_method[method]["model"]["name"] == "official_imbdiff_cm_unet"
+    assert by_method["oc_capacity_only"]["objective"]["cm"] == {
+        "w_con": 0.0,
+        "w_div": 0.0,
+    }
+
+
 def test_shipped_training_configs_use_canonical_objective_schema() -> None:
     forbidden_keys = {"diffusion", "prediction_type", "ddim_skip", "eta", "cut_time"}
 
@@ -359,9 +402,9 @@ def test_shipped_training_configs_use_canonical_objective_schema() -> None:
             or "tail" in str(data.get("variant_id", ""))
         )
         objective = config.get("objective", {})
-        is_official_discrete_reproduction = (
-            objective.get("name") == "official_imbdiff_cm"
-        )
+        is_official_discrete_reproduction = str(
+            objective.get("name", "")
+        ).startswith("official_imbdiff")
         if is_active_long_tail and not is_official_discrete_reproduction:
             assert not (forbidden_keys & _nested_keys(config)), config_path
         assert "x_prediction" not in objective, config_path

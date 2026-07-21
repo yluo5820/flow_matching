@@ -36,7 +36,10 @@ from fm_lab.data import (
     TwoMoons,
 )
 from fm_lab.data.synthetic_long_tail import SyntheticLongTailImages
-from fm_lab.integrations.official_imbdiff_cm import OfficialImbDiffCMUNet
+from fm_lab.integrations.official_imbdiff_cm import (
+    OfficialImbDiffCMUNet,
+    OfficialImbDiffUNet,
+)
 from fm_lab.models import (
     DDPMUNet,
     DirectionSpeedImageUNet,
@@ -365,6 +368,22 @@ def build_model(config: dict[str, Any], dim: int):
     if class_embedding_dim is not None:
         class_embedding_dim = int(class_embedding_dim)
     name = model_config.get("name", "mlp").lower()
+    if name in {"official_imbdiff_unet", "imbdiff_unet"}:
+        if not conditioning_enabled or num_classes is None:
+            raise ValueError("Official ImbDiff U-Net requires class conditioning.")
+        return OfficialImbDiffUNet(
+            dim=dim,
+            image_shape=tuple(model_config.get("image_shape", [3, 32, 32])),
+            timesteps=int(config.get("diffusion", {}).get("timesteps", 1000)),
+            base_channels=int(model_config.get("base_channels", 128)),
+            channel_multipliers=tuple(
+                model_config.get("channel_multipliers", [1, 2, 2, 2])
+            ),
+            attention_levels=tuple(model_config.get("attention_levels", [1])),
+            num_res_blocks=int(model_config.get("num_res_blocks", 2)),
+            dropout=float(model_config.get("dropout", 0.1)),
+            num_classes=num_classes,
+        )
     if name in {"official_imbdiff_cm_unet", "imbdiff_cm_unet"}:
         if not conditioning_enabled or num_classes is None:
             raise ValueError("Official ImbDiff-CM U-Net requires class conditioning.")

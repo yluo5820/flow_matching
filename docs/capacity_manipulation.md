@@ -37,6 +37,11 @@ The 30k screening configuration is:
 It accepts either the CIFAR-100 binary archive or AutoDL's shared
 `cifar-100-python` layout under `/root/autodl-tmp/data/cifar100`.
 
+The controlled 60k follow-up expands the release reproduction into DDPM, CBDM,
+OC, released CM, pure CM, and an OC-plus-capacity control. Its exact method
+definitions and configurations are documented in
+`docs/official_imbdiff_matrix.md`.
+
 ## Continuous adaptation
 
 Continuous CM configurations and `CMModifier` remain available for controlled
