@@ -66,6 +66,7 @@ support this interface.
 - [CLI lookup](docs/cli.md): maintained reference for every `fm-lab-*` command.
 - [Reading outputs and diagnostics](docs/diagnostics.md): how to interpret plots, CSVs, and summary metrics.
 - [CUDA server setup](docs/server_cuda_setup.md): Miniconda environment and GPU smoke-test commands.
+- [Official ImbDiff-CM reproduction](docs/official_imbdiff_cm_reproduction.md): pinned upstream DDPM implementation and AutoDL screen commands.
 
 Run path-law ambiguity diagnostics without training:
 

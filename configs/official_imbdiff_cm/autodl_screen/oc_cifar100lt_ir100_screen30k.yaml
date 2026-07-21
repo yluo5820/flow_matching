@@ -1,0 +1,53 @@
+method: oc
+seed: 0
+output_dir: /root/autodl-tmp/runs/official_imbdiff_cm/cifar100lt_ir100_screen30k/oc
+dataset:
+  root: /root/autodl-tmp/data/cifar100
+  img_size: 32
+  num_classes: 100
+  imb_factor: 0.01
+  rand_number: 0
+  download: false
+model:
+  ch: 128
+  ch_mult:
+  - 1
+  - 2
+  - 2
+  - 2
+  attn:
+  - 1
+  num_res_blocks: 2
+  dropout: 0.1
+  conditional: true
+diffusion:
+  beta_1: 0.0001
+  beta_T: 0.02
+  T: 1000
+  var_type: fixedlarge
+transfer:
+  transfer_x0: true
+  transfer_tr_tau: false
+  transfer_mode: t2h
+  tr_tau: 1.0
+training:
+  lr: 0.0002
+  grad_clip: 1.0
+  warmup: 5000
+  batch_size: 64
+  num_workers: 4
+  total_steps: 30001
+  ema_decay: 0.9999
+  cfg: true
+  sample_size: 64
+  sample_step: 10000
+  save_step: 10000
+evaluation:
+  image_dir: /root/autodl-tmp/runs/official_imbdiff_cm/cifar100lt_ir100_screen30k/oc/revised_gen_images-ckpt_step-30000
+  feature_prefix: OC-cifar100-100-screen30k
+  feature_dir: /root/autodl-tmp/runs/official_imbdiff_cm/features
+  num_images: 10000
+  batch_size: 512
+  omega: 1.5
+  sample_method: ddim
+  ddim_skip_step: 20
