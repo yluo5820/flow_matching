@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import pickle
 import tarfile
 import urllib.request
 from dataclasses import dataclass, field
@@ -19,8 +20,12 @@ _CIFAR_SPECS = {
         "url": "https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz",
         "archive": "cifar-10-binary.tar.gz",
         "directory": "cifar-10-batches-bin",
+        "python_directory": "cifar-10-batches-py",
         "train_files": [f"data_batch_{index}.bin" for index in range(1, 6)],
         "test_files": ["test_batch.bin"],
+        "python_train_files": [f"data_batch_{index}" for index in range(1, 6)],
+        "python_test_files": ["test_batch"],
+        "python_label_key": "labels",
         "record_size": 3073,
         "label_offset": 0,
         "pixel_offset": 1,
@@ -30,8 +35,12 @@ _CIFAR_SPECS = {
         "url": "https://www.cs.toronto.edu/~kriz/cifar-100-binary.tar.gz",
         "archive": "cifar-100-binary.tar.gz",
         "directory": "cifar-100-binary",
+        "python_directory": "cifar-100-python",
         "train_files": ["train.bin"],
         "test_files": ["test.bin"],
+        "python_train_files": ["train"],
+        "python_test_files": ["test"],
+        "python_label_key": "fine_labels",
         "record_size": 3074,
         "label_offset": 1,
         "pixel_offset": 2,
@@ -301,13 +310,23 @@ class ImbalancedCIFARImages:
         filenames = spec["train_files"] if self.train else spec["test_files"]
         paths = [data_dir / str(filename) for filename in filenames]
         if not all(path.is_file() for path in paths):
-            if not self.download:
-                raise FileNotFoundError(
-                    f"{self.dataset.upper()} files are missing under {data_dir}. "
-                    "Set data.download: true to fetch them."
-                )
-            _download_and_extract(Path(self.root), self.dataset)
-        images, labels = _read_binary_batches(paths, spec)
+            python_dir = Path(self.root) / str(spec["python_directory"])
+            python_filenames = (
+                spec["python_train_files"] if self.train else spec["python_test_files"]
+            )
+            python_paths = [python_dir / str(filename) for filename in python_filenames]
+            if all(path.is_file() for path in python_paths):
+                images, labels = _read_python_batches(python_paths, spec)
+            else:
+                if not self.download:
+                    raise FileNotFoundError(
+                        f"{self.dataset.upper()} files are missing under {data_dir} and "
+                        f"{python_dir}. Set data.download: true to fetch them."
+                    )
+                _download_and_extract(Path(self.root), self.dataset)
+                images, labels = _read_binary_batches(paths, spec)
+        else:
+            images, labels = _read_binary_batches(paths, spec)
         if self.train and self.frequency_mapping_offset is not None:
             frequency_split = nested_frequency_split(
                 labels,
@@ -364,6 +383,28 @@ def _read_binary_batches(paths: list[Path], spec: dict) -> tuple[np.ndarray, np.
         images = records[:, int(spec["pixel_offset"]):].reshape(-1, 3, 32, 32)
         image_parts.append(images)
         label_parts.append(labels)
+    return np.concatenate(image_parts), np.concatenate(label_parts)
+
+
+def _read_python_batches(paths: list[Path], spec: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Read the Python archives provided on AutoDL's shared data disk."""
+
+    image_parts: list[np.ndarray] = []
+    label_parts: list[np.ndarray] = []
+    label_key = str(spec["python_label_key"])
+    for path in paths:
+        with path.open("rb") as handle:
+            payload = pickle.load(handle, encoding="latin1")  # noqa: S301
+        data = payload.get("data", payload.get(b"data"))
+        labels = payload.get(label_key, payload.get(label_key.encode("ascii")))
+        if data is None or labels is None:
+            raise ValueError(f"Malformed CIFAR Python batch: {path}")
+        images = np.asarray(data, dtype=np.uint8).reshape(-1, 3, 32, 32)
+        label_array = np.asarray(labels, dtype=np.int64)
+        if len(images) != len(label_array):
+            raise ValueError(f"Mismatched CIFAR Python batch rows: {path}")
+        image_parts.append(images)
+        label_parts.append(label_array)
     return np.concatenate(image_parts), np.concatenate(label_parts)
 
 

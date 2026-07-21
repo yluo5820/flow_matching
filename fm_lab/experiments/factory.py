@@ -36,6 +36,7 @@ from fm_lab.data import (
     TwoMoons,
 )
 from fm_lab.data.synthetic_long_tail import SyntheticLongTailImages
+from fm_lab.integrations.official_imbdiff_cm import OfficialImbDiffCMUNet
 from fm_lab.models import (
     DDPMUNet,
     DirectionSpeedImageUNet,
@@ -44,6 +45,7 @@ from fm_lab.models import (
     MLPVelocity,
 )
 from fm_lab.paths import (
+    DiscreteDDPMPath,
     GaussianDiffusionPath,
     LearnedAccelerationPath,
     LinearPath,
@@ -306,6 +308,13 @@ def build_coupling(config: dict[str, Any]):
 def build_path(config: dict[str, Any]):
     path_config = config.get("path", {})
     name = path_config.get("name", "linear").lower()
+    if name in {"discrete_ddpm", "official_ddpm"}:
+        diffusion_config = config.get("diffusion", {}) or {}
+        return DiscreteDDPMPath(
+            timesteps=int(diffusion_config.get("timesteps", 1000)),
+            beta_start=float(diffusion_config.get("beta_start", 1e-4)),
+            beta_end=float(diffusion_config.get("beta_end", 2e-2)),
+        )
     if name in {"linear", "rectified"}:
         return LinearPath()
     if name in {"gaussian_diffusion", "diffusion", "stochastic_interpolant"}:
@@ -356,6 +365,29 @@ def build_model(config: dict[str, Any], dim: int):
     if class_embedding_dim is not None:
         class_embedding_dim = int(class_embedding_dim)
     name = model_config.get("name", "mlp").lower()
+    if name in {"official_imbdiff_cm_unet", "imbdiff_cm_unet"}:
+        if not conditioning_enabled or num_classes is None:
+            raise ValueError("Official ImbDiff-CM U-Net requires class conditioning.")
+        cm_config = model_config.get("cm", {}) or {}
+        return OfficialImbDiffCMUNet(
+            dim=dim,
+            image_shape=tuple(model_config.get("image_shape", [3, 32, 32])),
+            timesteps=int(config.get("diffusion", {}).get("timesteps", 1000)),
+            base_channels=int(model_config.get("base_channels", 128)),
+            channel_multipliers=tuple(
+                model_config.get("channel_multipliers", [1, 2, 2, 2])
+            ),
+            attention_levels=tuple(model_config.get("attention_levels", [1])),
+            num_res_blocks=int(model_config.get("num_res_blocks", 2)),
+            dropout=float(model_config.get("dropout", 0.1)),
+            num_classes=num_classes,
+            rank=int(cm_config.get("lora_r", 0)),
+            rank_ratio=float(cm_config.get("lora_r_ratio", 0.1)),
+            adapter_scale=float(cm_config.get("lora_scaling", 0.5)),
+            capacity_parts=tuple(cm_config.get("lora_part", ["up"])),
+            lora_alpha=float(cm_config.get("lora_alpha", 1.0)),
+            lora_mode=str(cm_config.get("lora_mode", "ratio")),
+        )
     if name in {"ddpm_unet", "paper_ddpm_unet"}:
         if not conditioning_enabled or num_classes is None:
             raise ValueError("DDPMUNet requires class conditioning.")

@@ -1,30 +1,48 @@
-# Capacity Manipulation Baseline
+# Capacity Manipulation Reproduction
 
-This repository retains Capacity Manipulation as a literature baseline. The
-implemented method is a continuous-flow adaptation of Hong et al., not an exact
-reproduction of their released CIFAR-100-LT experiment.
+The repository now keeps two deliberately separate implementations of Capacity
+Manipulation (CM):
 
-## Correspondence
+1. `official_imbdiff_cm` is the reproduction path. It adapts only interfaces
+   and delegates the model, discrete DDPM loss, endpoint transfer, CM weighting,
+   and DDIM sampler to the authors' release vendored under
+   `third_party/ImbDiff-CM`.
+2. The older continuous-flow modifier remains an experimental reformulation. It
+   must not be used as evidence that the released CM implementation was or was
+   not reproduced.
 
-The retained implementation includes:
+## Exact reproduction boundary
 
-- switchable, zero-initialized low-rank capacity;
-- the distance between capacity-on and capacity-off predictions;
-- class-frequency consistency and diversity weighting;
-- the released core defaults of `rank_ratio=0.1`, up-block placement,
-  `w_con=1.0`, and `w_div=0.2`.
+The official path uses:
 
-The local adaptation differs in three material ways:
+- the released `UNet_CM`, including its timestep table, initialization, and
+  structured low-rank convolutions;
+- the released `GaussianDiffusionTrainer`, including normalized reciprocal
+  class weights, whole-batch classifier-free dropout, endpoint transfer, and
+  raw `MSE(h2, h1)` CM distance;
+- the released `GaussianDiffusionSamplerOld` imported by
+  `tools/sample_images.py`, including its 50-step DDIM update and capacity-on
+  default model branch;
+- Adam, the released warmup convention, gradient clipping, and EMA;
+- shuffled, without-replacement epochs over the retained long-tail split.
 
-- it trains a continuous flow-matching objective instead of discrete noise
-  prediction;
-- it uses conventional flattened-kernel low-rank factors rather than the
-  authors' spatially structured convolution factorization;
-- its canonical CM-only configuration does not enable the endpoint-transfer
-  component used by the authors' released CIFAR-100-LT recipe.
+The surrounding fm_lab code supplies run directories, checkpoints, plots, and
+configuration. A parity test compares loss and every trainable gradient against
+the vendored trainer on the same batch.
 
-The canonical local configuration is
-`configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml`.
+The 30k screening configuration is:
+
+`configs/cifar100_lt/autodl_screen/cifar100_lt_ir100_official_cm_screen30k.yaml`
+
+It accepts either the CIFAR-100 binary archive or AutoDL's shared
+`cifar-100-python` layout under `/root/autodl-tmp/data/cifar100`.
+
+## Continuous adaptation
+
+Continuous CM configurations and `CMModifier` remain available for controlled
+follow-up experiments. They are not imported by the official reproduction path.
+Once the discrete screen is reproduced locally, discrete DDPM can be replaced
+by a matched continuous VP schedule as one isolated experimental change.
 
 Primary references:
 

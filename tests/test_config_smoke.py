@@ -358,9 +358,12 @@ def test_shipped_training_configs_use_canonical_objective_schema() -> None:
             or "imbalance_factor" in data
             or "tail" in str(data.get("variant_id", ""))
         )
-        if is_active_long_tail:
-            assert not (forbidden_keys & _nested_keys(config)), config_path
         objective = config.get("objective", {})
+        is_official_discrete_reproduction = (
+            objective.get("name") == "official_imbdiff_cm"
+        )
+        if is_active_long_tail and not is_official_discrete_reproduction:
+            assert not (forbidden_keys & _nested_keys(config)), config_path
         assert "x_prediction" not in objective, config_path
 
 

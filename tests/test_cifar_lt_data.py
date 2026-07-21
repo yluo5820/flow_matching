@@ -1,3 +1,4 @@
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +77,28 @@ def test_cifar_lt_sampling_keeps_images_and_labels_aligned(tmp_path: Path) -> No
     assert images.shape == (20, 3072)
     assert torch.equal(encoded_labels, labels)
     assert target.metadata()["image_shape"] == [3, 32, 32]
+
+
+def test_cifar100_reads_autodl_python_archive_layout(tmp_path: Path) -> None:
+    data_dir = tmp_path / "cifar-100-python"
+    data_dir.mkdir(parents=True)
+    labels = np.repeat(np.arange(100, dtype=np.int64), 2)
+    images = np.zeros((len(labels), 3 * 32 * 32), dtype=np.uint8)
+    images[:, 0] = labels
+    with (data_dir / "train").open("wb") as handle:
+        pickle.dump({"data": images, "fine_labels": labels.tolist()}, handle)
+
+    target = ImbalancedCIFARImages(
+        dataset="cifar100",
+        root=tmp_path,
+        imbalance_factor=1.0,
+        horizontal_flip=False,
+        normalize="zero_one",
+    )
+
+    loaded, loaded_labels, _ = target.all_samples_with_labels()
+    assert loaded.shape == (200, 3 * 32 * 32)
+    assert torch.equal(torch.round(loaded[:, 0] * 255).long(), loaded_labels)
 
 
 def test_cifar_all_samples_returns_each_selected_image_once_without_augmentation(

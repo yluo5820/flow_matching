@@ -425,6 +425,16 @@ def train_flow_matching(
         class_counts=getattr(target, "class_counts", None),
     )
     _validate_training_compatibility(objective, coupling, path, model)
+    official_batch_iterator = (
+        _official_imbdiff_batch_iterator(
+            target=target,
+            batch_size=batch_size,
+            device=device,
+            seed=int(config.get("experiment", {}).get("seed", 0)),
+        )
+        if bool(getattr(objective, "uses_official_data_batches", False))
+        else None
+    )
     checkpoint_config = _checkpoint_config(config, path=path, objective=objective)
     prediction_contract = _prediction_contract(path=path, objective=objective)
     class_counts = getattr(target, "class_counts", None)
@@ -466,7 +476,15 @@ def train_flow_matching(
     scaler = torch.amp.GradScaler("cuda", enabled=mixed_precision.scaler_enabled)
 
     theta_optimizer = build_optimizer(model, training_config)
-    theta_scheduler = build_warmup_scheduler(theta_optimizer, warmup_steps=warmup_steps)
+    theta_scheduler = build_warmup_scheduler(
+        theta_optimizer,
+        warmup_steps=warmup_steps,
+        convention=(
+            "official_imbdiff_cm"
+            if bool(getattr(objective, "uses_official_warmup", False))
+            else "fm_lab"
+        ),
+    )
     ema_model = create_ema_model(model) if ema_decay is not None else None
     psi_optimizer: torch.optim.Optimizer | None = None
     learned_acceleration_schedule: _LearnedAccelerationSchedule | None = None
@@ -608,17 +626,22 @@ def train_flow_matching(
                     )
                     best_state.record = dict(record)
         else:
-            x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
-                source=source,
-                target=target,
-                coupling=coupling,
-                batch_size=batch_size,
-                device=device,
-                class_conditional=bool(getattr(model, "is_class_conditional", False)),
-                condition_dropout=condition_dropout,
-                condition_dropout_mode=condition_dropout_mode,
-                time_sampler=time_sampler,
-            )
+            if official_batch_iterator is not None:
+                x0, x1, t, class_labels, original_class_labels = next(
+                    official_batch_iterator
+                )
+            else:
+                x0, x1, t, class_labels, original_class_labels = _sample_training_batch(
+                    source=source,
+                    target=target,
+                    coupling=coupling,
+                    batch_size=batch_size,
+                    device=device,
+                    class_conditional=bool(getattr(model, "is_class_conditional", False)),
+                    condition_dropout=condition_dropout,
+                    condition_dropout_mode=condition_dropout_mode,
+                    time_sampler=time_sampler,
+                )
             with _autocast_context(mixed_precision):
                 loss, loss_metrics = objective(
                     model=train_model,
@@ -782,6 +805,24 @@ def train_flow_matching(
         rng_state=capture_rng_state(),
     )
 
+    if bool(getattr(objective, "is_discrete_diffusion", False)):
+        sample_artifacts = sample_official_imbdiff_cm_and_plot(
+            config=config,
+            run_dir=run_dir,
+            target=target,
+            source=source,
+            model=model,
+            ema_model=ema_model,
+            objective=objective,
+            device=device,
+        )
+        sample_artifacts["checkpoint_weights"] = (
+            "ema" if ema_model is not None else "raw"
+        )
+        metrics["sampling"] = sample_artifacts
+        write_json(metrics, run_dir / "metrics.json")
+        return metrics
+
     sampling_skip_reason = _velocity_sampling_skip_reason(objective)
     if sampling_skip_reason is not None:
         metrics["sampling"] = {
@@ -807,6 +848,121 @@ def train_flow_matching(
     metrics["sampling"] = sample_artifacts
     write_json(metrics, run_dir / "metrics.json")
     return metrics
+
+
+def sample_official_imbdiff_cm_and_plot(
+    *,
+    config: dict[str, Any],
+    run_dir: Path,
+    target: TargetDistribution,
+    source: SourceDistribution,
+    model: nn.Module,
+    ema_model: nn.Module | None,
+    objective: Any,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Sample with the exact CM DDIM class used by the release tooling."""
+
+    from fm_lab.integrations.official_imbdiff_cm import (
+        load_official_imbdiff_cm_components,
+    )
+
+    sampling_config = config.get("sampling", {}) or {}
+    requested_samples = int(sampling_config.get("n_samples", 10_000))
+    batch_size = int(sampling_config.get("sample_batch_size", 512))
+    if requested_samples < 1 or batch_size < 1:
+        raise ValueError("Official ImbDiff-CM sampling counts must be positive.")
+    num_classes = int(getattr(model, "num_classes", len(objective.class_counts)))
+    per_class = requested_samples // num_classes
+    if per_class < 1:
+        raise ValueError(
+            "sampling.n_samples must be at least the number of classes for balanced sampling."
+        )
+    n_samples = per_class * num_classes
+    labels = torch.arange(num_classes, device=device).repeat_interleave(per_class)
+    method = str(sampling_config.get("sampler", "ddim")).lower()
+    if method not in {"ddim", "ddpm"}:
+        raise ValueError("Official ImbDiff-CM sampler must be 'ddim' or 'ddpm'.")
+    ddim_skip = int(sampling_config.get("ddim_skip", 20))
+    if ddim_skip < 1:
+        raise ValueError("sampling.ddim_skip must be positive.")
+    cfg_config = sampling_config.get("classifier_free_guidance", {}) or {}
+    omega = float(cfg_config.get("paper_omega", cfg_config.get("omega", 1.5)))
+    if not bool(cfg_config.get("enabled", True)):
+        omega = 0.0
+    diffusion_config = config.get("diffusion", {}) or {}
+    variance = str(diffusion_config.get("variance", "fixed_large")).replace("_", "")
+    sampling_model = ema_model if ema_model is not None else model
+    components = load_official_imbdiff_cm_components()
+    sampler = components.cm_sampler(
+        sampling_model,
+        float(diffusion_config.get("beta_start", 1e-4)),
+        float(diffusion_config.get("beta_end", 2e-2)),
+        int(diffusion_config.get("timesteps", 1000)),
+        img_size=int(getattr(sampling_model, "image_shape", (3, 32, 32))[-1]),
+        mean_type="epsilon",
+        var_type=variance,
+        w=omega,
+        cond=True,
+    ).to(device)
+    was_training = sampling_model.training
+    sampling_model.eval()
+    chunks: list[torch.Tensor] = []
+    seed = _sampling_seed(config)
+    try:
+        with _temporary_torch_seed(seed, device), torch.no_grad():
+            for offset in range(0, n_samples, batch_size):
+                chunk_labels = labels[offset : offset + batch_size]
+                noise = torch.randn(
+                    chunk_labels.shape[0],
+                    *tuple(getattr(sampling_model, "image_shape", (3, 32, 32))),
+                    device=device,
+                )
+                images = sampler(
+                    noise,
+                    chunk_labels,
+                    method=method,
+                    skip=ddim_skip,
+                )
+                chunks.append(images.reshape(images.shape[0], source.dim).cpu())
+            target_samples, _ = _sample_target_with_optional_labels(
+                target,
+                min(n_samples, int(sampling_config.get("plot_max_points", 100))),
+                device=device,
+            )
+    finally:
+        sampling_model.train(was_training)
+
+    generated = torch.cat(chunks, dim=0)
+    samples_dir = run_dir / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    sample_path = samples_dir / f"official_{method}.npy"
+    labels_path = samples_dir / "generated_labels.npy"
+    np.save(sample_path, generated.numpy())
+    np.save(labels_path, labels.cpu().numpy())
+    target_metadata = target.metadata()
+    plot_generated_samples(
+        target_samples.cpu(),
+        {f"official_{method}": generated},
+        run_dir / "plots" / "generated_samples.png",
+        max_points=int(sampling_config.get("plot_max_points", 100)),
+        image_shape=target_metadata.get("image_shape"),
+        image_value_range=target_metadata.get("image_value_range", (-1.0, 1.0)),
+    )
+    return {
+        "implementation": "vendored_official_release",
+        "sampler": method,
+        "requested_samples": requested_samples,
+        "n_samples": n_samples,
+        "samples_per_class": per_class,
+        "sample_batch_size": batch_size,
+        "ddim_skip": ddim_skip if method == "ddim" else None,
+        "paper_omega": omega,
+        "capacity_branch": "on",
+        "seed": seed,
+        "samples_path": str(sample_path),
+        "labels_path": str(labels_path),
+    }
 
 
 @dataclass(frozen=True)
@@ -1304,6 +1460,66 @@ def _validate_periodic_top_level_state(
     )
 
 
+def _official_imbdiff_batch_iterator(
+    *,
+    target: TargetDistribution,
+    batch_size: int,
+    device: torch.device,
+    seed: int,
+) -> Iterator[
+    tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]
+]:
+    """Shuffle retained images by epoch, mirroring the release DataLoader."""
+
+    all_samples = getattr(target, "all_samples_with_labels", None)
+    if not callable(all_samples):
+        raise ValueError(
+            "Official ImbDiff-CM training requires a target with "
+            "all_samples_with_labels()."
+        )
+    images, labels, _ = all_samples(device=None)
+    images = images.detach().cpu()
+    labels = labels.detach().cpu().to(dtype=torch.long)
+    if len(images) < batch_size:
+        raise ValueError(
+            "Official ImbDiff-CM training requires at least one full batch."
+        )
+    data_generator = torch.Generator(device="cpu")
+    data_generator.manual_seed(int(seed))
+    horizontal_flip = bool(getattr(target, "horizontal_flip", False))
+    image_shape = tuple(getattr(target, "image_shape", (3, 32, 32)))
+    while True:
+        permutation = torch.randperm(len(images), generator=data_generator)
+        full_size = len(images) - len(images) % batch_size
+        for start in range(0, full_size, batch_size):
+            indices = permutation[start : start + batch_size]
+            clean = images[indices].clone()
+            if horizontal_flip:
+                flip = torch.rand(batch_size, generator=data_generator) < 0.5
+                clean_images = clean.reshape(batch_size, *image_shape)
+                clean_images[flip] = clean_images[flip].flip(-1)
+                clean = clean_images.reshape(batch_size, -1)
+            batch_labels = labels[indices].clone()
+            clean = clean.to(device=device)
+            batch_labels = batch_labels.to(device=device)
+            # The released trainer creates its own timestep and Gaussian noise.
+            unused_noise = torch.zeros_like(clean)
+            unused_time = torch.zeros(batch_size, device=device)
+            yield (
+                unused_noise,
+                clean,
+                unused_time,
+                batch_labels,
+                batch_labels.clone(),
+            )
+
+
 def _sample_training_batch(
     *,
     source: SourceDistribution,
@@ -1727,7 +1943,18 @@ def _validate_training_compatibility(
         raise ValueError("direction_only_straight requires a source-label-conditioned model.")
 
 
-_DISCRETE_OBJECTIVE_NAMES = frozenset({"discrete_diffusion", "ddpm", "cbdm", "oc", "cm"})
+_DISCRETE_OBJECTIVE_NAMES = frozenset(
+    {
+        "discrete_diffusion",
+        "ddpm",
+        "cbdm",
+        "oc",
+        "cm",
+        "official_imbdiff_cm",
+        "imbdiff_cm_official",
+        "official_cm",
+    }
+)
 _DIFFUSION_OBJECTIVE_NAMES = frozenset(
     {
         "diffusion",
