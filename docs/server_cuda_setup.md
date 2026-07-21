@@ -89,27 +89,20 @@ read-only and slower than the local data disk. Copy or extract CIFAR to
 mkdir -p /root/autodl-tmp/data/cifar10
 mkdir -p /root/autodl-tmp/data/cifar100
 
-tar -xzf /root/autodl-pub/cifar-10/cifar-10-python.tar.gz \
+tar -xzf /root/autodl-pub/cifar-10/cifar-10-binary.tar.gz \
   -C /root/autodl-tmp/data/cifar10
 
-tar -xzf /root/autodl-pub/cifar-100/cifar-100-python.tar.gz \
+tar -xzf /root/autodl-pub/cifar-100/cifar-100-binary.tar.gz \
   -C /root/autodl-tmp/data/cifar100
 ```
 
 Verify without downloading from the internet:
 
 ```bash
-python - <<'PY'
-from torchvision.datasets import CIFAR10, CIFAR100
-
-for cls, root in [
-    (CIFAR10, "/root/autodl-tmp/data/cifar10"),
-    (CIFAR100, "/root/autodl-tmp/data/cifar100"),
-]:
-    for train in [True, False]:
-        ds = cls(root=root, train=train, download=False)
-        print(cls.__name__, "train" if train else "test", len(ds))
-PY
+test -f /root/autodl-tmp/data/cifar10/cifar-10-batches-bin/data_batch_1.bin
+test -f /root/autodl-tmp/data/cifar10/cifar-10-batches-bin/test_batch.bin
+test -f /root/autodl-tmp/data/cifar100/cifar-100-binary/train.bin
+test -f /root/autodl-tmp/data/cifar100/cifar-100-binary/test.bin
 ```
 
 The AutoDL-specific CIFAR-100 configs live under `configs/cifar100_lt/autodl/`.
