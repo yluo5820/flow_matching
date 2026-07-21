@@ -228,3 +228,72 @@ If the official 30k screen produces recognizable images while our continuous
 flow screen does not, the blocker is likely in our continuous objective/sampling
 adaptation. If the official screen also produces poor images, the 30k budget is
 probably too small for this specific CIFAR-100-LT setup.
+
+## 2026-07-21 screen result and local CM debugging implication
+
+The 30k official screen did produce recognizable CIFAR-like samples for both OC
+and CM. The samples were still artifacted, and CM was not visually cleanly better
+than OC at this reduced budget, but the failure mode was fundamentally different
+from the local continuous-flow `source`-loss screen, which produced saturated
+high-frequency noise.
+
+That result makes the local continuous recreation the main suspect.
+
+The first CM-specific mismatch found locally was the sampled capacity branch.
+In the official CM sampler, all reverse diffusion calls use:
+
+```python
+use_cm=False
+```
+
+The official training loss computes `h1 = model(..., use_cm=True)` for the base
+noise prediction loss, but it samples with `h2 = model(..., use_cm=False)`. The
+capacity-off branch is therefore the deployed branch whose behavior is shaped by
+the weighted CM distance term.
+
+Before the local fix, this repository sampled capacity-enabled CM models without
+passing any explicit capacity context. The local `DDPMUNet` default is
+`use_capacity=True`, so CM checkpoints were sampled from the opposite branch from
+the official implementation. Local sampling now resolves:
+
+```yaml
+sampling:
+  capacity_branch: auto
+```
+
+to `base` / `use_capacity: false` when the objective includes a CM modifier.
+Use `sampling.capacity_branch: full` only for an explicit ablation of the
+capacity-on branch.
+
+There is also a separate continuous-vs-DDPM mismatch in source/noise prediction.
+The local paper-close configs used:
+
+```yaml
+path:
+  name: linear
+objective:
+  model_output: source
+  loss_space: source
+```
+
+For a forward ODE sampler from source to data, this is ill-conditioned at the
+source endpoint. At `t = 0`, the correct source/noise prediction is simply the
+current initial noise, so converting that prediction into a velocity gives a
+zero or denominator-clamped field. DDPM epsilon prediction does not have this
+same sampling semantics: it is consumed by a discrete reverse diffusion sampler
+with a variance schedule and posterior update. Therefore, source/noise
+prediction on the local continuous linear path is not a faithful DDPM
+reformulation.
+
+If the branch fix is not sufficient, the next CM debugging target is the loss
+space. Official CM computes the capacity distance directly in native epsilon
+output space:
+
+```python
+MSE(h2, h1)
+```
+
+The continuous implementation may compare converted target/source/velocity
+values. That is not necessarily wrong, but it changes the time weighting and
+conditioning of the CM distance term, so it should be tested as a separate
+ablation rather than assumed equivalent.

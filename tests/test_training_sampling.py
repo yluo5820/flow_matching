@@ -210,7 +210,7 @@ def test_train_uses_configured_time_sampler(
             "sampling": {"n_samples": 2, "n_trajectories": 1, "nfe": 1},
         },
         run_dir=tmp_path / ("logit" if expect_all_small else "uniform"),
-        target=ConstantTarget(),
+        target=ClassCountConstantTarget(),
         source=ConstantSource(),
         coupling=IndependentCoupling(),
         path=LinearPath(),
@@ -296,6 +296,10 @@ class ConstantTarget:
         return {"name": "constant_one", "dim": self.dim}
 
 
+class ClassCountConstantTarget(ConstantTarget):
+    class_counts = (4, 1)
+
+
 class TinyVelocity(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -336,7 +340,7 @@ def _train_checkpoint_fixture(*, config: dict, model: nn.Module, run_dir) -> Non
     train_flow_matching(
         config=config,
         run_dir=run_dir,
-        target=ConstantTarget(),
+        target=ClassCountConstantTarget(),
         source=ConstantSource(),
         coupling=IndependentCoupling(),
         path=LinearPath(),
@@ -489,6 +493,26 @@ class AnalyticalTargetPrediction(nn.Module):
         assert context is not None
         assert "class_labels" in context
         return torch.ones_like(x)
+
+
+class CapacityBranchTargetPrediction(nn.Module):
+    is_class_conditional = True
+
+    def capacity_metadata(self) -> dict[str, object]:
+        return {"enabled": True}
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t
+        assert context is not None
+        assert "class_labels" in context
+        use_capacity = context.get("use_capacity")
+        if use_capacity is None:
+            value = 3.0
+        elif use_capacity:
+            value = 2.0
+        else:
+            value = 1.0
+        return torch.full_like(x, value)
 
 
 class AuditingEulerSolver(EulerSolver):
@@ -1222,6 +1246,94 @@ def test_sample_and_plot_records_generic_ode_contract_and_balances_labels(tmp_pa
     assert summary["nfe"] == 3
     assert summary["guidance"]["classifier_free_guidance"]["scale"] == 1.25
     assert summary["seed"] == 112
+
+
+def test_sample_and_plot_warns_for_linear_source_output_endpoint(tmp_path) -> None:
+    config = _sampling_config(seed=113)
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": "source",
+        "loss_space": "source",
+        "min_denom": 0.05,
+    }
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ConstantTarget(),
+        source=ConstantSource(),
+        path=LinearPath(),
+        model=TrainableConstantVelocity(dim=2, value=1.0),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert summary["sampling_warnings"][0]["code"] == (
+        "linear_source_output_endpoint_degenerate"
+    )
+
+
+def test_cm_sampling_defaults_to_official_capacity_off_branch(tmp_path) -> None:
+    config = _sampling_config(seed=114)
+    config["conditioning"] = {"enabled": True, "num_classes": 2}
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.05,
+        "modifiers": [{"name": "cm"}],
+    }
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ClassCountConstantTarget(),
+        source=ConstantSource(),
+        path=LinearPath(),
+        model=CapacityBranchTargetPrediction(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
+    assert np.allclose(generated, 1.0)
+    assert summary["capacity_branch"] == {
+        "configured": "auto",
+        "resolved": "base",
+        "use_capacity": False,
+    }
+
+
+def test_cm_sampling_capacity_branch_override_can_sample_full_branch(tmp_path) -> None:
+    config = _sampling_config(seed=115)
+    config["conditioning"] = {"enabled": True, "num_classes": 2}
+    config["sampling"]["capacity_branch"] = "full"
+    config["objective"] = {
+        "name": "flow_matching",
+        "model_output": "target",
+        "loss_space": "velocity",
+        "min_denom": 0.05,
+        "modifiers": [{"name": "cm"}],
+    }
+
+    summary = sample_and_plot(
+        config=config,
+        run_dir=tmp_path,
+        target=ClassCountConstantTarget(),
+        source=ConstantSource(),
+        path=LinearPath(),
+        model=CapacityBranchTargetPrediction(),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
+    assert np.allclose(generated, 2.0)
+    assert summary["capacity_branch"] == {
+        "configured": "full",
+        "resolved": "full",
+        "use_capacity": True,
+    }
 
 
 def test_resume_rejects_discrete_checkpoint_metadata_before_loading_weights(tmp_path) -> None:

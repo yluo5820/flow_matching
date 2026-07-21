@@ -1504,6 +1504,34 @@ def sample_and_plot(
         "trajectory_target_max_points": trajectory_target_max_points,
         "seed": sampling_seed,
     }
+    capacity_branch_configured, sampling_use_capacity, capacity_branch_resolved = (
+        _sampling_capacity_branch(config, objective)
+    )
+    if capacity_branch_resolved != "default":
+        artifact_summary["capacity_branch"] = {
+            "configured": capacity_branch_configured,
+            "resolved": capacity_branch_resolved,
+            "use_capacity": sampling_use_capacity,
+        }
+    if (
+        path is not None
+        and output_kind_for_objective(objective) is PredictionKind.SOURCE
+        and getattr(path, "name", None) == "linear"
+        and bool(torch.isclose(t_grid[0], t_grid[0].new_tensor(0.0)))
+    ):
+        artifact_summary.setdefault("sampling_warnings", []).append(
+            {
+                "code": "linear_source_output_endpoint_degenerate",
+                "message": (
+                    "Linear-path source/noise prediction is ill-conditioned for "
+                    "forward ODE sampling from t=0: the endpoint target is the "
+                    "initial source itself, so the converted velocity can be zero "
+                    "or dominated by denominator-clamped errors. Treat these "
+                    "samples as a diagnostic control, not as a DDPM-equivalent "
+                    "epsilon-prediction sampler."
+                ),
+            }
+        )
     guidance_summary = guidance.summary()
     guidance_summary["classifier_free_guidance"] = {
         "enabled": bool(cfg_config.get("enabled", True)),
@@ -1526,6 +1554,7 @@ def sample_and_plot(
             source_label=trajectory_x0,
             class_labels=trajectory_labels,
             guidance_scale=cfg_scale,
+            use_capacity=sampling_use_capacity,
         )
 
     for solver in solvers:
@@ -1537,6 +1566,7 @@ def sample_and_plot(
             batch_size=sample_batch_size,
             class_labels=generated_labels,
             guidance_scale=cfg_scale,
+            use_capacity=sampling_use_capacity,
         )
         np.save(samples_dir / f"{solver.name}_nfe{nfe}.npy", generated[solver.name].numpy())
 
@@ -1623,6 +1653,7 @@ def _solve_final_samples_in_chunks(
     batch_size: int,
     class_labels: torch.Tensor | None = None,
     guidance_scale: float = 1.0,
+    use_capacity: bool | None = None,
 ) -> torch.Tensor:
     final_chunks: list[torch.Tensor] = []
     for start in range(0, x0_samples.shape[0], batch_size):
@@ -1642,6 +1673,7 @@ def _solve_final_samples_in_chunks(
                 source_label=source_label,
                 class_labels=class_labels,
                 guidance_scale=guidance_scale,
+                use_capacity=use_capacity,
             )
 
         final = solver.solve(
@@ -2165,6 +2197,7 @@ def _model_velocity(
     source_label: torch.Tensor | None = None,
     class_labels: torch.Tensor | None = None,
     guidance_scale: float = 1.0,
+    use_capacity: bool | None = None,
 ) -> torch.Tensor:
     if _requires_source_label(model):
         if source_label is None:
@@ -2179,8 +2212,60 @@ def _model_velocity(
             t,
             class_labels=class_labels,
             guidance_scale=guidance_scale,
+            use_capacity=use_capacity,
         )
     return model_prediction(model, x, t)
+
+
+def _sampling_capacity_branch(
+    config: dict[str, Any],
+    objective: Any,
+) -> tuple[str, bool | None, str]:
+    """Resolve which capacity branch should be sampled.
+
+    The released ImbDiff-CM sampler calls the CM model with ``use_cm=False``.
+    In this repository's capacity wrapper, that corresponds to
+    ``use_capacity=False``.  Preserve existing behavior for non-CM objectives,
+    but default CM objectives to the official sampling branch.
+    """
+
+    raw = str((config.get("sampling", {}) or {}).get("capacity_branch", "auto")).lower()
+    aliases = {
+        "auto": "auto",
+        "default": "default",
+        "model_default": "default",
+        "base": "base",
+        "off": "base",
+        "without": "base",
+        "without_cm": "base",
+        "no_cm": "base",
+        "full": "full",
+        "on": "full",
+        "with": "full",
+        "with_cm": "full",
+        "cm": "full",
+    }
+    if raw not in aliases:
+        raise ValueError(
+            "sampling.capacity_branch must be auto, default, base, or full."
+        )
+    normalized = aliases[raw]
+    if normalized == "default":
+        return raw, None, "default"
+    if normalized == "base":
+        return raw, False, "base"
+    if normalized == "full":
+        return raw, True, "full"
+    if _objective_has_cm_modifier(objective):
+        return raw, False, "base"
+    return raw, None, "default"
+
+
+def _objective_has_cm_modifier(objective: Any) -> bool:
+    return any(
+        str(getattr(modifier, "name", "")).lower() == "cm"
+        for modifier in getattr(objective, "modifiers", ())
+    )
 
 
 def _condition_dropout_probability(config: dict[str, Any], model: nn.Module) -> float:

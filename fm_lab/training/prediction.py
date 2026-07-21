@@ -41,13 +41,20 @@ def classifier_free_guided_prediction(
     *,
     class_labels: torch.Tensor,
     guidance_scale: float,
+    use_capacity: bool | None = None,
 ) -> torch.Tensor:
     """Evaluate conditional and null predictions in one batched model call."""
 
     if not bool(getattr(model, "is_class_conditional", False)):
         raise ValueError("Classifier-free guidance requires a class-conditional model.")
     if guidance_scale == 1.0:
-        return model_prediction(model, x, t, class_labels=class_labels)
+        return model_prediction(
+            model,
+            x,
+            t,
+            class_labels=class_labels,
+            use_capacity=use_capacity,
+        )
     doubled_x = torch.cat([x, x], dim=0)
     doubled_t = torch.cat([t, t], dim=0)
     doubled_labels = torch.cat([class_labels, torch.full_like(class_labels, -1)], dim=0)
@@ -56,6 +63,7 @@ def classifier_free_guided_prediction(
         doubled_x,
         doubled_t,
         class_labels=doubled_labels,
+        use_capacity=use_capacity,
     ).chunk(2, dim=0)
     return unconditional + guidance_scale * (conditional - unconditional)
 
