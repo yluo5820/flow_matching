@@ -1,0 +1,101 @@
+experiment:
+  name: cifar100_lt_ir100_source_sloss_paperclose_cm
+  seed: 0
+  output_dir: runs/cifar100_lt_ir100_source_sloss_paperclose_cm
+
+data:
+  name: cifar100_lt
+  root: ../../data/cifar100
+  train: true
+  download: true
+  normalize: minus_one_one
+  dequantize: false
+  horizontal_flip: true
+  imbalance_type: exp
+  imbalance_factor: 0.01
+  subset_seed: 0
+
+source:
+  name: gaussian
+  dim: 3072
+
+coupling:
+  name: independent
+
+path:
+  name: linear
+
+model:
+  name: ddpm_unet
+  image_shape: [3, 32, 32]
+  base_channels: 128
+  channel_multipliers: [1, 2, 2, 2]
+  attention_levels: [1]
+  num_res_blocks: 2
+  dropout: 0.1
+  time_input_scale: 1000.0
+  capacity:
+    enabled: true
+    rank_ratio: 0.1
+    adapter_scale: 0.5
+    parts: [up]
+
+conditioning:
+  enabled: true
+  num_classes: 100
+  dropout_probability: 0.10
+  dropout_mode: batch
+
+objective:
+  name: flow_matching
+  model_output: source
+  loss_space: source
+  min_denom: 0.05
+  modifiers:
+    - name: oc
+      transfer_mode: t2h
+      cut_t: null
+      min_denom: 0.05
+    - name: cm
+      consistency_weight: 1.0
+      diversity_weight: 0.2
+      comparison_space: source
+
+training:
+  batch_size: 64
+  steps: 300001
+  lr: 0.0002
+  warmup_steps: 5000
+  gradient_clip: 1.0
+  ema_decay: 0.9999
+  time_sampling:
+    name: uniform
+  log_every: 250
+  checkpoint_every: 100000
+  early_stopping:
+    enabled: false
+
+solvers:
+  names: [euler]
+  nfes: [50]
+  schedule: uniform
+
+sampling:
+  n_samples: 50000
+  n_trajectories: 20
+  nfe: 50
+  sample_batch_size: 512
+  classes: [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+    60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+    70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+    80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+    90, 91, 92, 93, 94, 95, 96, 97, 98, 99
+  ]
+  classifier_free_guidance:
+    scale: 1.5

@@ -44,6 +44,20 @@ class RecordingPrediction(nn.Module):
         return torch.full_like(x, self.value)
 
 
+class RecordingTensorPrediction(nn.Module):
+    is_class_conditional = True
+
+    def __init__(self, value: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("value", value)
+        self.seen_x: list[torch.Tensor] = []
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
+        del t, context
+        self.seen_x.append(x.detach().clone())
+        return self.value.to(device=x.device, dtype=x.dtype).reshape_as(x)
+
+
 class CapacityTablePrediction(nn.Module):
     is_class_conditional = True
 
@@ -379,11 +393,15 @@ def test_oc_uses_endpoint_transfer_protocol_without_callable_contract() -> None:
 
 @pytest.mark.parametrize(
     ("prediction_kind", "prediction_value"),
-    [("source", 0.0), ("target", 10.0), ("velocity", 10.0)],
+    [
+        ("source", torch.tensor([[10.0], [0.0]])),
+        ("target", torch.tensor([[10.0], [10.0]])),
+        ("velocity", torch.tensor([[0.0], [10.0]])),
+    ],
 )
-def test_oc_supervises_transferred_pair_without_reconstructing_xt(
+def test_oc_supervises_transferred_endpoint_with_fixed_xt(
     prediction_kind: str,
-    prediction_value: float,
+    prediction_value: torch.Tensor,
 ) -> None:
     objective = build_objective(
         {
@@ -401,7 +419,7 @@ def test_oc_supervises_transferred_pair_without_reconstructing_xt(
         },
         class_counts=[100, 10],
     )
-    model = RecordingPrediction(prediction_value)
+    model = RecordingTensorPrediction(prediction_value)
     source = torch.tensor([[20.0], [0.0]])
     target = torch.tensor([[0.0], [10.0]])
     t = torch.tensor([0.5, 0.5])

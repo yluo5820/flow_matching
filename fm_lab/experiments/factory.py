@@ -371,6 +371,7 @@ def build_model(config: dict[str, Any], dim: int):
             dropout=float(model_config.get("dropout", 0.1)),
             num_classes=num_classes,
             num_timesteps=int(config.get("diffusion", {}).get("timesteps", 1000)),
+            time_input_scale=float(model_config.get("time_input_scale", 1.0)),
             capacity_rank=(int(capacity_config.get("rank", 0)) if capacity_enabled else 0),
             capacity_rank_ratio=(
                 float(capacity_config.get("rank_ratio", 0.0)) if capacity_enabled else 0.0

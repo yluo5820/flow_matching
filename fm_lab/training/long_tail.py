@@ -424,7 +424,19 @@ class OCModifier:
         self,
         context: ContinuousObjectiveContext,
     ) -> TransferredTargets:
-        """Select paired source/target supervision without changing the sampled input."""
+        """Select target supervision while preserving the already-sampled ``x_t``.
+
+        The released ImbDiff-CM OC target transfer keeps the noisy point fixed and
+        replaces the clean endpoint, then recomputes the corresponding noise
+        target.  Under the linear continuous path, the exact analogue is to
+        transfer the clean target endpoint and solve
+
+            x_t = (1 - t) * source + t * transferred_target
+
+        for the source endpoint used as supervision.  This avoids changing the
+        model input seen by the base objective while making source/velocity loss
+        spaces observe the same fixed-``x_t`` transfer.
+        """
 
         if context.path.name != "linear":
             raise ValueError("Continuous OC target transfer requires a linear path.")
@@ -443,9 +455,13 @@ class OCModifier:
             original_labels=context.original_class_labels,
             t=context.t,
         )
+        transferred_target = context.target[references]
+        target_weight = expand_time(context.t, context.xt)
+        source_weight = expand_time((1.0 - context.t).clamp_min(self.min_denom), context.xt)
+        transferred_source = (context.xt - target_weight * transferred_target) / source_weight
         return TransferredTargets(
-            source=context.source[references],
-            target=context.target[references],
+            source=transferred_source,
+            target=transferred_target,
             metrics=self._transfer_metrics(references, context.t),
         )
 

@@ -418,11 +418,7 @@ class TimeResBlock(nn.Module):
             if capacity is not None
             else nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         )
-        self.time_proj = (
-            capacity.linear(capacity_part, time_embedding_dim, out_channels)
-            if capacity is not None
-            else nn.Linear(time_embedding_dim, out_channels)
-        )
+        self.time_proj = nn.Linear(time_embedding_dim, out_channels)
         self.norm2 = nn.GroupNorm(_group_count(out_channels), out_channels)
         self.conv2 = (
             capacity.conv(capacity_part, out_channels, out_channels, 3, padding=1)
@@ -430,11 +426,7 @@ class TimeResBlock(nn.Module):
             else nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         )
         self.skip = (
-            (
-                capacity.conv(capacity_part, in_channels, out_channels, 1)
-                if capacity is not None
-                else nn.Conv2d(in_channels, out_channels, kernel_size=1)
-            )
+            nn.Conv2d(in_channels, out_channels, kernel_size=1)
             if in_channels != out_channels
             else nn.Identity()
         )
@@ -452,21 +444,13 @@ class TimeResBlock(nn.Module):
             self.activation(self.norm1(x)),
             use_capacity=use_capacity,
         )
-        h = h + apply_capacity_linear(
-            self.time_proj,
-            time_features,
-            use_capacity=use_capacity,
-        )[:, :, None, None]
+        h = h + self.time_proj(time_features)[:, :, None, None]
         h = apply_capacity_conv(
             self.conv2,
             self.activation(self.norm2(h)),
             use_capacity=use_capacity,
         )
-        skip = (
-            apply_capacity_conv(self.skip, x, use_capacity=use_capacity)
-            if isinstance(self.skip, nn.Conv2d)
-            else self.skip(x)
-        )
+        skip = self.skip(x)
         return (h + skip) / math.sqrt(2.0)
 
 

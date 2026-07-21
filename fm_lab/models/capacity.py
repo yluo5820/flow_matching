@@ -12,7 +12,15 @@ from torch import nn
 
 
 class SwitchableLowRankConv2d(nn.Conv2d):
-    """Convolution with a zero-initialized low-rank weight branch."""
+    """Convolution with the switchable LoRA branch used by ImbDiff-CM.
+
+    The released ImbDiff-CM implementation factorizes a ``k x k`` convolution
+    update as ``(out_channels * k, rank * k) @ (rank * k, in_channels * k)``
+    before reshaping it back to the convolution kernel.  It also stores a
+    scaling value from config but does not multiply the update by that value in
+    ``forward``.  We preserve that behavior here so CM experiments differ from
+    the official repo only where the continuous-flow objective requires it.
+    """
 
     def __init__(
         self,
@@ -48,17 +56,17 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             rank = _rank_from_ratio(
                 rank_ratio,
                 rows=out_channels,
-                columns=in_channels * height * width,
+                columns=in_channels,
             )
         self.rank = int(rank)
         self.rank_ratio = float(rank_ratio)
         self.adapter_scale = float(adapter_scale)
         if self.rank > 0:
             self.adapter_a = nn.Parameter(
-                self.weight.new_empty(self.rank, in_channels * height * width)
+                self.weight.new_empty(self.rank * height, in_channels * width)
             )
             self.adapter_b = nn.Parameter(
-                self.weight.new_zeros(out_channels, self.rank)
+                self.weight.new_zeros(out_channels * height, self.rank * height)
             )
             # Adapter initialization must not shift the base model's global RNG
             # stream; otherwise a same-seed capacity model starts from different
@@ -75,7 +83,7 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             assert self.adapter_a is not None
             assert self.adapter_b is not None
             update = (self.adapter_b @ self.adapter_a).reshape_as(weight)
-            weight = weight + self.adapter_scale * update
+            weight = weight + update
         return F.conv2d(
             inputs,
             weight,

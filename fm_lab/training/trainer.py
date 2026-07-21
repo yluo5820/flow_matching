@@ -161,6 +161,7 @@ def train_flow_matching(
     if isinstance(path, nn.Module):
         path.to(device)
     condition_dropout = _condition_dropout_probability(config, model)
+    condition_dropout_mode = _condition_dropout_mode(config, model)
 
     theta_optimizer = build_optimizer(model, training_config)
     theta_scheduler = build_warmup_scheduler(theta_optimizer, warmup_steps=warmup_steps)
@@ -271,6 +272,7 @@ def train_flow_matching(
                     device=device,
                     class_conditional=bool(getattr(model, "is_class_conditional", False)),
                     condition_dropout=condition_dropout,
+                    condition_dropout_mode=condition_dropout_mode,
                     time_sampler=time_sampler,
                 )
                 _, loss_metrics = objective(
@@ -311,6 +313,7 @@ def train_flow_matching(
                 device=device,
                 class_conditional=bool(getattr(model, "is_class_conditional", False)),
                 condition_dropout=condition_dropout,
+                condition_dropout_mode=condition_dropout_mode,
                 time_sampler=time_sampler,
             )
             loss, loss_metrics = objective(
@@ -992,6 +995,7 @@ def _sample_training_batch(
     device: torch.device,
     class_conditional: bool = False,
     condition_dropout: float = 0.0,
+    condition_dropout_mode: str = "sample",
     time_sampler: TrainingTimeSampler | None = None,
 ) -> tuple[
     torch.Tensor,
@@ -1011,9 +1015,15 @@ def _sample_training_batch(
     x0, x1, class_labels = pair_with_condition(coupling, x0, x1, class_labels)
     original_class_labels = class_labels.clone() if class_labels is not None else None
     if class_labels is not None and condition_dropout > 0:
-        drop = torch.rand(batch_size, device=device) < condition_dropout
         class_labels = class_labels.clone()
-        class_labels[drop] = -1
+        if condition_dropout_mode == "batch":
+            if bool(torch.rand((), device=device) < condition_dropout):
+                class_labels[:] = -1
+        elif condition_dropout_mode == "sample":
+            drop = torch.rand(batch_size, device=device) < condition_dropout
+            class_labels[drop] = -1
+        else:
+            raise ValueError("condition_dropout_mode must be 'sample' or 'batch'.")
     sampler = time_sampler if time_sampler is not None else TrainingTimeSampler()
     t = sampler.sample(batch_size, device)
     return x0, x1, t, class_labels, original_class_labels
@@ -1863,6 +1873,16 @@ def _condition_dropout_probability(config: dict[str, Any], model: nn.Module) -> 
     if not 0.0 <= probability <= 1.0:
         raise ValueError("conditioning.dropout_probability must be between 0 and 1.")
     return probability
+
+
+def _condition_dropout_mode(config: dict[str, Any], model: nn.Module) -> str:
+    if not bool(getattr(model, "is_class_conditional", False)):
+        return "sample"
+    conditioning = config.get("conditioning", {}) or {}
+    mode = str(conditioning.get("dropout_mode", "sample")).lower()
+    if mode not in {"sample", "batch"}:
+        raise ValueError("conditioning.dropout_mode must be 'sample' or 'batch'.")
+    return mode
 
 
 def _sampling_class_labels(

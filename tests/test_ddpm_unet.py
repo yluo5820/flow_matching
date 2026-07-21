@@ -47,3 +47,13 @@ def test_ddpm_unet_requires_conditioning() -> None:
 
     with pytest.raises(ValueError, match="requires class conditioning"):
         build_model(config, dim=3 * 32 * 32)
+
+
+def test_ddpm_unet_can_scale_continuous_time_to_diffusion_range() -> None:
+    config = _config()
+    config["model"]["time_input_scale"] = 1000.0
+    scaled = build_model(config, dim=3 * 32 * 32)
+    unscaled = build_model(_config(), dim=3 * 32 * 32)
+
+    assert scaled.time_input_scale == 1000.0
+    assert unscaled.time_input_scale == 1.0

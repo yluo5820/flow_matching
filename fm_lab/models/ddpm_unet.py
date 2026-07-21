@@ -33,6 +33,7 @@ class DDPMUNet(nn.Module):
         dropout: float = 0.1,
         num_classes: int,
         num_timesteps: int = 1000,
+        time_input_scale: float = 1.0,
         capacity_rank: int = 0,
         capacity_rank_ratio: float = 0.0,
         capacity_adapter_scale: float = 1.0,
@@ -50,6 +51,7 @@ class DDPMUNet(nn.Module):
         self.image_shape = (channels, height, width)
         self.num_classes = int(num_classes)
         self.num_timesteps = int(num_timesteps)
+        self.time_input_scale = float(time_input_scale)
         self.is_class_conditional = True
         self._capacity = CapacityConfig.build(
             rank=capacity_rank,
@@ -145,7 +147,9 @@ class DDPMUNet(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
         batch = x.shape[0]
         image = x.reshape(batch, *self.image_shape)
-        embedding = self.time_mlp(_timestep_embedding(t, self.time_mlp[0].in_features))
+        embedding = self.time_mlp(
+            _timestep_embedding(t * self.time_input_scale, self.time_mlp[0].in_features)
+        )
         labels = _class_labels_from_context(context, batch, x.device)
         embedding = embedding + self.class_embedding(_embedding_labels(labels, self.num_classes))
         use_capacity = use_capacity_from_context(context)

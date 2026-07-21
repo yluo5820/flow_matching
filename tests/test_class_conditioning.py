@@ -123,6 +123,34 @@ def test_training_batch_preserves_labels_before_cfg_dropout() -> None:
     assert torch.equal(original_labels, torch.tensor([0, 1, 0, 1]))
 
 
+def test_training_batch_supports_official_batch_level_cfg_dropout() -> None:
+    _, _, _, kept_labels, kept_original = _sample_training_batch(
+        source=GaussianSource(dim=2),
+        target=LabeledTarget(),
+        coupling=IndependentCoupling(shuffle_target=False),
+        batch_size=4,
+        device=torch.device("cpu"),
+        class_conditional=True,
+        condition_dropout=0.0,
+        condition_dropout_mode="batch",
+    )
+    _, _, _, dropped_labels, dropped_original = _sample_training_batch(
+        source=GaussianSource(dim=2),
+        target=LabeledTarget(),
+        coupling=IndependentCoupling(shuffle_target=False),
+        batch_size=4,
+        device=torch.device("cpu"),
+        class_conditional=True,
+        condition_dropout=1.0,
+        condition_dropout_mode="batch",
+    )
+
+    assert torch.equal(kept_labels, torch.tensor([0, 1, 0, 1]))
+    assert torch.equal(kept_original, torch.tensor([0, 1, 0, 1]))
+    assert torch.equal(dropped_labels, torch.full((4,), -1))
+    assert torch.equal(dropped_original, torch.tensor([0, 1, 0, 1]))
+
+
 def test_classifier_free_guidance_combines_velocity_predictions() -> None:
     prediction = classifier_free_guided_prediction(
         LabelVelocity(),

@@ -96,26 +96,24 @@ def test_image_unet_factory_places_cm_capacity_only_in_up_blocks() -> None:
     assert adapter_names == [
         "up1_block.conv1",
         "up1_block.conv2",
-        "up1_block.skip",
         "up0_block.conv1",
         "up0_block.conv2",
-        "up0_block.skip",
     ]
     linear_adapter_names = [
         name
         for name, module in model.named_modules()
         if isinstance(module, models.SwitchableLowRankLinear)
     ]
-    assert linear_adapter_names == ["up1_block.time_proj", "up0_block.time_proj"]
+    assert linear_adapter_names == []
     assert model.capacity_metadata() == {
         "enabled": True,
         "rank": 0,
         "rank_ratio": 0.25,
         "adapter_scale": 0.5,
         "parts": ["up"],
-        "adapter_layers": 8,
-        "adapter_conv_layers": 6,
-        "adapter_linear_layers": 2,
+        "adapter_layers": 4,
+        "adapter_conv_layers": 4,
+        "adapter_linear_layers": 0,
     }
 
 
@@ -247,15 +245,15 @@ def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:
     )
     inputs = torch.randn(2, 8, 5, 5)
 
-    assert layer.rank == 3
+    assert layer.rank == 2
     assert torch.equal(layer(inputs, use_adapter=True), layer(inputs, use_adapter=False))
 
 
 def test_low_rank_conv_uses_canonical_flattened_kernel_factors() -> None:
     layer = models.SwitchableLowRankConv2d(4, 6, kernel_size=3, rank=2)
 
-    assert layer.adapter_a.shape == (2, 4 * 3 * 3)
-    assert layer.adapter_b.shape == (6, 2)
+    assert layer.adapter_a.shape == (2 * 3, 4 * 3)
+    assert layer.adapter_b.shape == (6 * 3, 2 * 3)
 
 
 def test_low_rank_linear_switch_applies_factorized_weight() -> None:
@@ -291,7 +289,7 @@ def test_capacity_adapter_initialization_preserves_global_rng_for_base_layers() 
     assert torch.equal(capacity_second.bias, baseline_second.bias)
 
 
-def test_low_rank_conv_switch_applies_scaled_factorized_weight() -> None:
+def test_low_rank_conv_switch_matches_released_unscaled_lora_update() -> None:
     layer = models.SwitchableLowRankConv2d(
         1,
         1,
@@ -307,7 +305,7 @@ def test_low_rank_conv_switch_applies_scaled_factorized_weight() -> None:
     inputs = torch.ones(1, 1, 2, 2)
 
     assert torch.equal(layer(inputs, use_adapter=False), torch.zeros_like(inputs))
-    assert torch.equal(layer(inputs, use_adapter=True), torch.full_like(inputs, 3.0))
+    assert torch.equal(layer(inputs, use_adapter=True), torch.full_like(inputs, 6.0))
 
 
 def test_low_rank_conv_switch_controls_adapter_gradients() -> None:
