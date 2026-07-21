@@ -184,16 +184,23 @@ If `torch.compile` fails or gives no throughput benefit on the cluster, leave it
 off for the full paper-close runs. AMP plus channels-last are the safer default
 speedup path.
 
-## 8. Run the CIFAR-100-LT paper-close experiment set
+## 8. Run the CIFAR-100-LT 30k screen
 
 Run these after the CUDA smoke passes. The configs already enable AMP and
 channels-last on CUDA and keep `torch.compile` disabled.
+
+The upstream CM CIFAR-100-LT recipe uses `total_steps: 300001`, `batch_size: 64`,
+and generates 50,000 evaluation images. At roughly 10 iterations/second on an
+RTX 50-series node, that is an 8+ hour training job per condition before full
+sampling/evaluation. Use this 30k screen first when the goal is to compare
+baseline, CM without endpoint transfer, and CM with endpoint transfer under a
+roughly one-hour-per-condition budget.
 
 Baseline:
 
 ```bash
 python -m fm_lab.experiments.run_train \
-  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
+  --config configs/cifar100_lt/autodl_screen/cifar100_lt_ir100_source_sloss_screen30k_baseline.yaml \
   --device cuda
 ```
 
@@ -201,7 +208,7 @@ CM without endpoint transfer:
 
 ```bash
 python -m fm_lab.experiments.run_train \
-  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm_no_oc.yaml \
+  --config configs/cifar100_lt/autodl_screen/cifar100_lt_ir100_source_sloss_screen30k_cm_no_oc.yaml \
   --device cuda
 ```
 
@@ -209,16 +216,40 @@ CM with endpoint transfer:
 
 ```bash
 python -m fm_lab.experiments.run_train \
-  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm.yaml \
+  --config configs/cifar100_lt/autodl_screen/cifar100_lt_ir100_source_sloss_screen30k_cm.yaml \
   --device cuda
 ```
 
 Default output directories:
 
 ```text
-/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/baseline
-/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/cm_no_oc
-/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_paperclose/cm_oc
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_screen30k/baseline
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_screen30k/cm_no_oc
+/root/autodl-tmp/runs/cifar100_lt_ir100_source_sloss_screen30k/cm_oc
+```
+
+The 30k screen uses about 1.92M training draws, or roughly 177 passes over the
+CIFAR-100-LT IR100 support. It can show whether the local continuous-flow CM
+implementation has the right direction of effect at practical cost, but it is
+not a paper-number reproduction.
+
+## 9. Optional full paper-close run
+
+Only run this tier if the 30k screen is promising and the cluster budget allows
+it. These configs preserve the upstream 300k-step scale.
+
+```bash
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_baseline.yaml \
+  --device cuda
+
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm_no_oc.yaml \
+  --device cuda
+
+python -m fm_lab.experiments.run_train \
+  --config configs/cifar100_lt/autodl/cifar100_lt_ir100_source_sloss_paperclose_cm.yaml \
+  --device cuda
 ```
 
 If AutoDL storage pressure becomes an issue, preserve at least each run's
