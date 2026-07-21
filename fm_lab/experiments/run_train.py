@@ -59,6 +59,40 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Resume exactly from a periodic or final training checkpoint.",
     )
+    parser.add_argument(
+        "--mixed-precision",
+        default=None,
+        choices=("auto", "bf16", "fp16", "off"),
+        help="Override training.mixed_precision for CUDA runs.",
+    )
+    parser.add_argument(
+        "--channels-last",
+        default=None,
+        choices=("on", "off"),
+        help="Override training.channels_last for image models.",
+    )
+    parser.add_argument(
+        "--compile",
+        default=None,
+        choices=("on", "off"),
+        help="Override training.compile. Use a short CUDA smoke before full runs.",
+    )
+    parser.add_argument(
+        "--compile-backend",
+        default=None,
+        help="Optional torch.compile backend override.",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        default=None,
+        choices=("default", "reduce-overhead", "max-autotune"),
+        help="Optional torch.compile mode override.",
+    )
+    parser.add_argument(
+        "--compile-fullgraph",
+        action="store_true",
+        help="Pass fullgraph=True to torch.compile.",
+    )
     parser.add_argument("--n-samples", type=int, default=None, help="Override sampling.n_samples.")
     parser.add_argument(
         "--n-trajectories",
@@ -246,7 +280,45 @@ def _training_overrides(args: argparse.Namespace) -> dict:
         training["batch_size"] = args.batch_size
     if getattr(args, "resume_from", None) is not None:
         training["resume_from"] = args.resume_from
+    if args.mixed_precision is not None:
+        if args.mixed_precision == "off":
+            training["mixed_precision"] = {"enabled": False}
+        else:
+            training["mixed_precision"] = {
+                "enabled": True,
+                "dtype": args.mixed_precision,
+                "device_types": ["cuda"],
+            }
+    if args.channels_last is not None:
+        training["channels_last"] = {
+            "enabled": args.channels_last == "on",
+            "device_types": ["cuda"],
+        }
+    compile_options = _compile_overrides(args)
+    if compile_options:
+        training["compile"] = compile_options
     return training
+
+
+def _compile_overrides(args: argparse.Namespace) -> dict:
+    compile_options = {}
+    if args.compile is not None:
+        compile_options["enabled"] = args.compile == "on"
+        compile_options["device_types"] = ["cuda"]
+    if args.compile_backend is not None:
+        compile_options["backend"] = args.compile_backend
+        compile_options.setdefault("enabled", True)
+        compile_options.setdefault("device_types", ["cuda"])
+    if args.compile_mode is not None:
+        compile_options.setdefault("enabled", True)
+        compile_options.setdefault("device_types", ["cuda"])
+        if args.compile_mode != "default":
+            compile_options["mode"] = args.compile_mode
+    if args.compile_fullgraph:
+        compile_options["fullgraph"] = True
+        compile_options.setdefault("enabled", True)
+        compile_options.setdefault("device_types", ["cuda"])
+    return compile_options
 
 
 def _data_overrides(args: argparse.Namespace) -> dict:

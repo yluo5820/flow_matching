@@ -55,6 +55,15 @@ training:
   warmup_steps: 5000
   gradient_clip: 1.0
   ema_decay: 0.9999
+  mixed_precision:
+    enabled: true
+    dtype: auto
+    device_types: [cuda]
+  channels_last:
+    enabled: true
+    device_types: [cuda]
+  compile:
+    enabled: false
   time_sampling:
     name: uniform
   log_every: 250

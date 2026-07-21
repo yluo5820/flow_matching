@@ -147,6 +147,8 @@ class DDPMUNet(nn.Module):
     def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
         batch = x.shape[0]
         image = x.reshape(batch, *self.image_shape)
+        if bool(getattr(self, "_fm_lab_channels_last", False)):
+            image = image.contiguous(memory_format=torch.channels_last)
         embedding = self.time_mlp(
             _timestep_embedding(t * self.time_input_scale, self.time_mlp[0].in_features)
         )

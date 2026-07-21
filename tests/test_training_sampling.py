@@ -1,11 +1,13 @@
 import copy
 import csv
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 from torch import nn
 
+import fm_lab.experiments.run_train as run_train_module
 import fm_lab.training.trainer as trainer_module
 from fm_lab.couplings import IndependentCoupling, MinibatchOTCoupling
 from fm_lab.data import GaussianMixture3D, TwoMoons
@@ -42,6 +44,98 @@ def test_logit_normal_time_sampler_matches_seeded_definition() -> None:
     actual = sampler.sample(32, torch.device("cpu"), generator=actual_generator)
 
     assert torch.equal(actual, expected)
+
+
+def test_mixed_precision_defaults_to_inactive_on_cpu() -> None:
+    config = trainer_module._build_mixed_precision_config(
+        {"mixed_precision": {"enabled": True, "dtype": "auto"}},
+        torch.device("cpu"),
+    )
+
+    assert config.requested is True
+    assert config.active is False
+    assert config.inactive_reason == "device_type_not_enabled:cpu"
+
+
+def test_mixed_precision_fp16_cuda_uses_grad_scaler_without_cuda_allocation() -> None:
+    config = trainer_module._build_mixed_precision_config(
+        {"mixed_precision": {"enabled": True, "dtype": "fp16"}},
+        torch.device("cuda"),
+    )
+
+    assert config.active is True
+    assert config.dtype is torch.float16
+    assert config.scaler_enabled is True
+
+
+def test_channels_last_runtime_flag_marks_image_models_only_on_enabled_devices() -> None:
+    model = nn.Conv2d(3, 4, kernel_size=3)
+    model.image_shape = (3, 8, 8)
+
+    inactive = trainer_module._build_channels_last_config(
+        {"channels_last": {"enabled": True}},
+        torch.device("cpu"),
+        model,
+    )
+    active = trainer_module._build_channels_last_config(
+        {"channels_last": {"enabled": True}},
+        torch.device("cuda"),
+        model,
+    )
+    trainer_module._apply_channels_last(model)
+
+    assert inactive.active is False
+    assert inactive.inactive_reason == "device_type_not_enabled:cpu"
+    assert active.active is True
+    assert model._fm_lab_channels_last is True
+
+
+def test_compile_runtime_flag_is_cuda_scoped_by_default() -> None:
+    inactive = trainer_module._build_compile_config(
+        {"compile": {"enabled": True}},
+        torch.device("cpu"),
+    )
+    active = trainer_module._build_compile_config(
+        {"compile": {"enabled": True, "mode": "reduce-overhead"}},
+        torch.device("cuda"),
+    )
+
+    assert inactive.active is False
+    assert inactive.inactive_reason == "device_type_not_enabled:cpu"
+    assert active.active is True
+    assert active.mode == "reduce-overhead"
+
+
+def test_run_train_runtime_acceleration_cli_overrides() -> None:
+    args = SimpleNamespace(
+        steps=None,
+        batch_size=None,
+        resume_from=None,
+        mixed_precision="bf16",
+        channels_last="on",
+        compile="on",
+        compile_backend=None,
+        compile_mode="reduce-overhead",
+        compile_fullgraph=True,
+    )
+
+    overrides = run_train_module._training_overrides(args)
+
+    assert overrides["mixed_precision"] == {
+        "enabled": True,
+        "dtype": "bf16",
+        "device_types": ["cuda"],
+    }
+    assert overrides["channels_last"] == {
+        "enabled": True,
+        "device_types": ["cuda"],
+    }
+    assert overrides["compile"] == {
+        "enabled": True,
+        "device_types": ["cuda"],
+        "mode": "reduce-overhead",
+        "fullgraph": True,
+    }
 
 
 @pytest.mark.parametrize("config", [None, "uniform", {"name": "uniform"}])

@@ -165,6 +165,8 @@ class ImageUNetVelocity(nn.Module):
             width=self.width,
             layout=self.image_layout,
         )
+        if bool(getattr(self, "_fm_lab_channels_last", False)):
+            image = image.contiguous(memory_format=torch.channels_last)
         time_features = apply_capacity_linear(
             self.time_mlp[0],
             self.time_embedding(t),

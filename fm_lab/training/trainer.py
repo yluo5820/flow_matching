@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -91,6 +91,296 @@ def _explicit_checkpoint_steps(
     return frozenset(steps)
 
 
+@dataclass(frozen=True)
+class _MixedPrecisionConfig:
+    requested: bool
+    active: bool
+    dtype_name: str | None
+    dtype: torch.dtype | None
+    device_type: str
+    scaler_enabled: bool = False
+    inactive_reason: str | None = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "requested": self.requested,
+            "active": self.active,
+            "dtype": self.dtype_name,
+            "device_type": self.device_type,
+            "scaler_enabled": self.scaler_enabled,
+            "inactive_reason": self.inactive_reason,
+        }
+
+
+@dataclass(frozen=True)
+class _ChannelsLastConfig:
+    requested: bool
+    active: bool
+    device_type: str
+    inactive_reason: str | None = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "requested": self.requested,
+            "active": self.active,
+            "device_type": self.device_type,
+            "inactive_reason": self.inactive_reason,
+        }
+
+
+@dataclass(frozen=True)
+class _CompileConfig:
+    requested: bool
+    active: bool
+    device_type: str
+    backend: str | None = None
+    mode: str | None = None
+    fullgraph: bool = False
+    inactive_reason: str | None = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "requested": self.requested,
+            "active": self.active,
+            "device_type": self.device_type,
+            "backend": self.backend,
+            "mode": self.mode,
+            "fullgraph": self.fullgraph,
+            "inactive_reason": self.inactive_reason,
+        }
+
+
+def _build_mixed_precision_config(
+    training_config: Mapping[str, Any],
+    device: torch.device,
+) -> _MixedPrecisionConfig:
+    raw = training_config.get("mixed_precision", False)
+    enabled, options = _enabled_options(raw, default_dtype="auto")
+    dtype_name = str(options.get("dtype", "auto")).lower()
+    if not enabled:
+        return _MixedPrecisionConfig(
+            requested=False,
+            active=False,
+            dtype_name=None,
+            dtype=None,
+            device_type=device.type,
+            inactive_reason="disabled",
+        )
+    allowed_devices = _device_types(options, default=("cuda",))
+    if device.type not in allowed_devices:
+        return _MixedPrecisionConfig(
+            requested=True,
+            active=False,
+            dtype_name=dtype_name,
+            dtype=None,
+            device_type=device.type,
+            inactive_reason=f"device_type_not_enabled:{device.type}",
+        )
+    if device.type != "cuda":
+        return _MixedPrecisionConfig(
+            requested=True,
+            active=False,
+            dtype_name=dtype_name,
+            dtype=None,
+            device_type=device.type,
+            inactive_reason=f"unsupported_device_type:{device.type}",
+        )
+    resolved_name, dtype = _resolve_mixed_precision_dtype(dtype_name)
+    return _MixedPrecisionConfig(
+        requested=True,
+        active=True,
+        dtype_name=resolved_name,
+        dtype=dtype,
+        device_type=device.type,
+        scaler_enabled=resolved_name == "fp16",
+    )
+
+
+def _resolve_mixed_precision_dtype(dtype_name: str) -> tuple[str, torch.dtype]:
+    normalized = dtype_name.lower()
+    if normalized in {"auto", ""}:
+        if torch.cuda.is_bf16_supported():
+            return "bf16", torch.bfloat16
+        return "fp16", torch.float16
+    if normalized in {"bf16", "bfloat16"}:
+        if not torch.cuda.is_bf16_supported():
+            raise ValueError(
+                "training.mixed_precision dtype bf16 is not supported on this CUDA GPU."
+            )
+        return "bf16", torch.bfloat16
+    if normalized in {"fp16", "float16", "half"}:
+        return "fp16", torch.float16
+    if normalized in {"fp32", "float32", "none", "off", "false"}:
+        raise ValueError(
+            "Use training.mixed_precision.enabled=false instead of dtype "
+            f"{dtype_name!r}."
+        )
+    raise ValueError("training.mixed_precision dtype must be 'auto', 'bf16', or 'fp16'.")
+
+
+def _build_channels_last_config(
+    training_config: Mapping[str, Any],
+    device: torch.device,
+    model: nn.Module,
+) -> _ChannelsLastConfig:
+    raw = training_config.get("channels_last", False)
+    enabled, options = _enabled_options(raw)
+    if not enabled:
+        return _ChannelsLastConfig(
+            requested=False,
+            active=False,
+            device_type=device.type,
+            inactive_reason="disabled",
+        )
+    allowed_devices = _device_types(options, default=("cuda",))
+    if device.type not in allowed_devices:
+        return _ChannelsLastConfig(
+            requested=True,
+            active=False,
+            device_type=device.type,
+            inactive_reason=f"device_type_not_enabled:{device.type}",
+        )
+    if not hasattr(model, "image_shape"):
+        return _ChannelsLastConfig(
+            requested=True,
+            active=False,
+            device_type=device.type,
+            inactive_reason="model_has_no_image_shape",
+        )
+    return _ChannelsLastConfig(requested=True, active=True, device_type=device.type)
+
+
+def _apply_channels_last(model: nn.Module) -> None:
+    model.to(memory_format=torch.channels_last)
+    model._fm_lab_channels_last = True
+
+
+def _build_compile_config(
+    training_config: Mapping[str, Any],
+    device: torch.device,
+) -> _CompileConfig:
+    raw = training_config.get("compile", False)
+    enabled, options = _enabled_options(raw)
+    backend = options.get("backend")
+    mode = options.get("mode")
+    fullgraph = bool(options.get("fullgraph", False))
+    if not enabled:
+        return _CompileConfig(
+            requested=False,
+            active=False,
+            device_type=device.type,
+            backend=None if backend is None else str(backend),
+            mode=None if mode is None else str(mode),
+            fullgraph=fullgraph,
+            inactive_reason="disabled",
+        )
+    allowed_devices = _device_types(options, default=("cuda",))
+    if device.type not in allowed_devices:
+        return _CompileConfig(
+            requested=True,
+            active=False,
+            device_type=device.type,
+            backend=None if backend is None else str(backend),
+            mode=None if mode is None else str(mode),
+            fullgraph=fullgraph,
+            inactive_reason=f"device_type_not_enabled:{device.type}",
+        )
+    if not hasattr(torch, "compile"):
+        return _CompileConfig(
+            requested=True,
+            active=False,
+            device_type=device.type,
+            backend=None if backend is None else str(backend),
+            mode=None if mode is None else str(mode),
+            fullgraph=fullgraph,
+            inactive_reason="torch_compile_unavailable",
+        )
+    return _CompileConfig(
+        requested=True,
+        active=True,
+        device_type=device.type,
+        backend=None if backend is None else str(backend),
+        mode=None if mode is None else str(mode),
+        fullgraph=fullgraph,
+    )
+
+
+def _maybe_compile_model(model: nn.Module, config: _CompileConfig) -> nn.Module:
+    if not config.active:
+        return model
+    kwargs: dict[str, Any] = {"fullgraph": config.fullgraph}
+    if config.backend is not None:
+        kwargs["backend"] = config.backend
+    if config.mode is not None:
+        kwargs["mode"] = config.mode
+    compiled = torch.compile(model, **kwargs)
+    for name in (
+        "is_class_conditional",
+        "capacity_metadata",
+        "image_shape",
+        "_fm_lab_channels_last",
+    ):
+        if hasattr(model, name) and not hasattr(compiled, name):
+            setattr(compiled, name, getattr(model, name))
+    return compiled
+
+
+def _autocast_context(config: _MixedPrecisionConfig):
+    if not config.active:
+        return nullcontext()
+    if config.dtype is None:
+        raise ValueError("Active mixed precision config is missing dtype.")
+    return torch.amp.autocast(
+        device_type=config.device_type,
+        dtype=config.dtype,
+        enabled=True,
+    )
+
+
+def _enabled_options(
+    raw: object,
+    *,
+    default_dtype: str | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    if isinstance(raw, bool):
+        options: dict[str, Any] = {}
+        if default_dtype is not None:
+            options["dtype"] = default_dtype
+        return raw, options
+    if isinstance(raw, str):
+        normalized = raw.lower()
+        if normalized in {"false", "off", "none", "no", "0", "disabled"}:
+            return False, {}
+        if default_dtype is not None:
+            return True, {"dtype": normalized}
+        return True, {}
+    if isinstance(raw, Mapping):
+        options = dict(raw)
+        enabled = bool(options.pop("enabled", True))
+        if default_dtype is not None:
+            options.setdefault("dtype", default_dtype)
+        return enabled, options
+    raise ValueError("Runtime acceleration config must be a bool, string, or mapping.")
+
+
+def _device_types(
+    options: Mapping[str, Any],
+    *,
+    default: Sequence[str],
+) -> frozenset[str]:
+    raw = options.get("device_types", options.get("devices", default))
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, Sequence):
+        values = list(raw)
+    else:
+        raise ValueError("Runtime acceleration device_types must be a string or list.")
+    normalized = frozenset(str(value).lower() for value in values)
+    if not normalized:
+        raise ValueError("Runtime acceleration device_types must not be empty.")
+    return normalized
+
+
 def train_flow_matching(
     *,
     config: dict[str, Any],
@@ -160,8 +450,20 @@ def train_flow_matching(
     model.to(device)
     if isinstance(path, nn.Module):
         path.to(device)
+    channels_last = _build_channels_last_config(training_config, device, model)
+    if channels_last.active:
+        _apply_channels_last(model)
     condition_dropout = _condition_dropout_probability(config, model)
     condition_dropout_mode = _condition_dropout_mode(config, model)
+    mixed_precision = _build_mixed_precision_config(training_config, device)
+    compile_config = _build_compile_config(training_config, device)
+    if trainable_path and (mixed_precision.active or compile_config.active):
+        raise ValueError(
+            "training.mixed_precision and training.compile are not supported with "
+            "trainable paths yet."
+        )
+    train_model = _maybe_compile_model(model, compile_config)
+    scaler = torch.amp.GradScaler("cuda", enabled=mixed_precision.scaler_enabled)
 
     theta_optimizer = build_optimizer(model, training_config)
     theta_scheduler = build_warmup_scheduler(theta_optimizer, warmup_steps=warmup_steps)
@@ -275,16 +577,17 @@ def train_flow_matching(
                     condition_dropout_mode=condition_dropout_mode,
                     time_sampler=time_sampler,
                 )
-                _, loss_metrics = objective(
-                    model=model,
-                    path=path,
-                    x0=x0,
-                    x1=x1,
-                    t=t,
-                    compute_diagnostics=should_log,
-                    class_labels=class_labels,
-                    original_class_labels=original_class_labels,
-                )
+                with _autocast_context(mixed_precision):
+                    _, loss_metrics = objective(
+                        model=train_model,
+                        path=path,
+                        x0=x0,
+                        x1=x1,
+                        t=t,
+                        compute_diagnostics=should_log,
+                        class_labels=class_labels,
+                        original_class_labels=original_class_labels,
+                    )
                 record = {"step": step, **loss_metrics}
                 previous_best_step = early_stopping.best_step
                 should_stop = early_stopping.update(record)
@@ -316,16 +619,17 @@ def train_flow_matching(
                 condition_dropout_mode=condition_dropout_mode,
                 time_sampler=time_sampler,
             )
-            loss, loss_metrics = objective(
-                model=model,
-                path=path,
-                x0=x0,
-                x1=x1,
-                t=t,
-                compute_diagnostics=should_log,
-                class_labels=class_labels,
-                original_class_labels=original_class_labels,
-            )
+            with _autocast_context(mixed_precision):
+                loss, loss_metrics = objective(
+                    model=train_model,
+                    path=path,
+                    x0=x0,
+                    x1=x1,
+                    t=t,
+                    compute_diagnostics=should_log,
+                    class_labels=class_labels,
+                    original_class_labels=original_class_labels,
+                )
             if should_record:
                 record = {"step": step, **loss_metrics}
                 previous_best_step = early_stopping.best_step
@@ -348,14 +652,23 @@ def train_flow_matching(
                     best_state.record = dict(record)
 
             theta_optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            if mixed_precision.scaler_enabled:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
             if gradient_clip > 0:
+                if mixed_precision.scaler_enabled:
+                    scaler.unscale_(theta_optimizer)
                 gradient_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), gradient_clip
                 )
                 if record is not None:
                     record["gradient_norm"] = float(gradient_norm.detach().cpu())
-            theta_optimizer.step()
+            if mixed_precision.scaler_enabled:
+                scaler.step(theta_optimizer)
+                scaler.update()
+            else:
+                theta_optimizer.step()
             if theta_scheduler is not None:
                 theta_scheduler.step()
             if ema_model is not None and ema_decay is not None:
@@ -438,6 +751,11 @@ def train_flow_matching(
         "path_metadata": path.metadata() if hasattr(path, "metadata") else {},
         "objective": objective.metadata(),
         "device": str(device),
+        "runtime": {
+            "mixed_precision": mixed_precision.summary(),
+            "channels_last": channels_last.summary(),
+            "compile": compile_config.summary(),
+        },
     }
     write_json(metrics, run_dir / "metrics.json")
     _write_history(history, run_dir / "diagnostics" / "training_history.csv")
