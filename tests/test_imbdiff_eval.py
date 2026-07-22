@@ -74,6 +74,41 @@ def test_evaluation_report_and_cli_default_to_paper_recall_k_five() -> None:
     assert parse_args(["--class-counts", "counts.json", "--output-dir", "report"]).recall_k == 5
 
 
+def test_screening_profile_skips_expensive_metrics() -> None:
+    report = evaluate_feature_caches(
+        _feature_cache(),
+        _feature_cache(),
+        class_counts=[100, 10, 1],
+        repeats=1,
+        overall_samples=12,
+        kid_subsets=1,
+        kid_subset_size=6,
+        inception_splits=1,
+        compute_recall=False,
+        compute_classwise_fid=False,
+    )
+
+    assert set(report["metrics"]) == {"fid", "kid", "inception_score", "group_fid"}
+    assert report["provenance"]["extended_metrics"] == [
+        "inception_score",
+        "group_fid",
+    ]
+    assert report["provenance"]["compute_recall"] is False
+    assert report["provenance"]["compute_classwise_fid"] is False
+    args = parse_args(
+        [
+            "--class-counts",
+            "counts.json",
+            "--output-dir",
+            "report",
+            "--skip-recall",
+            "--skip-classwise-fid",
+        ]
+    )
+    assert args.skip_recall is True
+    assert args.skip_classwise_fid is True
+
+
 def test_balanced_evaluation_rejects_unequal_generated_class_counts() -> None:
     generated = _feature_cache()
     generated.labels[-1] = 1

@@ -38,6 +38,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--kid-subset-size", type=int, default=1000)
     parser.add_argument("--recall-k", type=int, default=5)
     parser.add_argument("--inception-splits", type=int, default=10)
+    parser.add_argument(
+        "--skip-recall",
+        action="store_true",
+        help="Skip the expensive nearest-neighbor generative recall metric.",
+    )
+    parser.add_argument(
+        "--skip-classwise-fid",
+        action="store_true",
+        help="Skip per-class FID while retaining Many/Medium/Few group FID.",
+    )
     return parser.parse_args(argv)
 
 
@@ -58,6 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         kid_subset_size=args.kid_subset_size,
         recall_k=args.recall_k,
         inception_splits=args.inception_splits,
+        compute_recall=not args.skip_recall,
+        compute_classwise_fid=not args.skip_classwise_fid,
     )
     paths = write_evaluation_report(report, args.output_dir)
     print(f"Wrote ImbDiff metrics: {paths['json']}")

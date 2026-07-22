@@ -80,6 +80,8 @@ def evaluate_feature_caches(
     kid_subset_size: int = 1000,
     recall_k: int = 5,
     inception_splits: int = 10,
+    compute_recall: bool = True,
+    compute_classwise_fid: bool = True,
     require_balanced_generated: bool = False,
     per_class_recall: bool = False,
     conditional_diagnostics: bool = False,
@@ -88,6 +90,8 @@ def evaluate_feature_caches(
         raise ValueError("Evaluation requires positive repeats and at least two samples.")
     if len(class_counts) != len(np.unique(real.labels)):
         raise ValueError("class_counts must align with the classes in the real cache.")
+    if per_class_recall and not compute_classwise_fid:
+        raise ValueError("per_class_recall requires compute_classwise_fid.")
     if require_balanced_generated:
         generated_counts = np.bincount(generated.labels, minlength=len(class_counts))
         if len(generated_counts) != len(class_counts) or np.any(
@@ -99,7 +103,10 @@ def evaluate_feature_caches(
         raise ValueError("Balanced overall sample count must be divisible by class count.")
     groups = frequency_ranked_groups(class_counts)
     rng = np.random.default_rng(seed)
-    overall_values = {name: [] for name in ("fid", "kid", "recall", "inception_score")}
+    overall_names = ["fid", "kid", "inception_score"]
+    if compute_recall:
+        overall_names.insert(2, "recall")
+    overall_values = {name: [] for name in overall_names}
     class_values: dict[int, list[float]] = {}
     group_values = {name: [] for name in groups}
     macro_class_values: list[float] = []
@@ -128,9 +135,17 @@ def evaluate_feature_caches(
             max_subset_size=kid_subset_size,
             seed=seed + repeat,
         )
-        recall = generative_recall(features, real.features, nearest_k=recall_k)
+        recall = (
+            generative_recall(features, real.features, nearest_k=recall_k)
+            if compute_recall
+            else None
+        )
         score = inception_score(probabilities, splits=inception_splits)
-        per_class = classwise_fid(features, labels, real.features, real.labels)
+        per_class = (
+            classwise_fid(features, labels, real.features, real.labels)
+            if compute_classwise_fid
+            else {}
+        )
         per_group = grouped_fid(features, labels, real.features, real.labels, groups)
         per_recall = (
             _classwise_recall(
@@ -145,14 +160,16 @@ def evaluate_feature_caches(
         )
         overall_values["fid"].append(fid)
         overall_values["kid"].append(kid)
-        overall_values["recall"].append(recall)
+        if recall is not None:
+            overall_values["recall"].append(recall)
         overall_values["inception_score"].append(float(score["mean"]))
         for class_id, value in per_class.items():
             class_values.setdefault(class_id, []).append(value)
         for name, value in per_group.items():
             group_values[name].append(value)
-        macro_class_values.append(float(np.mean(list(per_class.values()))))
-        worst_class_values.append(float(np.max(list(per_class.values()))))
+        if per_class:
+            macro_class_values.append(float(np.mean(list(per_class.values()))))
+            worst_class_values.append(float(np.max(list(per_class.values()))))
         for class_id, value in per_recall.items():
             class_recall_values.setdefault(class_id, []).append(value)
         repeat_records.append(
@@ -166,20 +183,26 @@ def evaluate_feature_caches(
                 ).astype(int).tolist(),
                 "fid": fid,
                 "kid": kid,
-                "recall": recall,
                 "inception_score": score,
-                "classwise_fid": {str(key): value for key, value in per_class.items()},
                 "group_fid": per_group,
                 "classwise_recall": {
                     str(key): value for key, value in per_recall.items()
                 },
             }
         )
+        if recall is not None:
+            repeat_records[-1]["recall"] = recall
+        if per_class:
+            repeat_records[-1]["classwise_fid"] = {
+                str(key): value for key, value in per_class.items()
+            }
 
     metrics: dict[str, Any] = {name: summarize(values) for name, values in overall_values.items()}
-    metrics["classwise_fid"] = {
-        f"class_{class_id}": summarize(values) for class_id, values in sorted(class_values.items())
-    }
+    if compute_classwise_fid:
+        metrics["classwise_fid"] = {
+            f"class_{class_id}": summarize(values)
+            for class_id, values in sorted(class_values.items())
+        }
     metrics["group_fid"] = {name: summarize(values) for name, values in group_values.items()}
     if per_class_recall:
         metrics["macro_classwise_fid"] = summarize(macro_class_values)
@@ -198,10 +221,14 @@ def evaluate_feature_caches(
             "evaluator_version": 1,
             "fid_kid_compatibility": "ImbDiff-CM reference",
             "extended_metrics": [
-                "recall",
-                "inception_score",
-                "classwise_fid",
-                "group_fid",
+                name
+                for name, enabled in (
+                    ("recall", compute_recall),
+                    ("inception_score", True),
+                    ("classwise_fid", compute_classwise_fid),
+                    ("group_fid", True),
+                )
+                if enabled
             ],
             "real_cache": real.provenance,
             "generated_cache": generated.provenance,
@@ -211,6 +238,8 @@ def evaluate_feature_caches(
             "kid_subset_size": kid_subset_size,
             "recall_k": recall_k,
             "inception_splits": inception_splits,
+            "compute_recall": compute_recall,
+            "compute_classwise_fid": compute_classwise_fid,
             "require_balanced_generated": require_balanced_generated,
             "per_class_recall": per_class_recall,
             "conditional_diagnostics": conditional_diagnostics,
