@@ -178,6 +178,9 @@ class OfficialImbDiffUNet(nn.Module):
             y=labels,
             augm=augm,
         )
+        # The released trainers flatten predictions with ``view``. Preserve
+        # that contract when fm_lab runs the U-Net in channels-last format.
+        output = output.contiguous()
         return output.reshape(x.shape[0], -1) if input_was_flat else output
 
     def capacity_metadata(self) -> dict[str, object]:
@@ -277,6 +280,9 @@ class OfficialImbDiffCMUNet(nn.Module):
             augm=augm,
             use_cm=active_capacity,
         )
+        # diffusion_cm.py flattens h1/h2 with ``view``; channels-last outputs
+        # therefore need an explicit contiguous interface boundary.
+        output = output.contiguous()
         return output.reshape(x.shape[0], -1) if input_was_flat else output
 
     def capacity_metadata(self) -> dict[str, object]:

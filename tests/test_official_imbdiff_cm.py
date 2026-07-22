@@ -198,6 +198,43 @@ def test_official_adapter_maps_batch_null_label_to_no_embedding() -> None:
     assert torch.equal(adapted, direct)
 
 
+def test_released_cm_objective_accepts_channels_last_model_outputs() -> None:
+    model = _tiny_model().to(memory_format=torch.channels_last)
+    objective = OfficialImbDiffObjective(
+        class_counts=(3, 1),
+        method="released_cm",
+        timesteps=8,
+        beta_start=1e-4,
+        beta_end=1e-2,
+        cfg=False,
+        transfer_x0=True,
+        image_shape=(3, 4, 4),
+    )
+    clean = torch.linspace(-1.0, 1.0, 2 * 3 * 4 * 4).reshape(2, -1)
+    labels = torch.tensor([0, 1])
+
+    torch.manual_seed(31)
+    loss, _ = objective(
+        model=model,
+        path=None,
+        x0=torch.zeros_like(clean),
+        x1=clean,
+        t=torch.zeros(2),
+        class_labels=labels,
+        original_class_labels=labels,
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    with torch.no_grad():
+        output = model(
+            clean.reshape(2, 3, 4, 4).to(memory_format=torch.channels_last),
+            torch.tensor([1, 2]),
+            y=labels,
+        )
+    assert output.is_contiguous()
+
+
 class _RecordingOfficialModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
