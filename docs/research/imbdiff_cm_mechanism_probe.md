@@ -1,6 +1,6 @@
 # ImbDiff-CM mechanism probe
 
-**Status:** implementation complete; server measurements pending.
+**Status:** completed on the 60k seed-0 matrix on 2026-07-22.
 
 The 60k comparison establishes that the released CM loss is effective in our
 controlled matrix. This follow-up asks a narrower mechanistic question: **what
@@ -85,6 +85,80 @@ This experiment does not identify intrinsic dimension or natural-image
 manifold geometry. Fourier bands are a descriptive probe of the learned
 correction, not a claim that spatial frequency is the unique relevant
 geometry.
+
+## Completed result
+
+All nine EMA checkpoints completed with the same 100 held-out images, five
+timesteps, noise rows, and OC transfer draws. The manifest SHA-256 is
+`509b47cc6a136f3010cc0e87d413ffa7593162996a7b00ded134f7bfe478a1ad`.
+The raw structured outputs remain under
+`/root/autodl-tmp/runs/imbdiff_matrix60k/cm_mechanism_probe/`.
+
+The primary 60k functional result is:
+
+| Group | Capacity-only distance | Released-CM distance | Capacity-only expert MSE gain | Released-CM expert MSE gain | Capacity-only high-frequency fraction | Released-CM high-frequency fraction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Many | 0.002422 | 0.00001022 | 0.003043 | 0.00002656 | 0.1964 | 0.1373 |
+| Medium | 0.002435 | 0.00001105 | 0.003083 | 0.00002052 | 0.1980 | 0.1351 |
+| Few | 0.002421 | 0.00001110 | 0.002776 | 0.00000474 | 0.1973 | 0.1320 |
+
+Across every paired row at 20k, 40k, and 60k, released CM had a smaller
+squared capacity-on/off distance than the capacity-only control. Its distance
+was only 0.40%--0.48% of the control, corresponding to an approximately
+15-times smaller RMS correction. Released CM also had a smaller pointwise
+expert MSE gain on more than 99% of paired rows. The full capacity-on denoising
+MSE was nevertheless almost identical between the two methods at 60k. Thus
+CM's large FID improvement is not explained by a larger expert correction or
+better held-out one-step denoising.
+
+The correction is not tail-specialized in the preregistered functional sense.
+At 60k its squared magnitude is only 8.6% larger for Few than Many classes,
+while its MSE benefit is 82% smaller for Few. Its Few-class correction also has
+a slightly lower, not higher, high-frequency fraction. `pure_cm` reproduces
+essentially the same local pattern despite its better generative FID.
+
+The gradient result needs two levels of interpretation:
+
+- At 20k, about 75% of the **CM-only gradient energy** lies in LoRA parameters,
+  although LoRA contains only about 8% of the probed parameters. CM therefore
+  does directly act on the expert branch.
+- The CM-only gradient is already small compared with the base gradient, and
+  its expert energy fraction falls to roughly 13%--19% by 60k as the branch
+  contracts. Under released CM, the **total-objective expert gradient energy**
+  is only about 0.01%--0.11% over the observed checkpoints and is not larger
+  for Few classes (the capacity-only control spans about 0.06%--0.16%).
+- Consistency and diversity gradients are nearly opposite because both are
+  the same branch-distance gradient multiplied by class-dependent scalars.
+  They do not independently select general and expert parameter subsets.
+
+The released coefficient makes the imbalance more explicit. For class
+probability `p_y` and normalized inverse probability `q_y`, the per-sample CM
+coefficient is `100 * (p_y - 0.2 q_y)`. In this IR100 split:
+
+| Group | Training sample mass | Mean per-class coefficient | Exposure-weighted signed coefficient mass |
+| --- | ---: | ---: | ---: |
+| Many | 0.8041 | +2.3440 | +2.2704 |
+| Medium | 0.1620 | +0.3907 | +0.0815 |
+| Few | 0.0339 | -0.3815 | -0.0091 |
+
+Consequently, the observed training distribution supplies roughly 250 times
+more signed head consistency mass than tail diversity mass. This matches the
+global contraction seen in the functional probe. The defensible mechanism at
+this scale is therefore **strong branch-consistency regularization with a weak
+tail counterforce**, not a clean routing of head updates into general weights
+and tail updates into reserved expert weights. The CM improvement remains
+real; this result narrows what can explain it to cumulative regularization,
+optimization of the shared branch, or a small correction whose rollout effect
+is not captured by one-step MSE.
+
+The most direct next intervention is an exposure-balanced signed coefficient:
+center the expected CM coefficient under the actual training distribution,
+then rescale its expected absolute magnitude to match the released loss. This
+tests the mechanism without reverse labels or shuffled class frequencies and
+is more targeted than another unrestricted weight sweep. Multiple held-out
+manifest seeds should precede training, although the roughly 200-fold squared-
+distance effect is too large and consistent to be plausibly caused by the
+single-image-per-class choice alone.
 
 ## Server commands
 
