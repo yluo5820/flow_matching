@@ -17,6 +17,7 @@ from fm_lab.integrations.official_imbdiff_cm import (
 )
 from fm_lab.paths import DiscreteDDPMPath
 from fm_lab.solvers import EulerSolver
+from fm_lab.training.losses import build_objective
 from fm_lab.training.trainer import train_flow_matching
 
 
@@ -419,6 +420,47 @@ def test_all_matrix_methods_compute_finite_gradients(
     assert torch.isfinite(loss)
     assert metrics["loss"] == pytest.approx(float(loss.detach()))
     assert any(parameter.grad is not None for parameter in model.parameters())
+
+
+@pytest.mark.parametrize(
+    ("method", "transfer_x0"),
+    [
+        ("ddpm", False),
+        ("cbdm", False),
+        ("oc", True),
+        ("released_cm", True),
+        ("pure_cm", False),
+        ("oc_capacity_only", True),
+    ],
+)
+def test_checkpoint_serialized_objective_names_rebuild(
+    method: str,
+    transfer_x0: bool,
+) -> None:
+    objective = build_objective(
+        {
+            "name": f"official_imbdiff_{method}",
+            "method": method,
+            "image_shape": [3, 4, 4],
+            "transfer": {"transfer_x0": transfer_x0},
+        },
+        diffusion_config={"timesteps": 8, "beta_end": 1e-2},
+        class_counts=(3, 1),
+    )
+
+    assert isinstance(objective, OfficialImbDiffObjective)
+    assert objective.method == method
+
+
+def test_checkpoint_serialized_objective_rejects_method_mismatch() -> None:
+    with pytest.raises(ValueError, match="disagrees"):
+        build_objective(
+            {
+                "name": "official_imbdiff_released_cm",
+                "method": "pure_cm",
+            },
+            class_counts=(3, 1),
+        )
 
 
 class _TinySource:

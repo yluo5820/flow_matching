@@ -726,6 +726,37 @@ def build_objective(
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
+    serialized_official_methods = {
+        "official_imbdiff_ddpm": "ddpm",
+        "official_imbdiff_cbdm": "cbdm",
+        "official_imbdiff_oc": "oc",
+        "official_imbdiff_released_cm": "released_cm",
+        "official_imbdiff_pure_cm": "pure_cm",
+        "official_imbdiff_oc_capacity_only": "oc_capacity_only",
+    }
+    serialized_method = serialized_official_methods.get(name)
+    if serialized_method is not None:
+        configured_method = str(config.get("method", serialized_method)).lower()
+        configured_method = configured_method.replace("-", "_")
+        method_aliases = {
+            "baseline": "ddpm",
+            "cm": "released_cm",
+            "cm_released": "released_cm",
+            "pure": "pure_cm",
+            "cm_pure": "pure_cm",
+            "capacity_only": "oc_capacity_only",
+            "oc_capacity": "oc_capacity_only",
+        }
+        configured_method = method_aliases.get(configured_method, configured_method)
+        if configured_method != serialized_method:
+            raise ValueError(
+                "Serialized official ImbDiff objective name disagrees with "
+                f"objective.method: {name!r} versus {configured_method!r}."
+            )
+        config = dict(config)
+        config["name"] = "official_imbdiff"
+        config["method"] = serialized_method
+        name = "official_imbdiff"
     if name in {
         "official_imbdiff",
         "imbdiff_official",
