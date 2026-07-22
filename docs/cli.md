@@ -279,6 +279,10 @@ Use `--generated-cache` with `--real-cache` to recompute reports without
 rerunning Inception feature extraction. The exact TensorFlow-FID weight file is
 required; the command never substitutes torchvision ImageNet weights.
 
+For a fast multi-method screen, `--skip-recall --skip-classwise-fid` omits the
+two expensive diagnostics while retaining overall FID/KID, Inception Score,
+and pooled Many/Medium/Few FID. The default remains the complete report.
+
 ## `fm-lab-sampling-timesteps`
 
 Generate a Geometry Explorer dataset whose class labels identify sampling timesteps:
