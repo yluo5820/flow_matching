@@ -33,6 +33,21 @@ class OfficialImbDiffCMComponents:
     cm_sampler: type[nn.Module]
 
 
+@dataclass(frozen=True)
+class OfficialImbDiffCMProbeTerms:
+    """Differentiable released-CM terms for a fixed noisy batch."""
+
+    noisy: torch.Tensor
+    target: torch.Tensor
+    capacity_on: torch.Tensor
+    capacity_off: torch.Tensor
+    base_per_sample: torch.Tensor
+    distance_per_sample: torch.Tensor
+    consistency_per_sample: torch.Tensor
+    diversity_per_sample: torch.Tensor
+    total_per_sample: torch.Tensor
+
+
 @lru_cache(maxsize=1)
 def load_official_imbdiff_cm_components() -> OfficialImbDiffCMComponents:
     """Load the release package without copying or rewriting its equations."""
@@ -474,6 +489,125 @@ class OfficialImbDiffObjective:
     @property
     def sampler_family(self) -> str:
         return "cm" if self.uses_capacity_model else "standard"
+
+    def probe_terms(
+        self,
+        *,
+        model: nn.Module,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise: torch.Tensor,
+        transfer_seed: int | None = None,
+    ) -> OfficialImbDiffCMProbeTerms:
+        """Expose the exact CM decomposition without sampling hidden randomness.
+
+        The caller fixes the examples, discrete timesteps, and Gaussian noise.
+        Classifier-free dropout is intentionally disabled because the mechanism
+        probe compares class-frequency strata. When OC endpoint transfer is part
+        of the method, ``transfer_seed`` fixes the release's multinomial draw.
+        """
+
+        if not self.uses_capacity_model:
+            raise ValueError("CM probe terms require an official capacity model method.")
+        if not bool(getattr(model, "is_official_imbdiff_cm", False)):
+            raise ValueError("CM probe terms require the official CM U-Net.")
+        if clean.ndim != 4 or tuple(clean.shape[1:]) != self.image_shape:
+            raise ValueError(
+                "CM probe clean images must be NCHW with shape "
+                f"{self.image_shape}."
+            )
+        if noise.shape != clean.shape:
+            raise ValueError("CM probe noise must match the clean image tensor.")
+        batch_size = clean.shape[0]
+        if labels.shape != (batch_size,) or timesteps.shape != (batch_size,):
+            raise ValueError("CM probe labels and timesteps must match the batch size.")
+        labels = labels.to(device=clean.device, dtype=torch.long)
+        timesteps = timesteps.to(device=clean.device, dtype=torch.long)
+        if bool((timesteps < 0).any()) or bool((timesteps >= self.timesteps).any()):
+            raise ValueError("CM probe timesteps are outside the diffusion schedule.")
+        noise = noise.to(device=clean.device, dtype=clean.dtype)
+        coefficient_shape = (batch_size,) + (1,) * (clean.ndim - 1)
+        signal = self._sqrt_alpha_bars.to(device=clean.device, dtype=clean.dtype)[
+            timesteps
+        ].reshape(coefficient_shape)
+        sigma = self._sqrt_one_minus_alpha_bars.to(
+            device=clean.device,
+            dtype=clean.dtype,
+        )[timesteps].reshape(coefficient_shape)
+        noisy = signal * clean + sigma * noise
+
+        capacity_on = model(noisy, timesteps, y=labels, augm=None, use_cm=True)
+        capacity_off = model(noisy, timesteps, y=labels, augm=None, use_cm=False)
+        target = noise
+        if self.transfer_x0:
+            trainer = self._trainer_for(model, clean.device)
+            sigma_t = torch.sqrt(torch.clamp(signal.reciprocal().square() - 1.0, min=0.0))
+            cx_t = clean + sigma_t * noise
+            devices: list[int] = []
+            if clean.device.type == "cuda":
+                devices = [
+                    clean.device.index
+                    if clean.device.index is not None
+                    else torch.cuda.current_device()
+                ]
+            with torch.random.fork_rng(devices=devices):
+                if transfer_seed is not None:
+                    torch.manual_seed(int(transfer_seed))
+                if self.transfer_tr_tau:
+                    target = trainer.do_transfer_x0_with_y(
+                        noisy,
+                        cx_t,
+                        clean,
+                        timesteps,
+                        labels,
+                        trainer.label_weight_tr,
+                    )
+                else:
+                    target, _ = trainer.do_transfer_x0(
+                        noisy,
+                        cx_t,
+                        clean,
+                        timesteps,
+                        labels,
+                        return_transfer_label=True,
+                    )
+
+        base_per_sample = (capacity_on - target).square().flatten(1).mean(1)
+        distance_per_sample = (
+            (capacity_off - capacity_on).square().flatten(1).mean(1)
+        )
+        probabilities = torch.tensor(
+            self.class_counts,
+            device=clean.device,
+            dtype=capacity_on.dtype,
+        )
+        probabilities = probabilities / probabilities.sum()
+        inverse_probabilities = probabilities.reciprocal()
+        inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
+        class_scale = float(len(self.class_counts))
+        consistency_per_sample = (
+            class_scale * probabilities[labels] * distance_per_sample
+        )
+        diversity_per_sample = (
+            -class_scale * inverse_probabilities[labels] * distance_per_sample
+        )
+        total_per_sample = (
+            base_per_sample
+            + self.consistency_weight * consistency_per_sample
+            + self.diversity_weight * diversity_per_sample
+        )
+        return OfficialImbDiffCMProbeTerms(
+            noisy=noisy,
+            target=target,
+            capacity_on=capacity_on,
+            capacity_off=capacity_off,
+            base_per_sample=base_per_sample,
+            distance_per_sample=distance_per_sample,
+            consistency_per_sample=consistency_per_sample,
+            diversity_per_sample=diversity_per_sample,
+            total_per_sample=total_per_sample,
+        )
 
     def _cbdm_loss(
         self,

@@ -160,6 +160,11 @@ within-matrix statement that the CM allocation loss is already effective at
 60k; it does not establish converged method rankings or uncertainty across
 training seeds.
 
+The next stage is the checkpoint-based
+[CM mechanism probe](research/imbdiff_cm_mechanism_probe.md), which tests
+whether the learned expert branch actually receives frequency-dependent
+head/tail specialization and whether that correction is spectrally selective.
+
 ## References
 
 - [Capacity Manipulation for Imbalanced Image Generation](https://openreview.net/forum?id=wSGle6ag5I)

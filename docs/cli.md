@@ -47,6 +47,7 @@ When adding or changing a CLI:
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
+| `fm-lab-imbdiff-cm-probe` | Probe learned CM capacity allocation. | Official CM run directories and checkpoints | Paired functional, Fourier, and gradient-routing reports |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
 | `fm-lab-fashion-geometry-frequency` | Run the gated Fashion-MNIST geometry-by-frequency bridge. | Frozen Stage-0 or Stage-1 YAML | geometry gate, all-class cyclic configs, budget gate, evaluations, response analysis |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
@@ -282,6 +283,35 @@ required; the command never substitutes torchvision ImageNet weights.
 For a fast multi-method screen, `--skip-recall --skip-classwise-fid` omits the
 two expensive diagnostics while retaining overall FID/KID, Inception Score,
 and pooled Many/Medium/Few FID. The default remains the complete report.
+
+## `fm-lab-imbdiff-cm-probe`
+
+Probe existing official ImbDiff-CM checkpoints without retraining. Held-out
+CIFAR rows, Gaussian noise, discrete timesteps, and OC transfer draws are fixed
+in a reusable manifest. The command compares capacity-on and capacity-off
+predictions and separately measures gradients from the denoising, consistency,
+and diversity terms into general and LoRA parameters.
+
+```bash
+fm-lab-imbdiff-cm-probe \
+  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/oc_capacity_only \
+  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm \
+  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/pure_cm \
+  --checkpoint-steps 20000,40000,60000 \
+  --timesteps 50,250,500,750,950 \
+  --samples-per-class 1 \
+  --weights ema \
+  --mixed-precision auto \
+  --channels-last on \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_mechanism_probe
+```
+
+Use `--functional-only --checkpoint-steps 60000 --timesteps 500` for a quick
+end-to-end smoke. The full probe writes `manifest.json`, `summary.json`,
+`functional_rows.csv`, `gradient_summary.csv`, per-checkpoint JSON reports,
+and a compact `report.md`. Existing output manifests are reused and checked by
+SHA-256 so checkpoint comparisons remain paired.
 
 ## `fm-lab-sampling-timesteps`
 
