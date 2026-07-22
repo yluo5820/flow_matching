@@ -88,34 +88,41 @@ geometry.
 
 ## Completed result
 
-All nine EMA checkpoints completed with the same 100 held-out images, five
-timesteps, noise rows, and OC transfer draws. The manifest SHA-256 is
+The temporal probe covered all nine EMA checkpoints with the same 100 held-out
+images, five timesteps, noise rows, and OC transfer draws. The original
+manifest SHA-256 is
 `509b47cc6a136f3010cc0e87d413ffa7593162996a7b00ded134f7bfe478a1ad`.
-The raw structured outputs remain under
-`/root/autodl-tmp/runs/imbdiff_matrix60k/cm_mechanism_probe/`.
+Four additional independently seeded manifests then repeated the primary
+60k contrast. The raw structured outputs remain under
+`/root/autodl-tmp/runs/imbdiff_matrix60k/cm_mechanism_probe/` and the four
+matching `cm_mechanism_probe_seed_*` directories.
 
-The primary 60k functional result is:
+The primary 60k functional result below is the mean over five probe seeds; the
+parenthesized value is the between-seed standard deviation:
 
 | Group | Capacity-only distance | Released-CM distance | Capacity-only expert MSE gain | Released-CM expert MSE gain | Capacity-only high-frequency fraction | Released-CM high-frequency fraction |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Many | 0.002422 | 0.00001022 | 0.003043 | 0.00002656 | 0.1964 | 0.1373 |
-| Medium | 0.002435 | 0.00001105 | 0.003083 | 0.00002052 | 0.1980 | 0.1351 |
-| Few | 0.002421 | 0.00001110 | 0.002776 | 0.00000474 | 0.1973 | 0.1320 |
+| Many | 0.002490 (0.000077) | 0.00001053 (0.00000035) | 0.003061 (0.000115) | 0.00002540 (0.00000752) | 0.1942 (0.0019) | 0.1364 (0.0013) |
+| Medium | 0.002443 (0.000025) | 0.00001099 (0.00000015) | 0.003067 (0.000081) | 0.00002128 (0.00000473) | 0.1972 (0.0010) | 0.1339 (0.0013) |
+| Few | 0.002436 (0.000043) | 0.00001116 (0.00000025) | 0.002907 (0.000115) | 0.00001363 (0.0000116) | 0.1957 (0.0014) | 0.1327 (0.0010) |
 
 Across every paired row at 20k, 40k, and 60k, released CM had a smaller
 squared capacity-on/off distance than the capacity-only control. Its distance
 was only 0.40%--0.48% of the control, corresponding to an approximately
-15-times smaller RMS correction. Released CM also had a smaller pointwise
-expert MSE gain on more than 99% of paired rows. The full capacity-on denoising
-MSE was nevertheless almost identical between the two methods at 60k. Thus
-CM's large FID improvement is not explained by a larger expert correction or
-better held-out one-step denoising.
+15-times smaller RMS correction. In the five-seed 60k replication, released CM
+had a smaller correction, smaller expert MSE gain, and lower high-frequency
+fraction in every one of the 500 paired class-seed units after averaging each
+class over timesteps. The full capacity-on denoising MSE differed by less than
+0.3% between methods. Thus CM's large FID improvement is not explained by a
+larger expert correction or materially better held-out one-step denoising.
 
 The correction is not tail-specialized in the preregistered functional sense.
-At 60k its squared magnitude is only 8.6% larger for Few than Many classes,
-while its MSE benefit is 82% smaller for Few. Its Few-class correction also has
-a slightly lower, not higher, high-frequency fraction. `pure_cm` reproduces
-essentially the same local pattern despite its better generative FID.
+Across seeds, the Few/Many squared-magnitude ratio averages 1.061 but ranges
+from 0.978 to 1.086, so even its direction is not fully stable. The Few-minus-
+Many MSE gain also changes sign across manifests and averages `-1.18e-5`.
+The Few-class high-frequency fraction is lower in all five manifests, by
+0.00377 on average. `pure_cm` reproduces essentially the same local pattern in
+the original temporal probe despite its better generative FID.
 
 The gradient result needs two levels of interpretation:
 
@@ -127,6 +134,9 @@ The gradient result needs two levels of interpretation:
   contracts. Under released CM, the **total-objective expert gradient energy**
   is only about 0.01%--0.11% over the observed checkpoints and is not larger
   for Few classes (the capacity-only control spans about 0.06%--0.16%).
+  Across the five final-checkpoint probes, CM-only expert energy is 14.7%--16.0%
+  for every frequency group and total-objective expert energy is approximately
+  0.015%, again with no Few-class preference.
 - Consistency and diversity gradients are nearly opposite because both are
   the same branch-distance gradient multiplied by class-dependent scalars.
   They do not independently select general and expert parameter subsets.
@@ -151,14 +161,14 @@ real; this result narrows what can explain it to cumulative regularization,
 optimization of the shared branch, or a small correction whose rollout effect
 is not captured by one-step MSE.
 
-The most direct next intervention is an exposure-balanced signed coefficient:
+The multi-seed replication satisfies the planned robustness check. The most
+direct next intervention is now an exposure-balanced signed coefficient:
 center the expected CM coefficient under the actual training distribution,
 then rescale its expected absolute magnitude to match the released loss. This
 tests the mechanism without reverse labels or shuffled class frequencies and
-is more targeted than another unrestricted weight sweep. Multiple held-out
-manifest seeds should precede training, although the roughly 200-fold squared-
-distance effect is too large and consistent to be plausibly caused by the
-single-image-per-class choice alone.
+is more targeted than another unrestricted weight sweep. The roughly 200-fold
+squared-distance effect is stable enough that further held-out-only probing is
+unlikely to change the mechanistic decision.
 
 ## Server commands
 
