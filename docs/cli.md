@@ -49,6 +49,7 @@ When adding or changing a CLI:
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-imbdiff-cm-probe` | Probe learned CM capacity allocation. | Official CM run directories and checkpoints | Paired functional, Fourier, and gradient-routing reports |
 | `fm-lab-imbdiff-cm-dropout-probe` | Separate expert and dropout contributions to the CM branch distance. | One official CM checkpoint | Independent/paired/disabled-dropout distances and gradient comparisons |
+| `fm-lab-imbdiff-cm-knowledge-probe` | Test what class, superclass, frequency, and spectral information is present in local CM expert responses. | One official CM checkpoint | Layerwise response atlas, cross-fit linear probes, null controls, and class-subspace graph |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
 | `fm-lab-fashion-geometry-frequency` | Run the gated Fashion-MNIST geometry-by-frequency bridge. | Frozen Stage-0 or Stage-1 YAML | geometry gate, all-class cyclic configs, budget gate, evaluations, response analysis |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
@@ -345,6 +346,79 @@ Outputs are `manifest.json`, `summary.json`, `functional_rows.csv`, optional
 disabled distances to the released independent-mask distance are descriptive:
 squared distances contain cross terms and are not an additive causal variance
 decomposition.
+
+## `fm-lab-imbdiff-cm-knowledge-probe`
+
+Run the K1/K2 expert-knowledge diagnostic after the dropout control has been
+validated. The model is held in evaluation mode, so the recorded local response
+
+```text
+e_l = Conv2d(input_activation, B_l @ A_l)
+```
+
+is not contaminated by different dropout masks. Every adapted convolution is
+checked against the corresponding full-minus-general preactivation. Compact
+normalized sketches retain channel, spatial, low-pass, and high-pass response
+structure without saving dense intermediate feature maps.
+
+A six-class smoke run is:
+
+```bash
+fm-lab-imbdiff-cm-knowledge-probe \
+  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
+  --timesteps 100,500,900 \
+  --classes auto \
+  --classes-per-group 2 \
+  --samples-per-class 2 \
+  --max-layers 4 \
+  --permutation-repeats 3 \
+  --weights ema \
+  --channels-last on \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_smoke
+```
+
+The primary all-class K1/K2 run is:
+
+```bash
+fm-lab-imbdiff-cm-knowledge-probe \
+  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
+  --timesteps 100,500,900 \
+  --classes all \
+  --samples-per-class 4 \
+  --batch-size 25 \
+  --sketch-dim 32 \
+  --permutation-repeats 10 \
+  --subspace-rank 3 \
+  --weights ema \
+  --channels-last on \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2
+```
+
+The two cross-fit folds contain different held-out CIFAR-100 images from every
+fine class. Linear probes predict fine class, coarse superclass, and
+Many/Medium/Few group from full, low-pass, and high-pass expert sketches. Each
+result includes label-permutation and matched-random-feature nulls. K2 compares
+class-conditioned response subspaces, including within/across-superclass and
+head/medium/tail relations.
+
+Main outputs are:
+
+```text
+manifest.json
+summary.json
+report.md
+response_descriptors.csv
+response_atlas.npz
+linear_probes.csv
+subspace_summary.csv
+subspace_pairs.npz
+```
+
+Linear separability and subspace overlap are descriptive evidence of encoded
+structure, not causal evidence that the model uses a direction during sampling.
+Only stable directions should be promoted to the matched K4 interventions.
 
 ## `fm-lab-sampling-timesteps`
 

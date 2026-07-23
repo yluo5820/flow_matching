@@ -934,10 +934,19 @@ Compute: none.
 
 ### Phase 1 — paired-dropout diagnostic
 
-**Implementation status (2026-07-23):** structured graph-connected CM terms,
-the faithful independent-mask path, paired/disabled controls, a checkpoint CLI,
-and unit controls are implemented. The real 60k checkpoint diagnostic remains
-to be run before Phase 2 begins.
+**Completed status (2026-07-23):** structured graph-connected CM terms, the
+faithful independent-mask path, paired/disabled controls, checkpoint CLI, and
+unit controls are implemented and were run on the released-CM 60k checkpoint.
+Across timesteps 100, 500, and 900, the paired capacity distance was only
+1.7%--3.5% of the released independent-mask distance, while two independent
+general-only passes reproduced 92.4%--97.9% of that distance. The
+general-only distance gradient was 97%--99% cosine-aligned with the released
+independent-mask distance gradient. These squared-distance ratios are
+descriptive rather than additive, and the gradient check differentiates the
+raw branch distance rather than the complete class-weighted training loss.
+Nevertheless, independent dropout is a material confound. Knowledge probes
+therefore disable dropout, while later dynamics probes must retain both the
+faithful independent condition and a matched-mask counterfactual.
 
 Implementation:
 
@@ -968,6 +977,15 @@ Decision:
 Compute tier: local or short server diagnostic, expected below 30 minutes.
 
 ### Phase 2 — expert knowledge probe
+
+**Implementation status (2026-07-24):** the first K1/K2 slice is implemented.
+It captures every local `Conv2d_LoRA` response, verifies the local
+full-minus-general preactivation identity, writes compact normalized full,
+low-pass, and high-pass sketches, and runs disjoint-image two-way cross-fit
+ridge probes for fine class, coarse superclass, and frequency group with both
+label-permutation and matched-random-feature nulls. It also exports
+class-conditioned subspace overlaps and principal angles. The real checkpoint
+smoke and all-class K1/K2 run remain to be executed before K3/K4.
 
 Implementation:
 
@@ -1237,17 +1255,22 @@ implementations.
 
 ## 16. Immediate next implementation slice
 
-The first code change should be deliberately narrow:
+The dropout diagnostic and first K1/K2 implementation slice are complete. The
+next execution and implementation order is:
 
-1. add graph-preserving structured CM terms without changing the scalar loss;
-2. add paired versus independent dropout control;
-3. add a diagnostic CLI and exact unit tests;
-4. run the checkpoint-level dropout decomposition;
-5. only then implement the expert-response hook and knowledge probe.
+1. run the six-class/four-layer K1/K2 smoke and inspect reconstruction errors,
+   artifact sizes, and null behavior;
+2. run the all-class K1/K2 atlas on the 60k checkpoint;
+3. if class/superclass/subspace structure is stable, repeat K1/K2 at 20k and
+   40k before implementing K3 trajectory projections;
+4. begin Phase 3 training-dynamics instrumentation in parallel with the
+   checkpoint interpretation, retaining both faithful independent-dropout and
+   paired-mask gradient signatures;
+5. implement K4 interventions only for directions that survive the
+   permutation/random controls and checkpoint comparison.
 
-This order resolves a potentially important confound before building the more
-expensive interpretation stack and creates the structured loss interface needed
-by the later training observer.
+This order prevents final response magnitude and stochastic dropout variation
+from being mistaken for learned expert knowledge.
 
 ## References
 
