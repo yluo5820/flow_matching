@@ -188,7 +188,7 @@ def render_expert_residual_grid(
     fig, axes = plt.subplots(
         n_rows,
         3,
-        figsize=(8.2, max(2.0, 1.68 * n_rows)),
+        figsize=(10.8, max(2.0, 1.68 * n_rows)),
         squeeze=False,
     )
     for row_index, selection in enumerate(selected):
@@ -233,19 +233,27 @@ def render_expert_residual_grid(
                 axis.spines["top"].set_visible(True)
                 axis.spines["top"].set_linewidth(2.0)
                 axis.spines["top"].set_color("0.15")
-    axes[0, 0].set_title("General only", fontsize=11)
+    axes[0, 0].set_title("General only", fontsize=10, pad=8)
     axes[0, 1].set_title(
         "Expert residual: full − general\n"
         f"gray = 0, shared ±q{100 * residual_quantile:.1f} = {residual_scale:.4f}",
-        fontsize=9,
+        fontsize=8.5,
+        pad=8,
     )
-    axes[0, 2].set_title("Full parameters", fontsize=11)
+    axes[0, 2].set_title("Full parameters", fontsize=10, pad=8)
     fig.suptitle(
         "ImbDiff-CM paired expert effect at identical class labels and initial noise",
         fontsize=12,
-        y=0.995,
+        y=0.985,
     )
-    fig.tight_layout(rect=(0.15, 0.0, 1.0, 0.975), h_pad=0.35, w_pad=0.25)
+    fig.subplots_adjust(
+        left=0.28,
+        right=0.985,
+        bottom=0.02,
+        top=0.91,
+        hspace=0.04,
+        wspace=0.12,
+    )
     fig.savefig(output_path, dpi=int(dpi), bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
