@@ -258,3 +258,27 @@ orientation, but the result does not show that its exact orientation is
 uniquely necessary. FID gain is also smaller for Few than Many classes, while
 the KID tail contrast has the opposite small sign, leaving no
 metric-consistent evidence of tail specialization.
+
+## Sixteen-orientation follow-up
+
+The larger 2k/KID orientation screen is documented in
+[`results/official_imbdiff_matrix60k/cm_sampling_orientation16_kid2k.md`](results/official_imbdiff_matrix60k/cm_sampling_orientation16_kid2k.md).
+
+Learned ranks fifth among itself and 16 endpoint-response-calibrated randomized
+experts. It beats the random median and 12 of 16 random orientations, but four
+random orientations beat it. Random 0 remains strong, while two new rotations
+are better and another nearly ties it. Twelve random orientations also improve
+over general-only.
+
+The orientation spread is not explained by endpoint amplitude: Spearman
+correlation between main-run RMS ratio and KID gain is `-0.018`
+(`p=0.948`). Weak, uncorrected trends associate better quality with residuals
+closer to the learned residual and with more mid/high-frequency response, but
+16 rotations do not resolve either hypothesis.
+
+The updated conclusion is that rank/spectrum/response-matched capacity often
+provides a generic benefit, while subspace orientation materially modulates
+that benefit. CM's learned orientation is better than typical but is not
+uniquely privileged, and its explicit expert effect remains smaller for Few
+than Many classes. A designed alignment/frequency intervention is more
+informative than simply screening additional random rotations.
