@@ -485,7 +485,11 @@ class_summary.csv
 Runs learned, general-only, and response-calibrated spectrum-random experts
 from identical balanced CIFAR-100 labels and identical DDIM initial noise. The
 bounded `kid` mode is intended as a screen; use `full` with 100 samples per
-class for the confirmatory FID protocol.
+class for the confirmatory FID protocol. By default, an independent
+one-sample-per-class pilot adjusts the local-probe random scales so each fixed
+random expert also matches the learned expert's full-trajectory endpoint RMS.
+Use `--endpoint-calibration-samples-per-class 0` only for the uncorrected
+local-scale sensitivity run.
 
 ```bash
 fm-lab-imbdiff-cm-sampling-intervention \

@@ -56,6 +56,7 @@ def sample_matched_cm_interventions(
     batch_size: int,
     random_repeats: int,
     seed: int,
+    input_seed: int | None = None,
     response_scales: Mapping[int, float] | None = None,
     mixed_precision: str = "off",
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
@@ -69,11 +70,12 @@ def sample_matched_cm_interventions(
     model = restored.model
     class_counts = tuple(int(value) for value in objective.class_counts)
     image_shape = tuple(int(value) for value in objective.image_shape)
+    resolved_input_seed = int(seed if input_seed is None else input_seed)
     labels, initial_noise = matched_sampling_inputs(
         num_classes=len(class_counts),
         samples_per_class=samples_per_class,
         image_shape=image_shape,
-        seed=seed,
+        seed=resolved_input_seed,
     )
     settings = _sampling_settings(restored)
     device = next(model.parameters()).device
@@ -168,7 +170,8 @@ def sample_matched_cm_interventions(
         "num_samples": int(len(labels)),
         "batch_size": int(batch_size),
         "random_repeats": int(random_repeats),
-        "seed": int(seed),
+        "intervention_seed": int(seed),
+        "input_seed": resolved_input_seed,
         "labels_sha256": _tensor_digest(labels),
         "initial_noise_sha256": _tensor_digest(initial_noise),
         "sampling": settings,
@@ -181,6 +184,56 @@ def sample_matched_cm_interventions(
     conditions["labels"] = labels
     conditions["initial_noise"] = initial_noise
     return conditions, manifest
+
+
+def endpoint_response_scales(
+    condition_samples: Mapping[str, torch.Tensor],
+    *,
+    base_scales: Mapping[int, float],
+) -> tuple[dict[int, float], dict[str, Any]]:
+    """Calibrate fixed random experts to the learned trajectory endpoint RMS."""
+
+    learned = condition_samples["learned"].float()
+    general = condition_samples["general"].float()
+    learned_rms = float((learned - general).square().mean().sqrt())
+    if not np.isfinite(learned_rms) or learned_rms <= 0.0:
+        raise ValueError("Learned endpoint response RMS must be finite and positive.")
+    calibrated = {}
+    rows = []
+    for repeat, base_scale in sorted(
+        (int(key), float(value)) for key, value in base_scales.items()
+    ):
+        condition = f"random_{repeat:02d}"
+        if condition not in condition_samples:
+            raise ValueError(f"Endpoint calibration is missing condition {condition}.")
+        random_samples = condition_samples[condition].float()
+        if random_samples.shape != general.shape:
+            raise ValueError("Endpoint calibration samples must have matching shapes.")
+        random_rms = float((random_samples - general).square().mean().sqrt())
+        if not np.isfinite(random_rms) or random_rms <= 0.0:
+            raise ValueError("Random endpoint response RMS must be finite and positive.")
+        endpoint_ratio = learned_rms / random_rms
+        calibrated_scale = base_scale * endpoint_ratio
+        calibrated[repeat] = calibrated_scale
+        rows.append(
+            {
+                "random_repeat": repeat,
+                "base_scale": base_scale,
+                "learned_endpoint_rms": learned_rms,
+                "random_endpoint_rms": random_rms,
+                "endpoint_ratio": endpoint_ratio,
+                "calibrated_scale": calibrated_scale,
+            }
+        )
+    return calibrated, {
+        "method": (
+            "One independent matched DDIM pilot applies each locally calibrated random "
+            "expert, then multiplies its fixed expert-weight scale by learned endpoint "
+            "RMS divided by random endpoint RMS."
+        ),
+        "learned_endpoint_rms": learned_rms,
+        "conditions": rows,
+    }
 
 
 def paired_sampling_effects(

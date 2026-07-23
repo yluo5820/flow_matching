@@ -8,6 +8,7 @@ import torch
 
 from fm_lab.diagnostics.imbdiff_cm_probe import RestoredImbDiffCMCheckpoint
 from fm_lab.diagnostics.imbdiff_cm_sampling import (
+    endpoint_response_scales,
     matched_sampling_inputs,
     quality_contrasts,
     sample_matched_cm_interventions,
@@ -126,6 +127,8 @@ def test_sampling_interventions_reuse_inputs_and_restore_factors(monkeypatch) ->
         "initial_noise",
     }
     assert manifest["restoration_verified"] is True
+    assert manifest["input_seed"] == 19
+    assert manifest["intervention_seed"] == 19
     assert manifest["conditions"][1]["response_scale"] == 0.5
     assert manifest["conditions"][2]["response_scale"] == 0.75
     assert not torch.equal(payload["learned"], payload["general"])
@@ -134,6 +137,26 @@ def test_sampling_interventions_reuse_inputs_and_restore_factors(monkeypatch) ->
             original_a, original_b = originals[name]
             assert torch.equal(module.lora_A, original_a)
             assert torch.equal(module.lora_B, original_b)
+
+
+def test_endpoint_response_scales_match_global_endpoint_rms() -> None:
+    general = torch.zeros(2, 1, 2, 2)
+    learned = torch.full_like(general, 2.0)
+    random_00 = torch.full_like(general, 4.0)
+    random_01 = torch.full_like(general, 1.0)
+
+    scales, audit = endpoint_response_scales(
+        {
+            "learned": learned,
+            "general": general,
+            "random_00": random_00,
+            "random_01": random_01,
+        },
+        base_scales={0: 0.8, 1: 0.6},
+    )
+
+    assert scales == {0: 0.4, 1: 1.2}
+    assert audit["learned_endpoint_rms"] == 2.0
 
 
 def test_response_scale_loader_deduplicates_probe_rows(tmp_path: Path) -> None:

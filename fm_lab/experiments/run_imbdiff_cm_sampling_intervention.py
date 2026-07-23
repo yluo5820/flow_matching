@@ -14,6 +14,7 @@ import torch
 
 from fm_lab.diagnostics.imbdiff_cm_probe import restore_imbdiff_cm_probe_checkpoint
 from fm_lab.diagnostics.imbdiff_cm_sampling import (
+    endpoint_response_scales,
     paired_sampling_effects,
     quality_contrasts,
     sample_matched_cm_interventions,
@@ -46,6 +47,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--bootstrap-repeats", type=int, default=2000)
+    parser.add_argument(
+        "--endpoint-calibration-samples-per-class",
+        type=int,
+        default=1,
+        help=(
+            "Independent balanced DDIM pilot size used to match random and learned "
+            "endpoint response RMS. Set to 0 to retain only local-probe calibration."
+        ),
+    )
     parser.add_argument(
         "--mixed-precision",
         choices=("auto", "off", "bf16", "fp16"),
@@ -93,11 +103,40 @@ def main(argv: list[str] | None = None) -> None:
         channels_last=channels_last,
         checkpoint_payload=payload,
     )
-    response_scales = (
+    local_response_scales = (
         load_response_scales(args.random_effects, random_repeats=args.random_repeats)
         if args.random_effects
-        else {}
+        else {repeat: 1.0 for repeat in range(args.random_repeats)}
     )
+    endpoint_calibration: dict[str, Any] = {"enabled": False}
+    response_scales = local_response_scales
+    if args.endpoint_calibration_samples_per_class > 0:
+        calibration_input_seed = args.seed + 104_729
+        calibration_payload, calibration_manifest = sample_matched_cm_interventions(
+            restored,
+            samples_per_class=args.endpoint_calibration_samples_per_class,
+            batch_size=args.sample_batch_size,
+            random_repeats=args.random_repeats,
+            seed=args.seed,
+            input_seed=calibration_input_seed,
+            response_scales=local_response_scales,
+            mixed_precision=args.mixed_precision,
+        )
+        calibration_payload.pop("labels")
+        calibration_payload.pop("initial_noise")
+        response_scales, endpoint_calibration = endpoint_response_scales(
+            calibration_payload,
+            base_scales=local_response_scales,
+        )
+        endpoint_calibration.update(
+            {
+                "enabled": True,
+                "samples_per_class": int(args.endpoint_calibration_samples_per_class),
+                "input_seed": int(calibration_input_seed),
+                "labels_sha256": calibration_manifest["labels_sha256"],
+                "initial_noise_sha256": calibration_manifest["initial_noise_sha256"],
+            }
+        )
     condition_payload, intervention_manifest = sample_matched_cm_interventions(
         restored,
         samples_per_class=args.samples_per_class,
@@ -128,7 +167,11 @@ def main(argv: list[str] | None = None) -> None:
         np.save(samples_dir / f"{condition}.npy", samples.numpy())
     intervention_manifest["response_scale_calibration"] = {
         "source": str(Path(args.random_effects).resolve()) if args.random_effects else None,
+        "local_probe_scales": {
+            str(key): value for key, value in sorted(local_response_scales.items())
+        },
         "scales": {str(key): value for key, value in sorted(response_scales.items())},
+        "endpoint_calibration": endpoint_calibration,
     }
     _write_json(output_dir / "sampling_manifest.json", intervention_manifest)
     _write_csv(output_dir / "paired_effects.csv", paired_rows)
@@ -159,6 +202,9 @@ def main(argv: list[str] | None = None) -> None:
             "feature_batch_size": int(args.feature_batch_size),
             "random_repeats": int(args.random_repeats),
             "bootstrap_repeats": int(args.bootstrap_repeats),
+            "endpoint_calibration_samples_per_class": int(
+                args.endpoint_calibration_samples_per_class
+            ),
             "mixed_precision": str(args.mixed_precision),
             "channels_last": bool(channels_last),
             "evaluation": str(args.evaluation),
@@ -170,6 +216,7 @@ def main(argv: list[str] | None = None) -> None:
             "initial_noise_sha256": intervention_manifest["initial_noise_sha256"],
             "conditions": sorted(condition_payload),
         },
+        "response_scale_calibration": intervention_manifest["response_scale_calibration"],
         "paired_output_summary": paired_groups,
         "condition_metrics": condition_metrics,
         "quality_contrasts": (quality_contrasts(condition_metrics) if condition_metrics else {}),
@@ -320,6 +367,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     invalid = [name for name, value in positive.items() if int(value) < 1]
     if invalid:
         raise ValueError("Positive values required for " + ", ".join(invalid))
+    if int(args.endpoint_calibration_samples_per_class) < 0:
+        raise ValueError("--endpoint-calibration-samples-per-class cannot be negative.")
     if args.evaluation != "none" and (not args.real_cache or not args.inception_weights):
         raise ValueError(
             "--real-cache and --inception-weights are required when evaluation is enabled."

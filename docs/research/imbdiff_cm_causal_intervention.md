@@ -206,10 +206,20 @@ accuracy. The bounded screen instead uses:
 
 For each random repeat, the screen averages the target-free response-match
 scalars from the prior local probe over its three timesteps, then multiplies
-all randomized expert \(B\) factors by that one scalar before sampling. Unlike
-the earlier post-hoc output rescaling, this is a realizable fixed-weight
-intervention throughout the trajectory. It preserves the randomized
-subspace/singular-spectrum shape but calibrates its global amplitude.
+all randomized expert \(B\) factors by that one scalar in an independent
+one-sample-per-class DDIM pilot. Because local response matching need not
+survive composition through the full trajectory, the pilot then multiplies
+each fixed random expert scale by
+
+\[
+\frac{\operatorname{RMS}(x_L-x_G)}
+{\operatorname{RMS}(x_R-x_G)}.
+\]
+
+The final evaluation uses a different initial-noise seed. Unlike the earlier
+post-hoc output rescaling, this is a realizable fixed-weight intervention
+throughout the evaluation trajectory. It preserves the randomized
+subspace/singular-spectrum shape but calibrates its global endpoint amplitude.
 
 The end-to-end interpretation gate is:
 
