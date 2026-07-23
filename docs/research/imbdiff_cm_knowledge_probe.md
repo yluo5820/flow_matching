@@ -1,7 +1,7 @@
 # ImbDiff-CM expert-knowledge probe
 
-**Status:** preliminary K1/K2 result on the released-CM 60k seed-0 checkpoint,
-completed 2026-07-23.
+**Status:** spectrum-controlled K1/K2 result on the released-CM 60k seed-0
+checkpoint, completed 2026-07-23.
 
 This experiment asks what structure is present in the local response of the
 trained CM expert branch. It does not repeat the paper's full-versus-general
@@ -20,15 +20,15 @@ compared by projection overlap and principal angle.
 The primary output remains on the server under:
 
 ```text
-/root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2
+/root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2_spectrum_controlled
 ```
 
 Its manifest SHA-256 is
 `1dac18e2a5805f42a55a07a44b05c7b39e63bf2d6b031c68c73e803960a2bf7f`.
 It contains four held-out test images per fine class, timesteps 100, 500, and
 900, all 27 active LoRA convolutions, and 32-dimensional sketches. The run
-produced 32,400 response rows and 729 linear-probe conditions in approximately
-30 seconds on one RTX PRO 6000 Blackwell Server Edition.
+produced 32,400 response rows and 729 controlled linear-probe conditions in
+approximately 90 seconds on one RTX PRO 6000 Blackwell Server Edition.
 
 ## Validity checks
 
@@ -53,6 +53,12 @@ capturing the wrong layer or branch.
 Permutation-label and dimension/statistics-matched random-feature nulls are at
 chance for all three linear-probe targets.
 
+The fixed random adapter preserves every singular value of the learned
+`lora_B @ lora_A` product while randomizing its left and right singular
+subspaces. Across the 27 layers, the maximum relative singular-spectrum error
+was `8.07e-7`, the maximum effective-weight RMS mismatch was `2.04e-7`, and
+the learned/random product stable ranks agreed to numerical precision.
+
 ## K1 result: semantic information is strongly decodable
 
 The table reports the median accuracy across all 27 layers and three timesteps,
@@ -61,21 +67,21 @@ conditions.
 
 | Target | Response component | Median | Best | Permutation null | Random-feature null |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Fine class | Full | 0.438 | 0.885 | 0.010 | 0.010 |
-| Fine class | Low-pass | 0.490 | 0.890 | 0.010 | 0.010 |
-| Fine class | High-pass | 0.040 | 0.295 | 0.010 | 0.010 |
-| Coarse superclass | Full | 0.417 | 0.635 | 0.051 | 0.051 |
-| Coarse superclass | Low-pass | 0.455 | 0.670 | 0.049 | 0.050 |
-| Coarse superclass | High-pass | 0.118 | 0.305 | 0.050 | 0.049 |
-| Frequency group | Full | 0.519 | 0.761 | 0.335 | 0.335 |
-| Frequency group | Low-pass | 0.535 | 0.759 | 0.334 | 0.335 |
-| Frequency group | High-pass | 0.373 | 0.455 | 0.334 | 0.333 |
+| Fine class | Full | 0.430 | 0.858 | 0.010 | 0.010 |
+| Fine class | Low-pass | 0.503 | 0.890 | 0.010 | 0.010 |
+| Fine class | High-pass | 0.043 | 0.318 | 0.010 | 0.010 |
+| Coarse superclass | Full | 0.418 | 0.688 | 0.050 | 0.050 |
+| Coarse superclass | Low-pass | 0.455 | 0.680 | 0.050 | 0.050 |
+| Coarse superclass | High-pass | 0.110 | 0.310 | 0.050 | 0.050 |
+| Frequency group | Full | 0.504 | 0.784 | 0.333 | 0.334 |
+| Frequency group | Low-pass | 0.532 | 0.782 | 0.334 | 0.334 |
+| Frequency group | High-pass | 0.370 | 0.477 | 0.332 | 0.335 |
 
 Fine- and coarse-class information is therefore not confined to a single
 selected layer. It is present across much of the expert-response hierarchy.
 The low-pass response is consistently at least as informative as the complete
 response, while high-pass response is much weaker. Mean fine-class accuracy is
-highest at timestep 500 (`0.578` full and `0.624` low-pass), rather than being
+highest at timestep 500 (`0.576` full and `0.620` low-pass), rather than being
 restricted to the final low-noise endpoint.
 
 This contradicts the narrow hypothesis that the expert response primarily
@@ -92,22 +98,20 @@ identify frequency thirds without representing frequency as a separate factor.
 Within-superclass class-pair subspace overlap exceeds across-superclass overlap
 in all 27 adapted layers:
 
-- mean within-minus-across overlap: `+0.02622`;
-- median: `+0.02578`;
-- layer range: `+0.00769` to `+0.04774`;
+- mean within-minus-across overlap: `+0.02832`;
+- median: `+0.02794`;
+- layer range: `+0.01021` to `+0.05263`;
 - positive layers: `27/27`.
 
-An exploratory 1,000-permutation coarse-label control, computed from the saved
-`subspace_pairs.npz`, gives an across-layer null standard deviation of
-`0.000679` and empirical one-sided `p=0.000999`. Every individual layer is
-positive; all individual permutation p-values are below `0.028`.
+The saved 200-permutation coarse-label control is positive in every layer; all
+individual one-sided permutation p-values equal or improve on `0.00498`.
 
 In contrast, the relationship between response-subspace overlap and absolute
 log class-frequency distance is effectively zero:
 
-- mean Spearman correlation across layers: `-0.00191`;
-- median: `-0.00118`;
-- range: `-0.0951` to `+0.0534`.
+- mean Spearman correlation across layers: `+0.00071`;
+- median: `+0.00392`;
+- range: `-0.0914` to `+0.0469`.
 
 Thus the observed response geometry is organized by CIFAR-100 semantic
 superclasses, not by proximity in training frequency.
@@ -127,40 +131,78 @@ Average low- and high-frequency energy fractions are also nearly identical for
 Many, Medium, and Few classes at each timestep. There is no evidence here for a
 larger or selectively high-frequency tail response.
 
+## Attribution controls: the semantics are not enriched by learned \(BA\)
+
+The same normalized sketch and projection were applied to the learned expert,
+general preactivation, spectrum-matched random-adapter response, and input
+activation. Median cross-fit accuracies across the 81 layer-timestep
+conditions were:
+
+| Target | Band | Expert | General | Spectrum-matched random | Input |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Fine class | Full | 0.4300 | 0.4950 | 0.5400 | 0.6425 |
+| Fine class | Low-pass | 0.5025 | 0.5225 | 0.5375 | — |
+| Fine class | High-pass | 0.0425 | 0.0525 | 0.0400 | — |
+| Coarse superclass | Full | 0.4175 | 0.5050 | 0.5125 | 0.5500 |
+| Coarse superclass | Low-pass | 0.4550 | 0.5175 | 0.5050 | — |
+| Coarse superclass | High-pass | 0.1100 | 0.1400 | 0.1150 | — |
+
+For fine-class full responses, the median paired expert-minus-random gap was
+`-0.0825`, and expert exceeded random in only `5/81` conditions. For coarse
+full responses, the median paired gap was `-0.0750`, and expert exceeded
+random in `2/81` conditions. The high-pass responses were approximately tied
+near their much lower accuracies.
+
+K2 gives the same attribution result. The mean within-minus-across
+superclass overlap was:
+
+| Representation | Mean semantic overlap contrast |
+| --- | ---: |
+| Input activation | +0.04349 |
+| General preactivation | +0.04281 |
+| Spectrum-matched random response | +0.03449 |
+| Learned expert response | +0.02832 |
+
+All four representations were positive in all 27 layers and significant under
+the saved per-layer permutation null. Learned expert exceeded the random
+control in only `8/27` layers; its mean paired contrast was `-0.00617`.
+Matching the full \(BA\) spectrum reduced the random-control advantage relative
+to the preceding RMS-only control, but did not reverse it.
+
+The convolution-kernel matrixization remains different from the official
+\(BA\) matrixization. After reshaping to
+`out_channels × (in_channels * kernel_area)`, median stable rank was `16.15`
+for learned expert kernels and `26.08` for random kernels. This is an
+observable learned orientation effect, not a mismatch in the official LoRA
+factor capacity. It also did not explain the semantic-decoding gap:
+layerwise Spearman correlations between this rank gap and the random-minus-
+expert accuracy gap were `0.082` for fine-class full response and `-0.087`
+for coarse-class full response (both nonsignificant). A future
+functional-operator-spectrum control would nevertheless be stricter than the
+current parameter-spectrum control.
+
 ## What can and cannot be concluded
 
 The defensible observation is:
 
 > Local CM expert responses contain strong fine-class and superclass structure,
-> predominantly in their low-frequency component, while their magnitude,
-> spectral allocation, and subspace organization show little relationship to
-> class frequency.
+> predominantly in their low-frequency component, but they do not enrich that
+> structure relative to the same class-conditioned activation passed through a
+> spectrum-matched random low-rank adapter. Their magnitude, spectral
+> allocation, and subspace organization also show little relationship to class
+> frequency.
 
-This weakens both a tail-only capacity-separation account and a
-high-frequency-detail account. It is compatible with semantic knowledge
-transfer or semantic residual refinement.
+This weakens a literal account in which \(BA\) is a separately readable store
+of tail-semantic or high-frequency knowledge. It is more compatible with the
+expert branch acting as a constrained correction whose usefulness only
+emerges jointly with the general branch and the CM objective.
 
-It does **not** yet prove that the trained \(BA\) weights themselves store this
-semantic information. The response \(e_l=BAh_{l-1}\) is a deterministic
-function of the general activation \(h_{l-1}\), which is already
-class-conditioned. Even a class-agnostic fixed projection can preserve
-linearly decodable class information. The current random-feature null tests
-whether arbitrary independent features can predict labels; it is not a
-matched transformation of the same input activation.
-
-Before repeating K1/K2 across checkpoints or interpreting \(\theta_e\) as a
-semantic memory, the probe should add:
-
-1. an input/general-activation sketch at every adapted layer;
-2. a fixed random low-rank convolution of the same activation, matched in
-   output shape, effective rank, and response RMS;
-3. decoding and subspace comparisons for expert response versus both controls;
-4. a coarse-label permutation null directly in the saved K2 report.
-
-Only expert selectivity beyond the activation and matched-random-adapter
-controls can be attributed to the learned expert transformation. Stable
-directions would then be candidates for K3 trajectory projection and K4 causal
-intervention.
+It does **not** show that \(BA\) is unimportant. The published ablation and our
+60k reproduction establish that the complete CM system helps generation, while
+K1/K2 only test locally readable information under normalized sketches. The
+next decisive tests are K3 trajectory projection and K4 matched causal
+interventions: remove, swap, or randomize learned expert directions and measure
+class-conditional generation rather than only decoding their local responses.
 
 **Control implementation status:** these controls are now implemented in output
 schema 3. The fixed random adapter preserves the complete singular spectrum of
@@ -169,6 +211,6 @@ norm, while independently randomizing the left and right singular subspaces.
 It is batch-response-RMS matched before sketching. Expert, general, and random
 output responses use the same deterministic sketch projection.
 `summary.json` audits the product-space stable ranks and maximum
-spectrum-matching error. The spectrum-controlled 60k rerun remains pending; the
-observations above deliberately remain attributed to the response rather than
-the expert weights.
+spectrum-matching error. The spectrum-controlled 60k rerun above is complete;
+the observations remain attributed to local responses unless a causal
+intervention specifically supports a weight-level claim.
