@@ -506,6 +506,23 @@ fm-lab-imbdiff-cm-sampling-intervention \
   --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_sampling_intervention_screen
 ```
 
+## `fm-lab-imbdiff-cm-sampling-visualization`
+
+Creates a paired `general only | full - general | full parameters` grid from a
+matched sampling intervention. Classes are selected at fixed frequency
+quantiles within Many and Few, and the example for each class is the sample
+nearest its class-median residual RMS. The signed RGB residual maps zero to
+neutral gray using one shared robust scale over the entire run.
+
+```bash
+fm-lab-imbdiff-cm-sampling-visualization \
+  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_sampling_intervention_screen_r4_endpoint_matched \
+  --data-root /root/autodl-tmp/data/cifar100 \
+  --groups many,few \
+  --classes-per-group 3 \
+  --samples-per-class 1
+```
+
 ## `fm-lab-sampling-timesteps`
 
 Generate a Geometry Explorer dataset whose class labels identify sampling timesteps:
