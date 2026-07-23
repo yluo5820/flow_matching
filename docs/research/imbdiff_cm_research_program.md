@@ -12,6 +12,8 @@ The completed 60k reproduction and its limitations are documented in
 [`docs/official_imbdiff_matrix.md`](../official_imbdiff_matrix.md). The first
 checkpoint probe and its results are documented in
 [`docs/research/imbdiff_cm_mechanism_probe.md`](imbdiff_cm_mechanism_probe.md).
+The preliminary layerwise expert-response result is documented in
+[`docs/research/imbdiff_cm_knowledge_probe.md`](imbdiff_cm_knowledge_probe.md).
 Those results are prior evidence for this program, not conclusions that this
 program is designed to reproduce.
 
@@ -978,14 +980,18 @@ Compute tier: local or short server diagnostic, expected below 30 minutes.
 
 ### Phase 2 — expert knowledge probe
 
-**Implementation status (2026-07-24):** the first K1/K2 slice is implemented.
+**Implementation status (2026-07-23):** the first K1/K2 slice is implemented.
 It captures every local `Conv2d_LoRA` response, verifies the local
 full-minus-general preactivation identity, writes compact normalized full,
 low-pass, and high-pass sketches, and runs disjoint-image two-way cross-fit
 ridge probes for fine class, coarse superclass, and frequency group with both
 label-permutation and matched-random-feature nulls. It also exports
-class-conditioned subspace overlaps and principal angles. The real checkpoint
-smoke and all-class K1/K2 run remain to be executed before K3/K4.
+class-conditioned subspace overlaps and principal angles. The 60k smoke and
+all-class K1/K2 run are complete. They find strong semantic/low-pass response
+structure but no frequency-distance organization. Before checkpoint
+replication, the probe needs general-activation and matched-random-adapter
+controls so semantic information inherited from the shared activation is not
+misattributed to the learned expert weights.
 
 Implementation:
 
@@ -1258,12 +1264,12 @@ implementations.
 The dropout diagnostic and first K1/K2 implementation slice are complete. The
 next execution and implementation order is:
 
-1. run the six-class/four-layer K1/K2 smoke and inspect reconstruction errors,
-   artifact sizes, and null behavior;
-2. run the all-class K1/K2 atlas on the 60k checkpoint;
-3. if class/superclass/subspace structure is stable, repeat K1/K2 at 20k and
-   40k before implementing K3 trajectory projections;
-4. begin Phase 3 training-dynamics instrumentation in parallel with the
+1. add general-activation and matched-random-adapter controls to K1/K2, plus a
+   saved superclass-permutation null for K2;
+2. rerun the controlled all-class K1/K2 atlas on the 60k checkpoint;
+3. if expert selectivity exceeds both controls, repeat K1/K2 at 20k and 40k
+   before implementing K3 trajectory projections;
+4. begin Phase 3 training-dynamics instrumentation alongside the controlled
    checkpoint interpretation, retaining both faithful independent-dropout and
    paired-mask gradient signatures;
 5. implement K4 interventions only for directions that survive the
