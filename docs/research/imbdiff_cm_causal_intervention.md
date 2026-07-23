@@ -231,3 +231,20 @@ The end-to-end interpretation gate is:
 - a larger Few than Many gain: evidence for tail-selective allocation;
 - similar gains across frequency groups: a generic correction or regularizer,
   not a tail-specific knowledge store.
+
+## End-to-end screen result
+
+The 20-samples-per-class, four-random-orientation screen is documented in
+[`results/official_imbdiff_matrix60k/cm_sampling_intervention_screen.md`](results/official_imbdiff_matrix60k/cm_sampling_intervention_screen.md).
+
+The learned expert has lower KID than general-only overall and in every
+frequency group. It also beats the mean of four endpoint-response-matched
+random experts, although one random orientation beats learned. The learned
+gain versus general is smaller for Few (`+0.000461`) than Many (`+0.000611`);
+Few-minus-Many is `-0.000149`. About 68.9% of learned-general endpoint
+displacement energy lies in the lowest radial band and only 0.43% in the
+highest.
+
+The result supports a small useful expert correction, but not a
+tail-specialized or specifically high-frequency knowledge store. A
+100-samples-per-class FID confirmation remains required.
