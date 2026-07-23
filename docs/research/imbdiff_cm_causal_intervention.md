@@ -247,4 +247,14 @@ highest.
 
 The result supports a small useful expert correction, but not a
 tail-specialized or specifically high-frequency knowledge store. A
-100-samples-per-class FID confirmation remains required.
+100-samples-per-class FID confirmation is documented in
+[`results/official_imbdiff_matrix60k/cm_sampling_intervention_fid10k.md`](results/official_imbdiff_matrix60k/cm_sampling_intervention_fid10k.md).
+
+At 10,000 generated samples, learned improves over general-only by 0.930 FID
+and over the mean of four endpoint-matched random experts by 0.685 FID.
+However, one random orientation beats learned by 0.233 FID and by 0.000535
+KID. The learned branch is therefore useful and better than a typical random
+orientation, but the result does not show that its exact orientation is
+uniquely necessary. FID gain is also smaller for Few than Many classes, while
+the KID tail contrast has the opposite small sign, leaving no
+metric-consistent evidence of tail specialization.

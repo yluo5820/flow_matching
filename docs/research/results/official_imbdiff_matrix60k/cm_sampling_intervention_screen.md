@@ -151,6 +151,10 @@ is dominated by low spatial frequencies. This is more consistent with a
 generic, stage-composed correction or regularization effect than with the
 paper story that the low-rank branch stores specifically tail knowledge.
 
-The next confirmatory experiment is the same six-condition intervention at
-100 samples per class with full FID. Because the estimated runtime is over 30
-minutes, it should be run by the user rather than inline.
+The same six-condition intervention has now been confirmed at 100 samples per
+class with full FID. See
+[`cm_sampling_intervention_fid10k.md`](cm_sampling_intervention_fid10k.md).
+Learned improves over general-only by 0.930 FID and over the random mean by
+0.685 FID, but random orientation 0 beats learned by 0.233 FID. The larger run
+therefore strengthens the useful-general-correction conclusion without
+establishing a uniquely learned or tail-specialized expert subspace.
