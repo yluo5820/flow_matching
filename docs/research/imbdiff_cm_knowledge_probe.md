@@ -200,9 +200,11 @@ emerges jointly with the general branch and the CM objective.
 It does **not** show that \(BA\) is unimportant. The published ablation and our
 60k reproduction establish that the complete CM system helps generation, while
 K1/K2 only test locally readable information under normalized sketches. The
-next decisive tests are K3 trajectory projection and K4 matched causal
-interventions: remove, swap, or randomize learned expert directions and measure
-class-conditional generation rather than only decoding their local responses.
+first K4 matched causal screen is now complete. It finds a small learned
+expert-orientation benefit at late, low-noise \(t=100\), no benefit at
+\(t=500/900\), and no tail-selective effect. The next decisive test is the
+matched end-to-end sampling intervention: learned versus general-only versus
+spectrum-random experts under identical labels and initial noise.
 
 **Control implementation status:** these controls are now implemented in output
 schema 3. The fixed random adapter preserves the complete singular spectrum of

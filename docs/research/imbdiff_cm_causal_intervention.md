@@ -1,6 +1,13 @@
 # ImbDiff-CM matched causal expert intervention
 
-**Status:** implemented; full released-CM 60k checkpoint run pending.
+**Status:** completed on the released-CM 60k seed-0 checkpoint,
+2026-07-23.
+
+Primary output:
+
+```text
+/root/autodl-tmp/runs/imbdiff_matrix60k/cm_intervention_screen
+```
 
 ## Question
 
@@ -121,3 +128,69 @@ effect worth spending compute on.
 - all expert factors are restored bit-exactly after every repeat;
 - the saved K1/K2 manifest fixes all data and noise choices;
 - output includes every random repeat rather than only its mean.
+
+## Result
+
+All validation gates passed:
+
+- zero factors with `use_cm=True` matched `use_cm=False` exactly
+  (`max_abs=0`);
+- the worst randomized-\(BA\) singular-spectrum error was `8.70e-7`;
+- every factor restoration was bit-exact;
+- four random rotations were retained separately;
+- response matching used one target-free scalar per timestep/repeat.
+
+The all-class paired endpoints are:
+
+| Diffusion t | Sampling role | Learned gain vs general | Learned advantage vs response-matched random | Interpretation |
+| ---: | --- | ---: | ---: | --- |
+| 100 | late / low noise | +6.20e-5 (+0.077%) | +7.10e-5 (+0.089%) | small but stable learned-orientation benefit |
+| 500 | middle | -2.54e-6 (-0.034%) | -3.27e-6 (-0.044%) | no learned benefit |
+| 900 | early / high noise | -9.84e-7 (-0.377%) | -1.03e-6 (-0.395%) | learned expert is slightly worse locally |
+
+Class-bootstrap intervals exclude zero for the positive \(t=100\)
+response-matched advantage (`[5.48e-5, 8.79e-5]`) and for the negative
+\(t=900\) advantage (`[-1.51e-6, -5.48e-7]`). The \(t=500\) effect is small;
+its response-matched interval is also slightly negative
+(`[-6.68e-6, -1.45e-7]`).
+
+The unscaled random intervention produced more final displacement than the
+learned expert. Mean response-matching scales were `0.664`, `0.800`, and
+`0.775` at timesteps 100, 500, and 900. Matching this functional magnitude did
+not remove the late low-noise advantage, but it reversed the apparent
+learned-orientation advantage at middle and high-noise timesteps.
+
+There is no tail-selective result. Across all timesteps, Few-minus-Many was:
+
+- learned gain vs general: `-8.36e-6`, 95% CI
+  `[-2.05e-5, 5.10e-6]`;
+- learned advantage vs response-matched random: `-1.11e-5`, 95% CI
+  `[-2.32e-5, 3.10e-6]`.
+
+Every timestep-specific tail contrast also included zero. The point estimates
+usually favored Many rather than Few classes.
+
+The useful \(t=100\) displacement was not specifically high-frequency. Its
+mean radial energy fractions from low to high were
+`[0.239, 0.361, 0.313, 0.087]`, close to the random control
+`[0.255, 0.347, 0.313, 0.085]`. At \(t=900\), the learned displacement was
+more high-frequency than random but worsened the local target, so frequency
+content alone does not identify a useful expert mechanism.
+
+## Current conclusion
+
+The learned expert orientation has a real but small causal effect at late,
+low-noise denoising. It is not a generic advantage across the diffusion
+trajectory and is not stronger for tail classes. This rejects the simple
+account that \(\theta_e\) is a tail-specialized knowledge store at this
+checkpoint.
+
+The result is more consistent with a stage-specific joint correction: CM
+training changes both \(\theta_g\) and \(\theta_e\), while the explicit expert
+branch adds a small learned late-stage adjustment. Because local target-MSE
+effects are small and can accumulate differently through sampling, the next
+justified experiment is an end-to-end matched sampling intervention measuring
+requested-class accuracy and groupwise generative quality. It should compare
+learned, general-only, and spectrum-random experts, and treat
+response-normalized output scaling only as a non-realizable sensitivity
+analysis.

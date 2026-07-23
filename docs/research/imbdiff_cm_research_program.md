@@ -1271,18 +1271,24 @@ relative to the input/general activation or a spectrum-matched random adapter.
 Consequently, no response direction currently qualifies as a preregistered
 tail-aligned direction for selective removal.
 
+The whole-model causal orientation screen is also complete. Learned expert
+orientation gives a small stable benefit only at late, low-noise \(t=100\);
+the effect disappears or reverses at \(t=500/900\), and no Few-minus-Many
+contrast excludes zero.
+
 The next execution and implementation order is:
 
-1. run a whole-model causal orientation screen: learned expert versus
-   `use_cm=False` versus multiple singular-spectrum-preserving random rotations;
-2. use exact fixed noisy inputs and released endpoint-transfer targets, with
-   class-clustered uncertainty and an explicit Few-minus-Many contrast;
-3. promote the intervention to end-to-end sampling only if learned orientation
-   beats the random controls or produces a stable tail-selective effect;
-4. otherwise treat the checkpoint evidence as favoring joint regularization or
-   generic correction and prioritize Phase 3 training dynamics;
-5. implement K3 trajectory/classifier projections only after a stable causal
-   prediction or sampling signal identifies what should be projected.
+1. promote the matched learned/general/spectrum-random intervention to
+   end-to-end sampling because the late-stage learned-orientation signal
+   survived response-RMS matching;
+2. evaluate requested-class accuracy and groupwise quality/recall, retaining
+   identical initial noise and labels across conditions;
+3. interpret any gain as global late-stage correction unless a replicated
+   Few-minus-Many sampling effect appears;
+4. begin Phase 3 training-dynamics instrumentation to determine how CM training
+   changes the general branch even when the explicit expert effect is small;
+5. add K3 trajectory/classifier projections only if the sampling intervention
+   shows an accumulated semantic or quality effect worth localizing.
 
 This order avoids inventing tail directions after observing the same data and
 separates learned orientation from generic low-rank parameter energy.
