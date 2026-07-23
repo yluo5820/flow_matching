@@ -1265,22 +1265,27 @@ implementations.
 
 ## 16. Immediate next implementation slice
 
-The dropout diagnostic and first K1/K2 implementation slice are complete. The
-next execution and implementation order is:
+The dropout diagnostic and spectrum-controlled K1/K2 atlas are complete.
+Semantic structure is readable from expert responses but is not enriched
+relative to the input/general activation or a spectrum-matched random adapter.
+Consequently, no response direction currently qualifies as a preregistered
+tail-aligned direction for selective removal.
 
-1. add general-activation and matched-random-adapter controls to K1/K2, plus a
-   saved superclass-permutation null for K2;
-2. rerun the controlled all-class K1/K2 atlas on the 60k checkpoint;
-3. if expert selectivity exceeds both controls, repeat K1/K2 at 20k and 40k
-   before implementing K3 trajectory projections;
-4. begin Phase 3 training-dynamics instrumentation alongside the controlled
-   checkpoint interpretation, retaining both faithful independent-dropout and
-   paired-mask gradient signatures;
-5. implement K4 interventions only for directions that survive the
-   permutation/random controls and checkpoint comparison.
+The next execution and implementation order is:
 
-This order prevents final response magnitude and stochastic dropout variation
-from being mistaken for learned expert knowledge.
+1. run a whole-model causal orientation screen: learned expert versus
+   `use_cm=False` versus multiple singular-spectrum-preserving random rotations;
+2. use exact fixed noisy inputs and released endpoint-transfer targets, with
+   class-clustered uncertainty and an explicit Few-minus-Many contrast;
+3. promote the intervention to end-to-end sampling only if learned orientation
+   beats the random controls or produces a stable tail-selective effect;
+4. otherwise treat the checkpoint evidence as favoring joint regularization or
+   generic correction and prioritize Phase 3 training dynamics;
+5. implement K3 trajectory/classifier projections only after a stable causal
+   prediction or sampling signal identifies what should be projected.
+
+This order avoids inventing tail directions after observing the same data and
+separates learned orientation from generic low-rank parameter energy.
 
 ## References
 

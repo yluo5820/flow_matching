@@ -428,6 +428,53 @@ Linear separability and subspace overlap are descriptive evidence of encoded
 structure, not causal evidence that the model uses a direction during sampling.
 Only stable directions should be promoted to the matched K4 interventions.
 
+## `fm-lab-imbdiff-cm-intervention-probe`
+
+Run the first K4 causal screen on the exact held-out rows and random draws from
+the spectrum-controlled K1/K2 atlas:
+
+```bash
+fm-lab-imbdiff-cm-intervention-probe \
+  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
+  --manifest /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2_spectrum_controlled/manifest.json \
+  --batch-size 64 \
+  --random-repeats 4 \
+  --bootstrap-repeats 2000 \
+  --mixed-precision auto \
+  --weights ema \
+  --channels-last on \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_intervention_screen
+```
+
+The conditions are the unchanged learned expert, `use_cm=False`, and four
+whole-model random expert rotations. Every random rotation preserves every
+adapted layer's complete `lora_B @ lora_A` singular spectrum while changing
+its singular subspaces. The probe reuses identical held-out images, labels,
+noise, timesteps, and released endpoint-transfer targets. It reports paired
+prediction-MSE effects by class and Many/Medium/Few group, class-clustered
+bootstrap intervals, Few-minus-Many contrasts, response spectra, random-repeat
+variation, spectrum audits, and bit-exact restoration checks.
+
+Positive `learned_gain_vs_general` means the trained expert improves the exact
+released training target relative to the general branch. Positive
+`learned_advantage_vs_random` means the learned expert orientation beats
+matched random orientations. These are local causal prediction endpoints, not
+substitutes for sampling FID or requested-class accuracy.
+
+Main outputs are:
+
+```text
+knowledge_manifest.json
+intervention_manifest.json
+summary.json
+report.md
+paired_effects.csv
+random_repeat_effects.csv
+group_summary.csv
+class_summary.csv
+```
+
 ## `fm-lab-sampling-timesteps`
 
 Generate a Geometry Explorer dataset whose class labels identify sampling timesteps:

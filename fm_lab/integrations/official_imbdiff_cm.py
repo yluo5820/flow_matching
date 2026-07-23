@@ -681,6 +681,45 @@ class OfficialImbDiffObjective:
             unconditional_batch=False,
         )
 
+    def probe_inputs(
+        self,
+        *,
+        model: nn.Module,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise: torch.Tensor,
+        transfer_seed: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Materialize fixed noisy inputs and the exact released training target."""
+
+        self._validate_cm_term_request(model, clean, labels)
+        if noise.shape != clean.shape:
+            raise ValueError("CM probe noise must match the clean image tensor.")
+        batch_size = clean.shape[0]
+        if labels.shape != (batch_size,) or timesteps.shape != (batch_size,):
+            raise ValueError("CM probe labels and timesteps must match the batch size.")
+        labels = labels.to(device=clean.device, dtype=torch.long)
+        timesteps = timesteps.to(device=clean.device, dtype=torch.long)
+        if bool((timesteps < 0).any()) or bool((timesteps >= self.timesteps).any()):
+            raise ValueError("CM probe timesteps are outside the diffusion schedule.")
+        noise = noise.to(device=clean.device, dtype=clean.dtype)
+        signal, sigma = self._expanded_diffusion_coefficients(timesteps, clean)
+        noisy = signal * clean + sigma * noise
+
+        trainer = self._trainer_for(model, clean.device)
+        target = self._cm_target(
+            trainer=trainer,
+            noisy=noisy,
+            clean=clean,
+            labels=labels,
+            timesteps=timesteps,
+            noise=noise,
+            signal=signal,
+            transfer_seed=transfer_seed,
+        )
+        return noisy, target
+
     def _validate_cm_term_request(
         self,
         model: nn.Module,
