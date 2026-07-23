@@ -10,6 +10,8 @@ from fm_lab.diagnostics.imbdiff_cm_probe import RestoredImbDiffCMCheckpoint
 from fm_lab.diagnostics.imbdiff_cm_sampling import (
     endpoint_response_scales,
     matched_sampling_inputs,
+    orientation_quality_analysis,
+    orientation_response_descriptors,
     quality_contrasts,
     sample_matched_cm_interventions,
 )
@@ -178,6 +180,76 @@ def test_response_scale_loader_deduplicates_probe_rows(tmp_path: Path) -> None:
     assert scales.keys() == {0, 1}
     assert np.isclose(scales[0], 0.6)
     assert np.isclose(scales[1], 0.6)
+
+
+def test_response_scale_loader_extends_with_observed_median(tmp_path: Path) -> None:
+    path = tmp_path / "effects.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("random_repeat", "timestep", "response_match_scale"),
+        )
+        writer.writeheader()
+        writer.writerow({"random_repeat": 0, "timestep": 100, "response_match_scale": 0.4})
+        writer.writerow({"random_repeat": 1, "timestep": 100, "response_match_scale": 0.8})
+
+    scales = load_response_scales(
+        path,
+        random_repeats=4,
+        missing_policy="median",
+    )
+
+    assert scales[0] == 0.4
+    assert scales[1] == 0.8
+    assert np.isclose(scales[2], 0.6)
+    assert np.isclose(scales[3], 0.6)
+
+
+def test_orientation_descriptors_and_quality_rank_random_experts() -> None:
+    labels = torch.tensor([0, 1, 2])
+    general = torch.zeros(3, 1, 2, 2)
+    learned = torch.ones_like(general)
+    random_00 = torch.full_like(general, 0.5)
+    random_01 = torch.full_like(general, 2.0)
+    descriptors = orientation_response_descriptors(
+        {
+            "learned": learned,
+            "general": general,
+            "random_00": random_00,
+            "random_01": random_01,
+        },
+        labels=labels,
+        class_counts=(9, 3, 1),
+        response_scales={0: 0.5, 1: 1.5},
+    )
+    metrics = {
+        "learned": {
+            "kid": 1.0,
+            "groups": {name: {"kid": 1.0} for name in ("many", "medium", "few")},
+        },
+        "general": {
+            "kid": 2.0,
+            "groups": {name: {"kid": 2.0} for name in ("many", "medium", "few")},
+        },
+        "random_00": {
+            "kid": 0.8,
+            "groups": {name: {"kid": 0.8} for name in ("many", "medium", "few")},
+        },
+        "random_01": {
+            "kid": 1.4,
+            "groups": {name: {"kid": 1.4} for name in ("many", "medium", "few")},
+        },
+    }
+
+    analysis = orientation_quality_analysis(metrics, descriptors)
+
+    distribution = analysis["distribution"]["all"]["kid"]
+    assert distribution["fraction_random_better_than_learned"] == 0.5
+    assert distribution["learned_rank_among_random_plus_learned"] == 2
+    assert distribution["best_random_condition"] == "random_00"
+    rows = [row for row in analysis["orientations"] if row["scope"] == "all"]
+    assert rows[0]["random_cosine_to_learned"] == 1.0
+    assert rows[1]["random_to_learned_rms_ratio"] == 2.0
 
 
 def test_quality_contrasts_report_tail_selectivity() -> None:

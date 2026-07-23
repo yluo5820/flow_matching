@@ -15,6 +15,8 @@ import torch
 from fm_lab.diagnostics.imbdiff_cm_probe import restore_imbdiff_cm_probe_checkpoint
 from fm_lab.diagnostics.imbdiff_cm_sampling import (
     endpoint_response_scales,
+    orientation_quality_analysis,
+    orientation_response_descriptors,
     paired_sampling_effects,
     quality_contrasts,
     sample_matched_cm_interventions,
@@ -44,6 +46,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Prior intervention random_repeat_effects.csv. Its per-repeat local "
             "response scales are applied to the same random rotations."
+        ),
+    )
+    parser.add_argument(
+        "--missing-random-scale",
+        choices=("error", "median"),
+        default="error",
+        help=(
+            "How to initialize rotations absent from --random-effects. 'median' "
+            "uses the available local-scale median before endpoint calibration."
         ),
     )
     parser.add_argument("--bootstrap-repeats", type=int, default=2000)
@@ -104,7 +115,11 @@ def main(argv: list[str] | None = None) -> None:
         checkpoint_payload=payload,
     )
     local_response_scales = (
-        load_response_scales(args.random_effects, random_repeats=args.random_repeats)
+        load_response_scales(
+            args.random_effects,
+            random_repeats=args.random_repeats,
+            missing_policy=args.missing_random_scale,
+        )
         if args.random_effects
         else {repeat: 1.0 for repeat in range(args.random_repeats)}
     )
@@ -155,6 +170,12 @@ def main(argv: list[str] | None = None) -> None:
         bootstrap_repeats=args.bootstrap_repeats,
         seed=args.seed,
     )
+    orientation_descriptors = orientation_response_descriptors(
+        condition_payload,
+        labels=labels,
+        class_counts=class_counts,
+        response_scales=response_scales,
+    )
 
     output_dir = Path(args.output_dir)
     samples_dir = output_dir / "samples"
@@ -176,6 +197,10 @@ def main(argv: list[str] | None = None) -> None:
     _write_json(output_dir / "sampling_manifest.json", intervention_manifest)
     _write_csv(output_dir / "paired_effects.csv", paired_rows)
     _write_csv(output_dir / "paired_group_summary.csv", paired_groups)
+    _write_csv(
+        output_dir / "orientation_response_descriptors.csv",
+        orientation_descriptors,
+    )
 
     condition_metrics: dict[str, dict[str, Any]] = {}
     if args.evaluation != "none":
@@ -193,6 +218,19 @@ def main(argv: list[str] | None = None) -> None:
             compute_fid=args.evaluation == "full",
             features_dir=features_dir,
         )
+    orientation_analysis = (
+        orientation_quality_analysis(
+            condition_metrics,
+            orientation_descriptors,
+        )
+        if condition_metrics
+        else {}
+    )
+    if orientation_analysis:
+        _write_csv(
+            output_dir / "orientation_quality.csv",
+            orientation_analysis["orientations"],
+        )
     summary = {
         "schema_version": 1,
         "checkpoint": intervention_manifest["checkpoint"],
@@ -201,6 +239,7 @@ def main(argv: list[str] | None = None) -> None:
             "sample_batch_size": int(args.sample_batch_size),
             "feature_batch_size": int(args.feature_batch_size),
             "random_repeats": int(args.random_repeats),
+            "missing_random_scale": str(args.missing_random_scale),
             "bootstrap_repeats": int(args.bootstrap_repeats),
             "endpoint_calibration_samples_per_class": int(
                 args.endpoint_calibration_samples_per_class
@@ -220,6 +259,7 @@ def main(argv: list[str] | None = None) -> None:
         "paired_output_summary": paired_groups,
         "condition_metrics": condition_metrics,
         "quality_contrasts": (quality_contrasts(condition_metrics) if condition_metrics else {}),
+        "orientation_analysis": orientation_analysis,
         "interpretation_boundary": (
             "The KID screen is a bounded triage experiment. Its matched condition "
             "differences are more informative than its absolute small-sample values. "
@@ -236,6 +276,7 @@ def load_response_scales(
     path: str | Path,
     *,
     random_repeats: int,
+    missing_policy: str = "error",
 ) -> dict[int, float]:
     """Average prior response-match scales over probe timesteps, once per repeat."""
 
@@ -244,15 +285,25 @@ def load_response_scales(
         for row in csv.DictReader(handle):
             key = (int(row["random_repeat"]), int(row["timestep"]))
             by_repeat_timestep[key].append(float(row["response_match_scale"]))
-    result = {}
-    for repeat in range(int(random_repeats)):
+    result: dict[int, float] = {}
+    for repeat in sorted({key[0] for key in by_repeat_timestep}):
         timestep_values = []
         for (row_repeat, _), values in by_repeat_timestep.items():
             if row_repeat == repeat:
                 timestep_values.append(float(np.mean(values)))
-        if not timestep_values:
-            raise ValueError(f"Response calibration is missing random repeat {repeat}.")
         result[repeat] = float(np.mean(timestep_values))
+    missing = [repeat for repeat in range(int(random_repeats)) if repeat not in result]
+    normalized_policy = str(missing_policy).lower()
+    if missing and normalized_policy == "error":
+        raise ValueError(f"Response calibration is missing random repeat {missing[0]}.")
+    if missing and normalized_policy == "median":
+        if not result:
+            raise ValueError("Cannot extend response scales without observed repeats.")
+        fallback = float(np.median(list(result.values())))
+        result.update({repeat: fallback for repeat in missing})
+    if normalized_policy not in {"error", "median"}:
+        raise ValueError("missing_policy must be error or median.")
+    result = {repeat: result[repeat] for repeat in range(int(random_repeats))}
     return result
 
 
@@ -433,6 +484,30 @@ def _render_report(summary: dict[str, Any]) -> str:
         for group_name, metrics in contrasts.get("groups", {}).items():
             for metric, row in metrics.items():
                 lines.append(_contrast_row(group_name, metric, row))
+    orientation = summary.get("orientation_analysis", {})
+    if orientation:
+        lines.extend(
+            [
+                "",
+                "## Random-orientation distribution",
+                "",
+                "The learned rank is evaluated against all randomized experts; rank 1 is best.",
+                "",
+                "| Scope | Metric | Learned | Random median | Random min | Random max | "
+                "Random better | Learned rank |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for scope, metrics in orientation["distribution"].items():
+            for metric, row in metrics.items():
+                lines.append(
+                    f"| {scope} | {metric} | {row['learned']:.6f} | "
+                    f"{row['random_median']:.6f} | {row['random_min']:.6f} | "
+                    f"{row['random_max']:.6f} | "
+                    f"{row['fraction_random_better_than_learned']:.3f} | "
+                    f"{row['learned_rank_among_random_plus_learned']} / "
+                    f"{row['num_random_orientations'] + 1} |"
+                )
     lines.extend(
         [
             "",

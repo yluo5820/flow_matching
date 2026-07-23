@@ -293,6 +293,142 @@ def paired_sampling_effects(
     return rows, summaries
 
 
+def orientation_response_descriptors(
+    condition_samples: Mapping[str, torch.Tensor],
+    *,
+    labels: torch.Tensor,
+    class_counts: Sequence[int],
+    response_scales: Mapping[int, float],
+) -> list[dict[str, Any]]:
+    """Describe every random expert's endpoint response by frequency group."""
+
+    learned = condition_samples["learned"].float()
+    general = condition_samples["general"].float()
+    if learned.shape != general.shape or len(learned) != len(labels):
+        raise ValueError("Orientation descriptor samples and labels must align.")
+    random_names = sorted(name for name in condition_samples if name.startswith("random_"))
+    groups = frequency_ranked_groups(class_counts)
+    masks = {
+        "all": torch.ones(len(labels), dtype=torch.bool),
+        **{
+            group_name: torch.from_numpy(np.isin(labels.cpu().numpy(), class_ids))
+            for group_name, class_ids in groups.items()
+        },
+    }
+    learned_delta = learned - general
+    rows: list[dict[str, Any]] = []
+    for condition in random_names:
+        repeat = int(condition.removeprefix("random_"))
+        random_delta = condition_samples[condition].float() - general
+        spectral = radial_spectral_fractions(random_delta)
+        for scope, mask in masks.items():
+            learned_selected = learned_delta[mask]
+            random_selected = random_delta[mask]
+            learned_rms = _global_rms(learned_selected)
+            random_rms = _global_rms(random_selected)
+            rows.append(
+                {
+                    "condition": condition,
+                    "random_repeat": repeat,
+                    "scope": scope,
+                    "num_samples": int(mask.sum()),
+                    "response_scale": float(response_scales[repeat]),
+                    "learned_endpoint_rms": learned_rms,
+                    "random_endpoint_rms": random_rms,
+                    "random_to_learned_rms_ratio": random_rms / learned_rms,
+                    "random_cosine_to_learned": _global_cosine(
+                        random_selected,
+                        learned_selected,
+                    ),
+                    "random_vs_learned_rms": _global_rms(
+                        condition_samples[condition].float()[mask] - learned[mask]
+                    ),
+                    **{
+                        f"random_spectral_{name}": float(values[mask].mean())
+                        for name, values in spectral.items()
+                    },
+                }
+            )
+    return rows
+
+
+def orientation_quality_analysis(
+    condition_metrics: Mapping[str, Mapping[str, Any]],
+    response_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Rank learned among random orientations and correlate response descriptors."""
+
+    random_names = sorted(name for name in condition_metrics if name.startswith("random_"))
+    if len(random_names) < 2:
+        raise ValueError("Orientation analysis requires at least two random experts.")
+    descriptors = {(str(row["condition"]), str(row["scope"])): dict(row) for row in response_rows}
+    orientation_rows: list[dict[str, Any]] = []
+    distributions: dict[str, dict[str, Any]] = {}
+    correlations: dict[str, dict[str, Any]] = {}
+    for scope in ("all", "many", "medium", "few"):
+        learned_metrics = _scoped_metrics(condition_metrics["learned"], scope)
+        general_metrics = _scoped_metrics(condition_metrics["general"], scope)
+        available_metrics = tuple(metric for metric in ("kid", "fid") if metric in learned_metrics)
+        distributions[scope] = {}
+        for metric in available_metrics:
+            random_values = np.asarray(
+                [
+                    float(_scoped_metrics(condition_metrics[name], scope)[metric])
+                    for name in random_names
+                ],
+                dtype=np.float64,
+            )
+            learned_value = float(learned_metrics[metric])
+            distributions[scope][metric] = {
+                "num_random_orientations": len(random_names),
+                "learned": learned_value,
+                "general": float(general_metrics[metric]),
+                "random_mean": float(random_values.mean()),
+                "random_std": float(random_values.std()),
+                "random_min": float(random_values.min()),
+                "random_q25": float(np.quantile(random_values, 0.25)),
+                "random_median": float(np.median(random_values)),
+                "random_q75": float(np.quantile(random_values, 0.75)),
+                "random_max": float(random_values.max()),
+                "fraction_random_better_than_learned": float(
+                    np.mean(random_values < learned_value)
+                ),
+                "learned_rank_among_random_plus_learned": int(
+                    1 + np.count_nonzero(random_values < learned_value)
+                ),
+                "best_random_condition": random_names[int(np.argmin(random_values))],
+                "worst_random_condition": random_names[int(np.argmax(random_values))],
+            }
+        for condition in random_names:
+            descriptor = descriptors[(condition, scope)]
+            condition_scope = _scoped_metrics(condition_metrics[condition], scope)
+            row: dict[str, Any] = dict(descriptor)
+            for metric in available_metrics:
+                value = float(condition_scope[metric])
+                row[metric] = value
+                row[f"{metric}_gain_vs_general"] = float(general_metrics[metric] - value)
+                row[f"learned_advantage_{metric}"] = float(value - learned_metrics[metric])
+            orientation_rows.append(row)
+        scope_rows = [row for row in orientation_rows if row["scope"] == scope]
+        correlations[scope] = {}
+        for metric in available_metrics:
+            target = f"{metric}_gain_vs_general"
+            correlations[scope][target] = _descriptor_correlations(
+                scope_rows,
+                target=target,
+            )
+    return {
+        "interpretation": (
+            "Random-orientation distributions treat orientation as the empirical unit. "
+            "Correlations are exploratory across fixed randomized subspaces and do not "
+            "establish a causal descriptor."
+        ),
+        "distribution": distributions,
+        "correlations": correlations,
+        "orientations": orientation_rows,
+    }
+
+
 def quality_contrasts(
     condition_metrics: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -566,6 +702,56 @@ def _difference_summary(values: np.ndarray) -> dict[str, float]:
         "fraction_positive": float(np.mean(values > 0.0)),
         "num_subset_draws": int(len(values)),
     }
+
+
+def _scoped_metrics(metrics: Mapping[str, Any], scope: str) -> Mapping[str, Any]:
+    return metrics if scope == "all" else metrics["groups"][scope]
+
+
+def _descriptor_correlations(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    target: str,
+) -> dict[str, dict[str, float]]:
+    from scipy.stats import spearmanr
+
+    descriptors = (
+        "response_scale",
+        "random_endpoint_rms",
+        "random_to_learned_rms_ratio",
+        "random_cosine_to_learned",
+        "random_vs_learned_rms",
+        "random_spectral_low",
+        "random_spectral_mid_low",
+        "random_spectral_mid_high",
+        "random_spectral_high",
+    )
+    target_values = np.asarray([float(row[target]) for row in rows])
+    if np.allclose(target_values, target_values[0]):
+        return {}
+    result = {}
+    for descriptor in descriptors:
+        values = np.asarray([float(row[descriptor]) for row in rows])
+        if np.allclose(values, values[0]):
+            continue
+        pearson = float(np.corrcoef(values, target_values)[0, 1])
+        spearman = spearmanr(values, target_values)
+        result[descriptor] = {
+            "pearson": pearson,
+            "spearman": float(spearman.statistic),
+            "spearman_pvalue": float(spearman.pvalue),
+        }
+    return result
+
+
+def _global_rms(values: torch.Tensor) -> float:
+    return float(values.square().mean().sqrt())
+
+
+def _global_cosine(left: torch.Tensor, right: torch.Tensor) -> float:
+    numerator = (left * right).sum()
+    denominator = left.square().sum().sqrt() * right.square().sum().sqrt()
+    return float(numerator / denominator.clamp_min(torch.finfo(denominator.dtype).tiny))
 
 
 def _per_sample_rms(values: torch.Tensor) -> torch.Tensor:
