@@ -106,6 +106,38 @@ The fractions are nearly identical across Many, Medium, and Few groups. The
 explicit expert is therefore not behaving like a tail-specific
 high-frequency-detail branch at this checkpoint.
 
+## Paired pseudo-visualization
+
+![General-only, signed expert residual, and full-parameter samples](cm_sampling_expert_residual.png)
+
+The figure uses frequency-quantile classes rather than visually chosen
+classes: Many `[0, 16, 33]` and Few `[67, 83, 99]`. Within each class, it uses
+the sample nearest the class-median learned-general residual RMS. Every row
+shares its requested class and initial noise across the two sampling
+conditions.
+
+The middle column is the signed endpoint difference
+\(x_{\mathrm{full}}-x_{\mathrm{general}}\), not an independently generated
+image or a literal internal activation of \(\theta_e\). Neutral gray denotes
+zero. All rows use the same robust display scale: the 99.5th percentile of
+absolute residual channels over all 2,000 paired samples, `±0.0786` in the
+model's `[-1,1]` image units.
+
+Three observations are visible:
+
+1. full and general-only images are almost identical at ordinary display
+   contrast, consistent with the small endpoint RMS;
+2. the amplified residual is spatially coherent and follows object regions,
+   silhouettes, color fields, and boundaries rather than looking like
+   unstructured pixel noise;
+3. the selected tail examples often have larger residual RMS, but the
+   groupwise KID benefit is smaller for Few than Many. Intervention magnitude
+   therefore does not imply useful tail-specialized knowledge.
+
+This supports the low-frequency, stage-composed correction interpretation.
+It does not identify a separable semantic object or texture dictionary stored
+inside the expert parameters.
+
 ## Conclusion
 
 The learned expert makes a small but reproducible improvement over removing
