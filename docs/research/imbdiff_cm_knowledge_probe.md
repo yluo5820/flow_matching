@@ -163,9 +163,12 @@ directions would then be candidates for K3 trajectory projection and K4 causal
 intervention.
 
 **Control implementation status:** these controls are now implemented in output
-schema 2. The fixed random adapter uses the same `lora_A`/`lora_B` factor
-shapes, matches the learned effective-weight RMS, and is batch-response-RMS
-matched before sketching. Expert, general, and random output responses use the
-same deterministic sketch projection. The controlled 60k rerun remains
-pending; the observations above deliberately remain attributed to the response
-rather than the expert weights.
+schema 3. The fixed random adapter preserves the complete singular spectrum of
+the learned `lora_B @ lora_A` product, including its factor rank and Frobenius
+norm, while independently randomizing the left and right singular subspaces.
+It is batch-response-RMS matched before sketching. Expert, general, and random
+output responses use the same deterministic sketch projection.
+`summary.json` audits the product-space stable ranks and maximum
+spectrum-matching error. The spectrum-controlled 60k rerun remains pending; the
+observations above deliberately remain attributed to the response rather than
+the expert weights.

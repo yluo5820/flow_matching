@@ -402,10 +402,13 @@ fine class. Linear probes predict fine class, coarse superclass, and
 Many/Medium/Few group from full, low-pass, and high-pass expert sketches.
 Every learned expert result is paired with the same input activation, the
 general preactivation, and a fixed random low-rank adapter with identical
-factor shapes and matched effective-weight/response RMS. All output-side
-controls use the same deterministic sketch projection. K2 builds separate
-class-conditioned subspaces for the learned expert and all three controls and
-writes a superclass-label permutation null.
+factor rank and the learned `lora_B @ lora_A` product's complete singular
+spectrum, while randomizing its left and right singular subspaces. Its response
+RMS is matched before sketching. All output-side controls use the same
+deterministic sketch projection. K2 builds separate class-conditioned
+subspaces for the learned expert and all three controls and writes a
+superclass-label permutation null. `summary.json` records the stable ranks and
+maximum spectrum-matching error for every adapted layer.
 
 Main outputs are:
 

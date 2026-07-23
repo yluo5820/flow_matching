@@ -26,7 +26,7 @@ from fm_lab.diagnostics.imbdiff_cm_probe import (
 from fm_lab.evaluation.groups import frequency_ranked_groups
 
 _SCHEMA_VERSION = 1
-_KNOWLEDGE_OUTPUT_SCHEMA_VERSION = 2
+_KNOWLEDGE_OUTPUT_SCHEMA_VERSION = 3
 _FEATURE_NAMES = (
     "expert_full",
     "expert_low_pass",
@@ -259,6 +259,7 @@ class ExpertResponseCollector:
         self._handles: list[Any] = []
         self._projection_cache: dict[tuple[str, str, int], torch.Tensor] = {}
         self._random_weight_cache: dict[str, torch.Tensor] = {}
+        self._random_control_stats: dict[str, dict[str, float]] = {}
         self._descriptor_rows: list[dict[str, Any]] = []
         self._metadata: dict[str, list[np.ndarray]] = {
             "layer_index": [],
@@ -312,10 +313,9 @@ class ExpertResponseCollector:
                 .float()
             )
             singular_values = torch.linalg.svdvals(effective.flatten(1))
-            squared = singular_values.square()
-            stable_rank = float(
-                squared.sum() / squared.max().clamp_min(torch.finfo(squared.dtype).tiny)
-            )
+            stable_rank = _stable_rank_from_singular_values(singular_values)
+            random_singular_values = torch.linalg.svdvals(random_effective.flatten(1))
+            random_stable_rank = _stable_rank_from_singular_values(random_singular_values)
             validation = self._layer_validation[layer_name]
             layer_rows.append(
                 {
@@ -331,9 +331,11 @@ class ExpertResponseCollector:
                     "random_effective_weight_rms": float(
                         random_effective.square().mean().sqrt().cpu()
                     ),
+                    "random_effective_weight_stable_rank": random_stable_rank,
                     "random_effective_weight_sha256": hashlib.sha256(
                         random_effective.cpu().contiguous().numpy().tobytes()
                     ).hexdigest(),
+                    **self._random_control_stats[layer_name],
                     **validation,
                 }
             )
@@ -347,25 +349,57 @@ class ExpertResponseCollector:
         cached = self._random_weight_cache.get(layer_name)
         if cached is not None and cached.device == module.weight.device:
             return cached
+
+        trained_left = module.lora_B.detach().float().cpu()
+        trained_right = module.lora_A.detach().float().cpu()
+        target_singular_values = _compact_product_singular_values(
+            trained_left,
+            trained_right,
+        )
+        factor_rank = int(target_singular_values.numel())
         generator = torch.Generator(device="cpu")
         generator.manual_seed(_stable_seed(self.seed, "random_adapter", layer_name))
-        random_a = torch.randn(
-            tuple(module.lora_A.shape),
-            generator=generator,
-            dtype=torch.float32,
+        random_left_basis, _ = torch.linalg.qr(
+            torch.randn(
+                trained_left.shape[0],
+                factor_rank,
+                generator=generator,
+                dtype=torch.float32,
+            ),
+            mode="reduced",
         )
-        random_b = torch.randn(
-            tuple(module.lora_B.shape),
-            generator=generator,
-            dtype=torch.float32,
+        random_right_basis, _ = torch.linalg.qr(
+            torch.randn(
+                trained_right.shape[1],
+                factor_rank,
+                generator=generator,
+                dtype=torch.float32,
+            ),
+            mode="reduced",
         )
-        random_effective = (random_b @ random_a).reshape_as(module.weight)
-        trained_effective = _effective_expert_weight(module).detach().float().cpu()
-        target_norm = trained_effective.norm()
-        random_effective = random_effective * (
-            target_norm
-            / random_effective.norm().clamp_min(torch.finfo(random_effective.dtype).tiny)
+        singular_root = target_singular_values.clamp_min(0.0).sqrt()
+        random_left = random_left_basis * singular_root[None, :]
+        random_right = singular_root[:, None] * random_right_basis.T
+        random_product = random_left @ random_right
+        achieved_singular_values = _compact_product_singular_values(
+            random_left,
+            random_right,
         )
+        spectral_scale = target_singular_values.max().clamp_min(
+            torch.finfo(target_singular_values.dtype).tiny
+        )
+        spectrum_error = float(
+            (achieved_singular_values - target_singular_values).abs().max() / spectral_scale
+        )
+        random_effective = random_product.reshape_as(module.weight)
+        self._random_control_stats[layer_name] = {
+            "expert_product_factor_rank": factor_rank,
+            "expert_product_stable_rank": _stable_rank_from_singular_values(target_singular_values),
+            "random_product_stable_rank": _stable_rank_from_singular_values(
+                achieved_singular_values
+            ),
+            "random_product_spectrum_max_relative_error": spectrum_error,
+        }
         matched = random_effective.to(
             device=module.weight.device,
             dtype=module.weight.dtype,
@@ -777,8 +811,9 @@ def probe_imbdiff_cm_knowledge(
         "subspace_summary": _summarize_subspaces(subspace_rows),
         "interpretation_boundary": (
             "Learned expert responses are compared with their shared input "
-            "activation, general preactivation, and a fixed factor-shape/"
-            "weight-RMS-matched random adapter applied to the same activation. "
+            "activation, general preactivation, and a fixed random adapter with "
+            "the learned BA product's exact factor rank and singular spectrum, "
+            "applied to the same activation. "
             "Selectivity beyond those controls can be attributed to the learned "
             "expert transformation, but remains descriptive until K4 intervention."
         ),
@@ -1200,6 +1235,26 @@ def _effective_expert_weight(module: nn.Module) -> torch.Tensor:
     if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
         raise ValueError("Active LoRA module is missing factor parameters.")
     return (module.lora_B @ module.lora_A).reshape_as(module.weight)
+
+
+def _compact_product_singular_values(
+    left: torch.Tensor,
+    right: torch.Tensor,
+) -> torch.Tensor:
+    """Return singular values of ``left @ right`` through its compact factors."""
+
+    if left.ndim != 2 or right.ndim != 2 or left.shape[1] != right.shape[0]:
+        raise ValueError("Low-rank product factors have incompatible shapes.")
+    left_basis, left_triangular = torch.linalg.qr(left, mode="reduced")
+    right_basis, right_triangular = torch.linalg.qr(right.T, mode="reduced")
+    del left_basis, right_basis
+    core = left_triangular @ right_triangular.T
+    return torch.linalg.svdvals(core)
+
+
+def _stable_rank_from_singular_values(singular_values: torch.Tensor) -> float:
+    squared = singular_values.square()
+    return float(squared.sum() / squared.max().clamp_min(torch.finfo(squared.dtype).tiny))
 
 
 def _response_descriptors(

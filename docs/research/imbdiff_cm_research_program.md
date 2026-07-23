@@ -226,7 +226,9 @@ Use disjoint train/test rows for cross-validated linear probes of:
 Required controls:
 
 - label-permutation nulls preserving class multiplicity;
-- matched random feature sketches;
+- a matched-random adapter that preserves the learned LoRA product's factor
+  rank and complete singular spectrum while randomizing its singular
+  subspaces, plus independent random-feature sketches;
 - magnitude-normalized probes, so CM contraction cannot by itself determine the
   result;
 - replication across checkpoints and at least two trained seeds before a

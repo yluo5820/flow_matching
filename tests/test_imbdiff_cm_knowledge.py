@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from fm_lab.diagnostics.imbdiff_cm_knowledge import (
+    ExpertResponseCollector,
     ImbDiffCMKnowledgeManifest,
     build_imbdiff_cm_knowledge_manifest,
     cifar100_fine_to_coarse,
@@ -64,6 +65,27 @@ def test_knowledge_manifest_round_trip_and_canonical_coarse_mapping(
     assert restored.digest == manifest.digest
     assert set(restored.crossfit_folds[restored.probe.labels == 0]) == {0, 1}
     assert restored.coarse_labels.tolist().count(1) == 4
+
+
+def test_random_adapter_preserves_actual_lora_product_spectrum() -> None:
+    model = _tiny_knowledge_model().eval()
+    collector = ExpertResponseCollector(model, sketch_dim=8, seed=19)
+    layer_name, module = collector.modules[0]
+
+    random_weight = collector._matched_random_weight(  # noqa: SLF001
+        layer_name,
+        module,
+    )
+    trained_product = (module.lora_B @ module.lora_A).detach().float().cpu()
+    random_product = random_weight.detach().float().cpu().reshape_as(trained_product)
+
+    torch.testing.assert_close(
+        torch.linalg.svdvals(random_product),
+        torch.linalg.svdvals(trained_product),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert not torch.allclose(random_product, trained_product)
 
 
 def test_knowledge_probe_reconstructs_local_expert_and_emits_k1_k2_rows() -> None:
@@ -131,6 +153,12 @@ def test_knowledge_probe_reconstructs_local_expert_and_emits_k1_k2_rows() -> Non
             layer["effective_weight_rms"],
             layer["random_effective_weight_rms"],
         )
+        assert np.isclose(
+            layer["expert_product_stable_rank"],
+            layer["random_product_stable_rank"],
+            rtol=1e-5,
+        )
+        assert layer["random_product_spectrum_max_relative_error"] < 1e-5
     assert {row["task"] for row in probe_rows} == {
         "fine_class",
         "coarse_class",
