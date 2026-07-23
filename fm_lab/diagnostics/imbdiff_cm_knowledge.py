@@ -26,7 +26,42 @@ from fm_lab.diagnostics.imbdiff_cm_probe import (
 from fm_lab.evaluation.groups import frequency_ranked_groups
 
 _SCHEMA_VERSION = 1
-_FEATURE_NAMES = ("full", "low_pass", "high_pass")
+_KNOWLEDGE_OUTPUT_SCHEMA_VERSION = 2
+_FEATURE_NAMES = (
+    "expert_full",
+    "expert_low_pass",
+    "expert_high_pass",
+    "input_activation",
+    "general_full",
+    "general_low_pass",
+    "general_high_pass",
+    "random_full",
+    "random_low_pass",
+    "random_high_pass",
+)
+_SUBSPACE_REPRESENTATIONS = (
+    "expert_full",
+    "input_activation",
+    "general_full",
+    "random_full",
+)
+_BAND_CONTROL_FEATURES = {
+    "full": ("expert_full", "general_full", "random_full"),
+    "low_pass": ("expert_low_pass", "general_low_pass", "random_low_pass"),
+    "high_pass": ("expert_high_pass", "general_high_pass", "random_high_pass"),
+}
+_SKETCH_PROJECTION_GROUPS = {
+    "expert_full": "output_full",
+    "general_full": "output_full",
+    "random_full": "output_full",
+    "expert_low_pass": "output_low_pass",
+    "general_low_pass": "output_low_pass",
+    "random_low_pass": "output_low_pass",
+    "expert_high_pass": "output_high_pass",
+    "general_high_pass": "output_high_pass",
+    "random_high_pass": "output_high_pass",
+    "input_activation": "input_activation",
+}
 _TASK_NAMES = ("fine_class", "coarse_class", "frequency_group")
 
 # CIFAR-100 coarse labels in the canonical fine-label order used by the binary
@@ -223,6 +258,7 @@ class ExpertResponseCollector:
         self._context: _CaptureContext | None = None
         self._handles: list[Any] = []
         self._projection_cache: dict[tuple[str, str, int], torch.Tensor] = {}
+        self._random_weight_cache: dict[str, torch.Tensor] = {}
         self._descriptor_rows: list[dict[str, Any]] = []
         self._metadata: dict[str, list[np.ndarray]] = {
             "layer_index": [],
@@ -267,6 +303,14 @@ class ExpertResponseCollector:
         layer_rows: list[dict[str, Any]] = []
         for layer_name, module in self.modules:
             effective = _effective_expert_weight(module).detach().float()
+            random_effective = (
+                self._matched_random_weight(
+                    layer_name,
+                    module,
+                )
+                .detach()
+                .float()
+            )
             singular_values = torch.linalg.svdvals(effective.flatten(1))
             squared = singular_values.square()
             stable_rank = float(
@@ -284,10 +328,50 @@ class ExpertResponseCollector:
                     "declared_rank": int(module.r),
                     "effective_weight_rms": float(effective.square().mean().sqrt().cpu()),
                     "effective_weight_stable_rank": stable_rank,
+                    "random_effective_weight_rms": float(
+                        random_effective.square().mean().sqrt().cpu()
+                    ),
+                    "random_effective_weight_sha256": hashlib.sha256(
+                        random_effective.cpu().contiguous().numpy().tobytes()
+                    ).hexdigest(),
                     **validation,
                 }
             )
         return atlas, self._descriptor_rows, layer_rows
+
+    def _matched_random_weight(
+        self,
+        layer_name: str,
+        module: nn.Module,
+    ) -> torch.Tensor:
+        cached = self._random_weight_cache.get(layer_name)
+        if cached is not None and cached.device == module.weight.device:
+            return cached
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(_stable_seed(self.seed, "random_adapter", layer_name))
+        random_a = torch.randn(
+            tuple(module.lora_A.shape),
+            generator=generator,
+            dtype=torch.float32,
+        )
+        random_b = torch.randn(
+            tuple(module.lora_B.shape),
+            generator=generator,
+            dtype=torch.float32,
+        )
+        random_effective = (random_b @ random_a).reshape_as(module.weight)
+        trained_effective = _effective_expert_weight(module).detach().float().cpu()
+        target_norm = trained_effective.norm()
+        random_effective = random_effective * (
+            target_norm
+            / random_effective.norm().clamp_min(torch.finfo(random_effective.dtype).tiny)
+        )
+        matched = random_effective.to(
+            device=module.weight.device,
+            dtype=module.weight.dtype,
+        )
+        self._random_weight_cache[layer_name] = matched
+        return matched
 
     def _make_hook(self, layer_name: str):
         def hook(module: nn.Module, inputs: tuple[Any, ...], output: torch.Tensor) -> None:
@@ -340,8 +424,25 @@ class ExpertResponseCollector:
             module.dilation,
             module.groups,
         )
+        random_raw = F.conv2d(
+            activations,
+            self._matched_random_weight(layer_name, module),
+            None,
+            module.stride,
+            module.padding,
+            module.dilation,
+            module.groups,
+        )
         expert_float = expert.float()
         general_float = general.float()
+        activation_float = activations.float()
+        random_float = random_raw.float()
+        expert_batch_rms = expert_float.square().mean().sqrt()
+        random_batch_rms = random_float.square().mean().sqrt()
+        random_response_scale = expert_batch_rms / random_batch_rms.clamp_min(
+            torch.finfo(random_float.dtype).tiny
+        )
+        random_float = random_float * random_response_scale
         output_float = output.float()
         residual = output_float - general_float - expert_float
         residual_flat = residual.flatten(1)
@@ -369,19 +470,66 @@ class ExpertResponseCollector:
         previous["captures"] += 1.0
         self._layer_validation[layer_name] = previous
 
-        descriptors = _response_descriptors(expert_float, general_float)
-        filtered = _low_high_filtered(expert_float)
+        descriptors = _response_descriptors(
+            expert_float,
+            general_float,
+            activation_float,
+            random_float,
+        )
+        descriptors["random_response_match_scale"] = random_response_scale.expand(expert.shape[0])
+        expert_filtered = _low_high_filtered(expert_float)
+        general_filtered = _low_high_filtered(general_float)
+        random_filtered = _low_high_filtered(random_float)
         sketches = {
-            "full": self._compact_sketch(layer_name, "full", expert_float),
-            "low_pass": self._compact_sketch(
+            "expert_full": self._compact_sketch(
                 layer_name,
-                "low_pass",
-                filtered["low_pass"],
+                "expert_full",
+                expert_float,
             ),
-            "high_pass": self._compact_sketch(
+            "expert_low_pass": self._compact_sketch(
                 layer_name,
-                "high_pass",
-                filtered["high_pass"],
+                "expert_low_pass",
+                expert_filtered["low_pass"],
+            ),
+            "expert_high_pass": self._compact_sketch(
+                layer_name,
+                "expert_high_pass",
+                expert_filtered["high_pass"],
+            ),
+            "input_activation": self._compact_sketch(
+                layer_name,
+                "input_activation",
+                activation_float,
+            ),
+            "general_full": self._compact_sketch(
+                layer_name,
+                "general_full",
+                general_float,
+            ),
+            "general_low_pass": self._compact_sketch(
+                layer_name,
+                "general_low_pass",
+                general_filtered["low_pass"],
+            ),
+            "general_high_pass": self._compact_sketch(
+                layer_name,
+                "general_high_pass",
+                general_filtered["high_pass"],
+            ),
+            "random_full": self._compact_sketch(
+                layer_name,
+                "random_full",
+                random_float,
+            ),
+            "random_low_pass": self._compact_sketch(
+                layer_name,
+                "random_low_pass",
+                random_filtered["low_pass"],
+            ),
+            "random_high_pass": self._compact_sketch(
+                layer_name,
+                "random_high_pass",
+                random_filtered["high_pass"],
             ),
         }
         batch_size = expert.shape[0]
@@ -441,7 +589,8 @@ class ExpertResponseCollector:
             (channel_mean, channel_rms, spatial_mean, spatial_rms),
             dim=1,
         )
-        key = (layer_name, feature_name, compact.shape[1])
+        projection_group = _SKETCH_PROJECTION_GROUPS[feature_name]
+        key = (layer_name, projection_group, compact.shape[1])
         projection = self._projection_cache.get(key)
         if projection is None or projection.device != compact.device:
             projection_seed = _stable_seed(self.seed, *key)
@@ -474,6 +623,7 @@ def probe_imbdiff_cm_knowledge(
     permutation_repeats: int = 10,
     ridge_alpha: float = 1.0,
     subspace_rank: int = 3,
+    subspace_permutation_repeats: int = 200,
     layer_names: Sequence[str] | None = None,
     compute_linear_probes: bool = True,
     compute_subspaces: bool = True,
@@ -481,6 +631,7 @@ def probe_imbdiff_cm_knowledge(
     dict[str, Any],
     list[dict[str, Any]],
     dict[str, np.ndarray],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, np.ndarray],
@@ -495,6 +646,8 @@ def probe_imbdiff_cm_knowledge(
         raise ValueError("ridge_alpha must be positive.")
     if int(subspace_rank) < 1:
         raise ValueError("subspace_rank must be positive.")
+    if int(subspace_permutation_repeats) < 1:
+        raise ValueError("subspace_permutation_repeats must be positive.")
     model = restored.model
     objective = restored.objective
     device = next(model.parameters()).device
@@ -582,18 +735,22 @@ def probe_imbdiff_cm_knowledge(
         if compute_linear_probes
         else []
     )
+    control_rows = controlled_linear_probe_rows(probe_rows)
     if compute_subspaces:
         subspace_rows, subspace_pairs = class_subspace_rows(
             atlas,
             class_counts=class_counts,
             rank=subspace_rank,
+            permutation_repeats=subspace_permutation_repeats,
+            seed=seed,
         )
     else:
         subspace_rows, subspace_pairs = [], {}
 
     max_reconstruction = max(float(row["reconstruction_max_relative_rms"]) for row in layer_rows)
     summary = {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": _KNOWLEDGE_OUTPUT_SCHEMA_VERSION,
+        "manifest_schema_version": _SCHEMA_VERSION,
         "checkpoint": {
             "path": str(restored.checkpoint_path),
             "step": int(restored.checkpoint_step),
@@ -612,15 +769,18 @@ def probe_imbdiff_cm_knowledge(
         "linear_probes_computed": bool(compute_linear_probes),
         "subspaces_computed": bool(compute_subspaces),
         "subspace_rank": int(subspace_rank),
+        "subspace_permutation_repeats": int(subspace_permutation_repeats),
         "max_reconstruction_relative_rms": max_reconstruction,
         "layers": layer_rows,
         "linear_probe_summary": _summarize_linear_probes(probe_rows),
+        "controlled_linear_probe_summary": _summarize_controlled_probes(control_rows),
         "subspace_summary": _summarize_subspaces(subspace_rows),
         "interpretation_boundary": (
-            "Normalized sketches and linear/subspace probes test reproducible "
-            "class, superclass, frequency-group, and band-selective structure. "
-            "They do not by themselves establish causal importance; stable "
-            "directions require matched interventions in K4."
+            "Learned expert responses are compared with their shared input "
+            "activation, general preactivation, and a fixed factor-shape/"
+            "weight-RMS-matched random adapter applied to the same activation. "
+            "Selectivity beyond those controls can be attributed to the learned "
+            "expert transformation, but remains descriptive until K4 intervention."
         ),
     }
     return (
@@ -628,6 +788,7 @@ def probe_imbdiff_cm_knowledge(
         descriptor_rows,
         atlas,
         probe_rows,
+        control_rows,
         subspace_rows,
         subspace_pairs,
     )
@@ -729,21 +890,88 @@ def linear_probe_rows(
     return rows
 
 
+def controlled_linear_probe_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pair learned-expert decoding with same-activation controls."""
+
+    lookup = {
+        (
+            int(row["layer_index"]),
+            int(row["timestep"]),
+            str(row["task"]),
+            str(row["feature"]),
+        ): row
+        for row in rows
+    }
+    results: list[dict[str, Any]] = []
+    layer_timesteps = sorted({(int(row["layer_index"]), int(row["timestep"])) for row in rows})
+    for layer_index, timestep in layer_timesteps:
+        for task in _TASK_NAMES:
+            for band, (
+                expert_feature,
+                general_feature,
+                random_feature,
+            ) in _BAND_CONTROL_FEATURES.items():
+                keys = [
+                    (layer_index, timestep, task, feature)
+                    for feature in (
+                        expert_feature,
+                        general_feature,
+                        random_feature,
+                    )
+                ]
+                if any(key not in lookup for key in keys):
+                    continue
+                expert = lookup[keys[0]]
+                general = lookup[keys[1]]
+                random_adapter = lookup[keys[2]]
+                input_row = lookup.get((layer_index, timestep, task, "input_activation"))
+                expert_accuracy = float(expert["accuracy"])
+                general_accuracy = float(general["accuracy"])
+                random_accuracy = float(random_adapter["accuracy"])
+                input_accuracy = None if input_row is None else float(input_row["accuracy"])
+                results.append(
+                    {
+                        "layer_index": layer_index,
+                        "timestep": timestep,
+                        "task": task,
+                        "band": band,
+                        "num_rows": int(expert["num_rows"]),
+                        "num_classes": int(expert["num_classes"]),
+                        "expert_accuracy": expert_accuracy,
+                        "general_accuracy": general_accuracy,
+                        "random_adapter_accuracy": random_accuracy,
+                        "input_activation_accuracy": (input_accuracy if band == "full" else None),
+                        "expert_minus_general": (expert_accuracy - general_accuracy),
+                        "expert_minus_random_adapter": (expert_accuracy - random_accuracy),
+                        "expert_minus_input_activation": (
+                            None
+                            if band != "full" or input_accuracy is None
+                            else expert_accuracy - input_accuracy
+                        ),
+                    }
+                )
+    return results
+
+
 def class_subspace_rows(
     atlas: Mapping[str, np.ndarray],
     *,
     class_counts: Sequence[int],
     rank: int,
+    permutation_repeats: int,
+    seed: int,
 ) -> tuple[list[dict[str, Any]], dict[str, np.ndarray]]:
-    """Build class response subspaces and compact pairwise transfer graphs."""
+    """Build controlled class subspaces and compact pairwise transfer graphs."""
 
     layer_indices = np.asarray(atlas["layer_index"], dtype=np.int64)
     class_ids = np.asarray(atlas["class_id"], dtype=np.int64)
     coarse_ids = np.asarray(atlas["coarse_id"], dtype=np.int64)
     group_ids = np.asarray(atlas["frequency_group_id"], dtype=np.int64)
-    features = np.asarray(atlas["full_sketch"], dtype=np.float64)
     aggregate_rows: list[dict[str, Any]] = []
     pair_parts: dict[str, list[np.ndarray]] = {
+        "representation_id": [],
         "layer_index": [],
         "class_a": [],
         "class_b": [],
@@ -755,112 +983,198 @@ def class_subspace_rows(
         "mean_principal_angle_degrees": [],
         "frequency_log_distance": [],
     }
-    for layer_index in np.unique(layer_indices):
-        layer_mask = layer_indices == layer_index
-        layer_classes = np.unique(class_ids[layer_mask])
-        bases: dict[int, np.ndarray] = {}
-        for class_id in layer_classes:
-            class_features = features[layer_mask & (class_ids == class_id)]
-            normalized = class_features / np.maximum(
-                np.linalg.norm(class_features, axis=1, keepdims=True),
-                np.finfo(np.float64).tiny,
-            )
-            _, _, right = np.linalg.svd(normalized, full_matrices=False)
-            actual_rank = min(int(rank), len(right))
-            bases[int(class_id)] = right[:actual_rank].T
-
-        local_pairs: list[dict[str, Any]] = []
-        for position, class_a in enumerate(layer_classes):
-            for class_b in layer_classes[position + 1 :]:
-                basis_a = bases[int(class_a)]
-                basis_b = bases[int(class_b)]
-                singular_values = np.linalg.svd(
-                    basis_a.T @ basis_b,
-                    compute_uv=False,
+    for representation_id, representation in enumerate(_SUBSPACE_REPRESENTATIONS):
+        features = np.asarray(
+            atlas[f"{representation}_sketch"],
+            dtype=np.float64,
+        )
+        for layer_index in np.unique(layer_indices):
+            layer_mask = layer_indices == layer_index
+            layer_classes = np.unique(class_ids[layer_mask])
+            bases: dict[int, np.ndarray] = {}
+            class_to_coarse: dict[int, int] = {}
+            for class_id in layer_classes:
+                class_mask = layer_mask & (class_ids == class_id)
+                class_features = features[class_mask]
+                normalized = class_features / np.maximum(
+                    np.linalg.norm(class_features, axis=1, keepdims=True),
+                    np.finfo(np.float64).tiny,
                 )
-                clipped = np.clip(singular_values, 0.0, 1.0)
-                overlap = float(np.mean(clipped**2))
-                angle = float(np.degrees(np.arccos(clipped)).mean())
-                representative_a = np.flatnonzero(layer_mask & (class_ids == class_a))[0]
-                representative_b = np.flatnonzero(layer_mask & (class_ids == class_b))[0]
-                coarse_a = int(coarse_ids[representative_a])
-                coarse_b = int(coarse_ids[representative_b])
-                group_a = int(group_ids[representative_a])
-                group_b = int(group_ids[representative_b])
-                frequency_distance = float(
-                    abs(
-                        math.log(max(int(class_counts[int(class_a)]), 1))
-                        - math.log(max(int(class_counts[int(class_b)]), 1))
+                _, _, right = np.linalg.svd(normalized, full_matrices=False)
+                actual_rank = min(int(rank), len(right))
+                bases[int(class_id)] = right[:actual_rank].T
+                representative = np.flatnonzero(class_mask)[0]
+                class_to_coarse[int(class_id)] = int(coarse_ids[representative])
+
+            local_pairs: list[dict[str, Any]] = []
+            for position, class_a in enumerate(layer_classes):
+                for class_b in layer_classes[position + 1 :]:
+                    basis_a = bases[int(class_a)]
+                    basis_b = bases[int(class_b)]
+                    singular_values = np.linalg.svd(
+                        basis_a.T @ basis_b,
+                        compute_uv=False,
                     )
-                )
-                local_pairs.append(
-                    {
-                        "overlap": overlap,
-                        "angle": angle,
-                        "same_superclass": coarse_a == coarse_b,
-                        "frequency_relation": _frequency_relation(group_a, group_b),
-                        "frequency_distance": frequency_distance,
-                    }
-                )
-                for name, value in (
-                    ("layer_index", int(layer_index)),
-                    ("class_a", int(class_a)),
-                    ("class_b", int(class_b)),
-                    ("coarse_a", coarse_a),
-                    ("coarse_b", coarse_b),
-                    ("frequency_group_a", group_a),
-                    ("frequency_group_b", group_b),
-                    ("overlap", overlap),
-                    ("mean_principal_angle_degrees", angle),
-                    ("frequency_log_distance", frequency_distance),
-                ):
-                    dtype = np.float64 if isinstance(value, float) else np.int64
-                    pair_parts[name].append(np.asarray([value], dtype=dtype))
+                    clipped = np.clip(singular_values, 0.0, 1.0)
+                    overlap = float(np.mean(clipped**2))
+                    angle = float(np.degrees(np.arccos(clipped)).mean())
+                    representative_a = np.flatnonzero(layer_mask & (class_ids == class_a))[0]
+                    representative_b = np.flatnonzero(layer_mask & (class_ids == class_b))[0]
+                    coarse_a = int(coarse_ids[representative_a])
+                    coarse_b = int(coarse_ids[representative_b])
+                    group_a = int(group_ids[representative_a])
+                    group_b = int(group_ids[representative_b])
+                    frequency_distance = float(
+                        abs(
+                            math.log(max(int(class_counts[int(class_a)]), 1))
+                            - math.log(max(int(class_counts[int(class_b)]), 1))
+                        )
+                    )
+                    local_pairs.append(
+                        {
+                            "class_a": int(class_a),
+                            "class_b": int(class_b),
+                            "overlap": overlap,
+                            "angle": angle,
+                            "same_superclass": coarse_a == coarse_b,
+                            "frequency_relation": _frequency_relation(
+                                group_a,
+                                group_b,
+                            ),
+                            "frequency_distance": frequency_distance,
+                        }
+                    )
+                    for name, value in (
+                        ("representation_id", representation_id),
+                        ("layer_index", int(layer_index)),
+                        ("class_a", int(class_a)),
+                        ("class_b", int(class_b)),
+                        ("coarse_a", coarse_a),
+                        ("coarse_b", coarse_b),
+                        ("frequency_group_a", group_a),
+                        ("frequency_group_b", group_b),
+                        ("overlap", overlap),
+                        ("mean_principal_angle_degrees", angle),
+                        ("frequency_log_distance", frequency_distance),
+                    ):
+                        dtype = np.float64 if isinstance(value, float) else np.int64
+                        pair_parts[name].append(np.asarray([value], dtype=dtype))
 
-        for semantic_relation, semantic_filter in (
-            ("within_superclass", lambda row: row["same_superclass"]),
-            ("across_superclass", lambda row: not row["same_superclass"]),
-        ):
-            selected = [row for row in local_pairs if semantic_filter(row)]
-            if selected:
+            for semantic_relation, semantic_filter in (
+                ("within_superclass", lambda row: row["same_superclass"]),
+                (
+                    "across_superclass",
+                    lambda row: not row["same_superclass"],
+                ),
+            ):
+                selected = [row for row in local_pairs if semantic_filter(row)]
+                if selected:
+                    aggregate_rows.append(
+                        _aggregate_subspace_rows(
+                            representation=representation,
+                            layer_index=int(layer_index),
+                            relation_type="semantic",
+                            relation=semantic_relation,
+                            rows=selected,
+                        )
+                    )
+            for relation in sorted({row["frequency_relation"] for row in local_pairs}):
+                selected = [row for row in local_pairs if row["frequency_relation"] == relation]
                 aggregate_rows.append(
                     _aggregate_subspace_rows(
+                        representation=representation,
                         layer_index=int(layer_index),
-                        relation_type="semantic",
-                        relation=semantic_relation,
+                        relation_type="frequency",
+                        relation=relation,
                         rows=selected,
                     )
                 )
-        for relation in sorted({row["frequency_relation"] for row in local_pairs}):
-            selected = [row for row in local_pairs if row["frequency_relation"] == relation]
+
+            overlaps = np.asarray(
+                [row["overlap"] for row in local_pairs],
+                dtype=np.float64,
+            )
+            distances = np.asarray(
+                [row["frequency_distance"] for row in local_pairs],
+                dtype=np.float64,
+            )
+            correlation_value = float(spearmanr(distances, overlaps).statistic)
+            correlation = correlation_value if math.isfinite(correlation_value) else None
             aggregate_rows.append(
-                _aggregate_subspace_rows(
-                    layer_index=int(layer_index),
-                    relation_type="frequency",
-                    relation=relation,
-                    rows=selected,
+                {
+                    "representation": representation,
+                    "layer_index": int(layer_index),
+                    "relation_type": "frequency_distance",
+                    "relation": "spearman",
+                    "num_pairs": int(len(local_pairs)),
+                    "overlap_mean": float(overlaps.mean()),
+                    "overlap_std": float(overlaps.std()),
+                    "angle_mean_degrees": float(np.mean([row["angle"] for row in local_pairs])),
+                    "frequency_distance_overlap_spearman": correlation,
+                    "permutation_null_mean": None,
+                    "permutation_null_std": None,
+                    "permutation_p_one_sided": None,
+                }
+            )
+
+            within = np.asarray([row["overlap"] for row in local_pairs if row["same_superclass"]])
+            across = np.asarray(
+                [row["overlap"] for row in local_pairs if not row["same_superclass"]]
+            )
+            actual_delta = float(within.mean() - across.mean())
+            rng = np.random.RandomState(
+                _stable_seed(
+                    seed,
+                    "subspace_permutation",
+                    representation,
+                    int(layer_index),
                 )
             )
-        overlaps = np.asarray([row["overlap"] for row in local_pairs])
-        distances = np.asarray([row["frequency_distance"] for row in local_pairs])
-        correlation_value = float(spearmanr(distances, overlaps).statistic)
-        correlation = correlation_value if math.isfinite(correlation_value) else None
-        aggregate_rows.append(
-            {
-                "layer_index": int(layer_index),
-                "relation_type": "frequency_distance",
-                "relation": "spearman",
-                "num_pairs": int(len(local_pairs)),
-                "overlap_mean": float(overlaps.mean()),
-                "overlap_std": float(overlaps.std()),
-                "angle_mean_degrees": float(np.mean([row["angle"] for row in local_pairs])),
-                "frequency_distance_overlap_spearman": float(correlation),
-            }
-        )
+            coarse_vector = np.asarray(
+                [class_to_coarse[int(value)] for value in layer_classes],
+                dtype=np.int64,
+            )
+            class_to_position = {int(value): index for index, value in enumerate(layer_classes)}
+            class_a_positions = np.asarray(
+                [class_to_position[int(row["class_a"])] for row in local_pairs],
+                dtype=np.int64,
+            )
+            class_b_positions = np.asarray(
+                [class_to_position[int(row["class_b"])] for row in local_pairs],
+                dtype=np.int64,
+            )
+            permutation_deltas: list[float] = []
+            for _ in range(int(permutation_repeats)):
+                permuted = rng.permutation(coarse_vector)
+                same = permuted[class_a_positions] == permuted[class_b_positions]
+                permutation_deltas.append(float(overlaps[same].mean() - overlaps[~same].mean()))
+            null = np.asarray(permutation_deltas, dtype=np.float64)
+            aggregate_rows.append(
+                {
+                    "representation": representation,
+                    "layer_index": int(layer_index),
+                    "relation_type": "semantic_permutation",
+                    "relation": "within_minus_across",
+                    "num_pairs": int(len(local_pairs)),
+                    "overlap_mean": actual_delta,
+                    "overlap_std": None,
+                    "angle_mean_degrees": None,
+                    "frequency_distance_overlap_spearman": None,
+                    "permutation_null_mean": float(null.mean()),
+                    "permutation_null_std": float(null.std()),
+                    "permutation_p_one_sided": float(
+                        (1 + np.sum(null >= actual_delta)) / (len(null) + 1)
+                    ),
+                }
+            )
     pairs = {
         name: np.concatenate(parts, axis=0) if parts else np.asarray([])
         for name, parts in pair_parts.items()
     }
+    pairs["representation_names"] = np.asarray(
+        _SUBSPACE_REPRESENTATIONS,
+        dtype=np.str_,
+    )
     return aggregate_rows, pairs
 
 
@@ -891,11 +1205,15 @@ def _effective_expert_weight(module: nn.Module) -> torch.Tensor:
 def _response_descriptors(
     expert: torch.Tensor,
     general: torch.Tensor,
+    activation: torch.Tensor,
+    random_response: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     expert_energy = expert.square()
     general_energy = general.square()
     expert_rms = expert_energy.flatten(1).mean(1).sqrt()
     general_rms = general_energy.flatten(1).mean(1).sqrt()
+    activation_rms = activation.square().flatten(1).mean(1).sqrt()
+    random_rms = random_response.square().flatten(1).mean(1).sqrt()
     tiny = torch.finfo(expert.dtype).tiny
 
     channel_energy = expert_energy.sum(dim=(-2, -1))
@@ -925,7 +1243,10 @@ def _response_descriptors(
     return {
         "expert_rms": expert_rms,
         "general_rms": general_rms,
+        "input_activation_rms": activation_rms,
+        "random_adapter_rms": random_rms,
         "expert_to_general_rms": expert_rms / general_rms.clamp_min(tiny),
+        "random_to_expert_rms": random_rms / expert_rms.clamp_min(tiny),
         "channel_participation_ratio": channel_participation,
         "top10_channel_energy_fraction": top_channel_fraction,
         "spatial_participation_ratio": spatial_participation,
@@ -1061,6 +1382,7 @@ def _frequency_relation(group_a: int, group_b: int) -> str:
 
 def _aggregate_subspace_rows(
     *,
+    representation: str,
     layer_index: int,
     relation_type: str,
     relation: str,
@@ -1069,6 +1391,7 @@ def _aggregate_subspace_rows(
     overlaps = np.asarray([float(row["overlap"]) for row in rows])
     angles = np.asarray([float(row["angle"]) for row in rows])
     return {
+        "representation": representation,
         "layer_index": int(layer_index),
         "relation_type": relation_type,
         "relation": relation,
@@ -1077,6 +1400,9 @@ def _aggregate_subspace_rows(
         "overlap_std": float(overlaps.std()),
         "angle_mean_degrees": float(angles.mean()),
         "frequency_distance_overlap_spearman": None,
+        "permutation_null_mean": None,
+        "permutation_null_std": None,
+        "permutation_p_one_sided": None,
     }
 
 
@@ -1105,38 +1431,94 @@ def _summarize_linear_probes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str
     return summaries
 
 
+def _summarize_controlled_probes(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for task in _TASK_NAMES:
+        for band in _BAND_CONTROL_FEATURES:
+            selected = [row for row in rows if row["task"] == task and row["band"] == band]
+            if not selected:
+                continue
+            expert = np.asarray([float(row["expert_accuracy"]) for row in selected])
+            general = np.asarray([float(row["general_accuracy"]) for row in selected])
+            random_adapter = np.asarray([float(row["random_adapter_accuracy"]) for row in selected])
+            input_values = [
+                float(row["input_activation_accuracy"])
+                for row in selected
+                if row["input_activation_accuracy"] is not None
+            ]
+            summaries.append(
+                {
+                    "task": task,
+                    "band": band,
+                    "num_conditions": int(len(selected)),
+                    "expert_median_accuracy": float(np.median(expert)),
+                    "general_median_accuracy": float(np.median(general)),
+                    "random_adapter_median_accuracy": float(np.median(random_adapter)),
+                    "input_activation_median_accuracy": (
+                        None if not input_values else float(np.median(input_values))
+                    ),
+                    "expert_minus_general_median": float(np.median(expert - general)),
+                    "expert_minus_random_adapter_median": float(np.median(expert - random_adapter)),
+                    "expert_minus_input_activation_median": (
+                        None
+                        if not input_values
+                        else float(
+                            np.median(
+                                [float(row["expert_minus_input_activation"]) for row in selected]
+                            )
+                        )
+                    ),
+                    "expert_beats_general_fraction": float(np.mean(expert > general)),
+                    "expert_beats_random_adapter_fraction": float(np.mean(expert > random_adapter)),
+                }
+            )
+    return summaries
+
+
 def _summarize_subspaces(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for layer_index in sorted({int(row["layer_index"]) for row in rows}):
-        selected = [row for row in rows if int(row["layer_index"]) == layer_index]
-        within = next(
-            (row for row in selected if row["relation"] == "within_superclass"),
-            None,
-        )
-        across = next(
-            (row for row in selected if row["relation"] == "across_superclass"),
-            None,
-        )
-        correlation = next(
-            (row for row in selected if row["relation_type"] == "frequency_distance"),
-            None,
-        )
-        result.append(
-            {
-                "layer_index": layer_index,
-                "within_minus_across_superclass_overlap": (
-                    None
-                    if within is None or across is None
-                    else float(within["overlap_mean"]) - float(across["overlap_mean"])
-                ),
-                "frequency_distance_overlap_spearman": (
-                    None
-                    if correlation is None
-                    or correlation["frequency_distance_overlap_spearman"] is None
-                    else float(correlation["frequency_distance_overlap_spearman"])
-                ),
-            }
-        )
+    for representation in _SUBSPACE_REPRESENTATIONS:
+        representation_rows = [row for row in rows if row["representation"] == representation]
+        for layer_index in sorted({int(row["layer_index"]) for row in representation_rows}):
+            selected = [
+                row for row in representation_rows if int(row["layer_index"]) == layer_index
+            ]
+            permutation = next(
+                (row for row in selected if row["relation_type"] == "semantic_permutation"),
+                None,
+            )
+            correlation = next(
+                (row for row in selected if row["relation_type"] == "frequency_distance"),
+                None,
+            )
+            result.append(
+                {
+                    "representation": representation,
+                    "layer_index": layer_index,
+                    "within_minus_across_superclass_overlap": (
+                        None if permutation is None else float(permutation["overlap_mean"])
+                    ),
+                    "superclass_permutation_null_mean": (
+                        None if permutation is None else float(permutation["permutation_null_mean"])
+                    ),
+                    "superclass_permutation_null_std": (
+                        None if permutation is None else float(permutation["permutation_null_std"])
+                    ),
+                    "superclass_permutation_p_one_sided": (
+                        None
+                        if permutation is None
+                        else float(permutation["permutation_p_one_sided"])
+                    ),
+                    "frequency_distance_overlap_spearman": (
+                        None
+                        if correlation is None
+                        or correlation["frequency_distance_overlap_spearman"] is None
+                        else float(correlation["frequency_distance_overlap_spearman"])
+                    ),
+                }
+            )
     return result
 
 

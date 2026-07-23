@@ -52,6 +52,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--permutation-repeats", type=int, default=10)
     parser.add_argument("--ridge-alpha", type=float, default=1.0)
     parser.add_argument("--subspace-rank", type=int, default=3)
+    parser.add_argument("--subspace-permutation-repeats", type=int, default=200)
     parser.add_argument(
         "--layers",
         default="all",
@@ -84,6 +85,8 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--sketch-dim must be at least two.")
     if args.permutation_repeats < 1:
         raise ValueError("--permutation-repeats must be positive.")
+    if args.subspace_permutation_repeats < 1:
+        raise ValueError("--subspace-permutation-repeats must be positive.")
     if args.max_layers < 0:
         raise ValueError("--max-layers must be non-negative.")
 
@@ -161,6 +164,7 @@ def main(argv: list[str] | None = None) -> None:
         response_rows,
         atlas,
         linear_rows,
+        controlled_rows,
         subspace_rows,
         subspace_pairs,
     ) = probe_imbdiff_cm_knowledge(
@@ -174,6 +178,7 @@ def main(argv: list[str] | None = None) -> None:
         permutation_repeats=args.permutation_repeats,
         ridge_alpha=args.ridge_alpha,
         subspace_rank=args.subspace_rank,
+        subspace_permutation_repeats=args.subspace_permutation_repeats,
         layer_names=layer_names,
         compute_linear_probes=not args.skip_linear_probes,
         compute_subspaces=not args.skip_subspaces,
@@ -192,13 +197,14 @@ def main(argv: list[str] | None = None) -> None:
     layer_name_by_index = {
         int(row["layer_index"]): str(row["layer_name"]) for row in summary["layers"]
     }
-    for rows in (linear_rows, subspace_rows):
+    for rows in (linear_rows, controlled_rows, subspace_rows):
         for row in rows:
             row["layer_name"] = layer_name_by_index[int(row["layer_index"])]
 
     _write_json(output_dir / "summary.json", summary)
     _write_csv(output_dir / "response_descriptors.csv", response_rows)
     _write_csv(output_dir / "linear_probes.csv", linear_rows)
+    _write_csv(output_dir / "controlled_linear_probes.csv", controlled_rows)
     _write_csv(output_dir / "subspace_summary.csv", subspace_rows)
     np.savez_compressed(output_dir / "response_atlas.npz", **atlas)
     if subspace_pairs:
@@ -323,18 +329,40 @@ def _render_report(summary: dict[str, Any]) -> str:
         f"`{summary['max_reconstruction_relative_rms']:.6g}`.",
         "",
         "Linear-probe values are two-way cross-fit accuracies on disjoint held-out ",
-        "images. The permutation and matched-random-feature controls prevent response ",
-        "magnitude or sketch dimension from being interpreted as knowledge.",
+        "images. Learned expert responses are compared with the same input activation, ",
+        "the general preactivation, and a fixed factor-shape/effective-weight-RMS-",
+        "matched random adapter applied to the same activation.",
         "",
         "| Target | Feature | Best layer | t | Accuracy | Permuted | Excess |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: |",
     ]
     for row in summary["linear_probe_summary"]:
+        if not str(row["feature"]).startswith("expert_"):
+            continue
         lines.append(
             f"| {row['task']} | {row['feature']} | "
             f"`{layer_by_index[row['best_layer_index']]}` | "
             f"{row['best_timestep']} | {row['best_accuracy']:.4f} | "
             f"{row['best_permutation_mean']:.4f} | {row['best_excess']:.4f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Target | Band | Expert median | General median | Random-adapter median | "
+            "Input median | Expert - random | Expert - general |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["controlled_linear_probe_summary"]:
+        input_value = row["input_activation_median_accuracy"]
+        lines.append(
+            f"| {row['task']} | {row['band']} | "
+            f"{row['expert_median_accuracy']:.4f} | "
+            f"{row['general_median_accuracy']:.4f} | "
+            f"{row['random_adapter_median_accuracy']:.4f} | "
+            f"{'-' if input_value is None else f'{input_value:.4f}'} | "
+            f"{row['expert_minus_random_adapter_median']:.4f} | "
+            f"{row['expert_minus_general_median']:.4f} |"
         )
     lines.extend(
         [

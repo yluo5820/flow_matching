@@ -390,6 +390,7 @@ fm-lab-imbdiff-cm-knowledge-probe \
   --sketch-dim 32 \
   --permutation-repeats 10 \
   --subspace-rank 3 \
+  --subspace-permutation-repeats 200 \
   --weights ema \
   --channels-last on \
   --device cuda \
@@ -398,10 +399,13 @@ fm-lab-imbdiff-cm-knowledge-probe \
 
 The two cross-fit folds contain different held-out CIFAR-100 images from every
 fine class. Linear probes predict fine class, coarse superclass, and
-Many/Medium/Few group from full, low-pass, and high-pass expert sketches. Each
-result includes label-permutation and matched-random-feature nulls. K2 compares
-class-conditioned response subspaces, including within/across-superclass and
-head/medium/tail relations.
+Many/Medium/Few group from full, low-pass, and high-pass expert sketches.
+Every learned expert result is paired with the same input activation, the
+general preactivation, and a fixed random low-rank adapter with identical
+factor shapes and matched effective-weight/response RMS. All output-side
+controls use the same deterministic sketch projection. K2 builds separate
+class-conditioned subspaces for the learned expert and all three controls and
+writes a superclass-label permutation null.
 
 Main outputs are:
 
@@ -412,6 +416,7 @@ report.md
 response_descriptors.csv
 response_atlas.npz
 linear_probes.csv
+controlled_linear_probes.csv
 subspace_summary.csv
 subspace_pairs.npz
 ```

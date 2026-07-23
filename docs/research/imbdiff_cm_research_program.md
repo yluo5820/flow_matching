@@ -991,7 +991,9 @@ all-class K1/K2 run are complete. They find strong semantic/low-pass response
 structure but no frequency-distance organization. Before checkpoint
 replication, the probe needs general-activation and matched-random-adapter
 controls so semantic information inherited from the shared activation is not
-misattributed to the learned expert weights.
+misattributed to the learned expert weights. Those controls, paired linear
+contrasts, and saved K2 superclass-permutation nulls are now implemented; the
+controlled 60k checkpoint run remains to be executed.
 
 Implementation:
 

@@ -10,6 +10,7 @@ from fm_lab.diagnostics.imbdiff_cm_knowledge import (
     ImbDiffCMKnowledgeManifest,
     build_imbdiff_cm_knowledge_manifest,
     cifar100_fine_to_coarse,
+    controlled_linear_probe_rows,
     linear_probe_rows,
     probe_imbdiff_cm_knowledge,
 )
@@ -101,6 +102,7 @@ def test_knowledge_probe_reconstructs_local_expert_and_emits_k1_k2_rows() -> Non
         descriptor_rows,
         atlas,
         probe_rows,
+        controlled_rows,
         subspace_rows,
         subspace_pairs,
     ) = probe_imbdiff_cm_knowledge(
@@ -113,40 +115,113 @@ def test_knowledge_probe_reconstructs_local_expert_and_emits_k1_k2_rows() -> Non
         seed=29,
         permutation_repeats=2,
         subspace_rank=2,
+        subspace_permutation_repeats=5,
     )
 
     assert model.training is False
     assert len(summary["layers"]) == 4
     assert len(descriptor_rows) == 4 * 2 * 6
-    assert atlas["full_sketch"].shape == (len(descriptor_rows), 8)
-    assert atlas["low_pass_sketch"].shape == atlas["full_sketch"].shape
-    assert atlas["high_pass_sketch"].shape == atlas["full_sketch"].shape
+    assert atlas["expert_full_sketch"].shape == (len(descriptor_rows), 8)
+    assert atlas["general_full_sketch"].shape == atlas["expert_full_sketch"].shape
+    assert atlas["random_full_sketch"].shape == atlas["expert_full_sketch"].shape
+    assert atlas["input_activation_sketch"].shape == atlas["expert_full_sketch"].shape
     assert summary["max_reconstruction_relative_rms"] < 1e-5
+    for layer in summary["layers"]:
+        assert np.isclose(
+            layer["effective_weight_rms"],
+            layer["random_effective_weight_rms"],
+        )
     assert {row["task"] for row in probe_rows} == {
         "fine_class",
         "coarse_class",
         "frequency_group",
     }
+    assert len(controlled_rows) == 4 * 2 * 3 * 3
     assert subspace_rows
-    assert len(subspace_pairs["overlap"]) == 4 * 3
+    assert len(subspace_pairs["overlap"]) == 4 * 4 * 3
+    assert {
+        row["representation"]
+        for row in subspace_rows
+        if row["relation_type"] == "semantic_permutation"
+    } == {
+        "expert_full",
+        "input_activation",
+        "general_full",
+        "random_full",
+    }
+    assert all(
+        0.0 < row["permutation_p_one_sided"] <= 1.0
+        for row in subspace_rows
+        if row["relation_type"] == "semantic_permutation"
+    )
     json.dumps(summary, allow_nan=False)
+
+    second = probe_imbdiff_cm_knowledge(
+        restored,
+        clean_images=clean,
+        manifest=manifest,
+        class_counts=(9, 3, 1),
+        batch_size=2,
+        sketch_dim=8,
+        seed=29,
+        permutation_repeats=2,
+        subspace_rank=2,
+        subspace_permutation_repeats=5,
+        compute_linear_probes=False,
+        compute_subspaces=False,
+    )
+    second_summary, _, second_atlas, *_ = second
+    order = np.lexsort(
+        (
+            atlas["manifest_row"],
+            atlas["layer_index"],
+            atlas["timestep"],
+        )
+    )
+    second_order = np.lexsort(
+        (
+            second_atlas["manifest_row"],
+            second_atlas["layer_index"],
+            second_atlas["timestep"],
+        )
+    )
+    np.testing.assert_allclose(
+        atlas["random_full_sketch"][order],
+        second_atlas["random_full_sketch"][second_order],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert (
+        summary["layers"][0]["random_effective_weight_sha256"]
+        == second_summary["layers"][0]["random_effective_weight_sha256"]
+    )
 
 
 def test_linear_probe_recovers_planted_class_structure_over_nulls() -> None:
     class_ids = np.repeat(np.arange(3), 2)
     folds = np.tile(np.arange(2), 3)
     features = np.eye(3, dtype=np.float64)[class_ids]
-    atlas = {
+    atlas: dict[str, np.ndarray] = {
         "layer_index": np.zeros(6, dtype=np.int64),
         "timestep": np.full(6, 3, dtype=np.int64),
         "crossfit_fold": folds,
         "class_id": class_ids,
         "coarse_id": class_ids,
         "frequency_group_id": class_ids,
-        "full_sketch": features,
-        "low_pass_sketch": features,
-        "high_pass_sketch": features,
     }
+    for feature_name in (
+        "expert_full",
+        "expert_low_pass",
+        "expert_high_pass",
+        "input_activation",
+        "general_full",
+        "general_low_pass",
+        "general_high_pass",
+        "random_full",
+        "random_low_pass",
+        "random_high_pass",
+    ):
+        atlas[f"{feature_name}_sketch"] = features
 
     rows = linear_probe_rows(
         atlas,
@@ -155,6 +230,9 @@ def test_linear_probe_recovers_planted_class_structure_over_nulls() -> None:
         seed=31,
     )
 
-    assert len(rows) == 9
+    assert len(rows) == 30
     assert all(row["accuracy"] == 1.0 for row in rows)
     assert all(row["accuracy_minus_permutation"] > 0.3 for row in rows)
+    controlled = controlled_linear_probe_rows(rows)
+    assert len(controlled) == 9
+    assert all(row["expert_minus_random_adapter"] == 0.0 for row in controlled)

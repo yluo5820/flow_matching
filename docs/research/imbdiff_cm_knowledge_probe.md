@@ -161,3 +161,11 @@ Only expert selectivity beyond the activation and matched-random-adapter
 controls can be attributed to the learned expert transformation. Stable
 directions would then be candidates for K3 trajectory projection and K4 causal
 intervention.
+
+**Control implementation status:** these controls are now implemented in output
+schema 2. The fixed random adapter uses the same `lora_A`/`lora_B` factor
+shapes, matches the learned effective-weight RMS, and is batch-response-RMS
+matched before sketching. Expert, general, and random output responses use the
+same deterministic sketch projection. The controlled 60k rerun remains
+pending; the observations above deliberately remain attributed to the response
+rather than the expert weights.
