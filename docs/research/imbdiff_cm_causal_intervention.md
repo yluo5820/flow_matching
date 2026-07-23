@@ -82,6 +82,22 @@ Report these endpoints for all, Many, Medium, and Few classes, plus:
 
 Classes, rather than individual image/timestep rows, are the bootstrap unit.
 
+Parameter-spectrum matching does not guarantee equal displacement at the final
+model output. As a prespecified sensitivity analysis, for each timestep and
+random repeat compute one scalar from prediction displacements only:
+
+\[
+s_{t,r}
+=
+\frac{\operatorname{RMS}(P_L-P_G)}
+{\operatorname{RMS}(P_{R_r}-P_G)}.
+\]
+
+Then evaluate \(P_G+s_{t,r}(P_{R_r}-P_G)\). This uses no target information and
+tests random direction at the learned displacement magnitude. It is not claimed
+to be a realizable parameter intervention and therefore complements rather
+than replaces the spectrum-preserving weight intervention.
+
 ## Interpretation matrix
 
 | Observation | Supported interpretation |
@@ -90,7 +106,7 @@ Classes, rather than individual image/timestep rows, are the bootstrap unit.
 | \(G_L>0\), \(A_{L>R}>0\), Few-Many interval \(>0\) | evidence for tail-selective learned expert orientation |
 | \(G_L>0\), \(A_{L>R}\approx0\) | generic low-rank correction/energy is sufficient at this endpoint |
 | \(G_L\approx0\) despite sampling gains | local transferred-target MSE misses the generative mechanism; run trajectory/sampling intervention |
-| random controls are worse only because their displacement RMS is much larger | parameter-spectrum matching is insufficient; add a functional-response-matched control |
+| parameter-random is worse but response-matched random is not | apparent orientation advantage is explained by functional perturbation magnitude |
 
 No local prediction result is reported as an FID or generation-quality result.
 End-to-end sampling is promoted only after this screen identifies a stable

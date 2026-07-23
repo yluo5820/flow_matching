@@ -219,8 +219,9 @@ def _render_report(summary: dict[str, Any]) -> str:
         "the general-only model. Positive `learned advantage` means it also beats ",
         "the mean of the singular-spectrum-matched random expert rotations.",
         "",
-        "| t | Group | Learned gain | Random gain | Learned advantage | 95% class-bootstrap CI |",
-        "| ---: | --- | ---: | ---: | ---: | --- |",
+        "| t | Group | Learned gain | Random gain | Learned advantage | "
+        "Response-matched advantage | 95% response-matched CI |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in summary["group_summary"]:
         if int(row["timestep"]) != -1:
@@ -230,8 +231,9 @@ def _render_report(summary: dict[str, Any]) -> str:
             f"{row['learned_gain_vs_general_mean']:.6g} | "
             f"{row['random_gain_vs_general_mean']:.6g} | "
             f"{row['learned_advantage_vs_random_mean']:.6g} | "
-            f"[{row['learned_advantage_vs_random_class_bootstrap_low']:.6g}, "
-            f"{row['learned_advantage_vs_random_class_bootstrap_high']:.6g}] |"
+            f"{row['learned_advantage_vs_response_matched_random_mean']:.6g} | "
+            f"[{row['learned_advantage_vs_response_matched_random_class_bootstrap_low']:.6g}, "
+            f"{row['learned_advantage_vs_response_matched_random_class_bootstrap_high']:.6g}] |"
         )
     lines.extend(
         [
@@ -261,6 +263,8 @@ def _render_report(summary: dict[str, Any]) -> str:
             "These endpoints are causal for local model predictions at fixed noisy ",
             "inputs, but are not substitutes for end-to-end sampling, requested-class ",
             "accuracy, or per-class generative quality.",
+            "The response-matched endpoint is a target-free final-displacement ",
+            "sensitivity control; it is not itself a realizable weight intervention.",
             "",
         ]
     )

@@ -310,6 +310,11 @@ def probe_imbdiff_cm_intervention(
         "zero_validation_max_abs": zero_validation_max_abs,
         "max_random_spectrum_relative_error": max_spectrum_error,
         "restoration_verified": intervention_manifest["restoration_verified"],
+        "response_matching": (
+            "For each timestep and random repeat, one target-free scalar matches "
+            "the global random-minus-general RMS to the learned-minus-general RMS "
+            "before the functional sensitivity endpoint is recomputed."
+        ),
         "group_summary": group_rows,
         "tail_selectivity": tail_rows,
         "interpretation_boundary": (
@@ -428,6 +433,22 @@ def _effect_rows(
     )
     random_delta = torch.stack([prediction - general for prediction in random_predictions])
     random_delta_rms = random_delta.flatten(2).square().mean(2).sqrt()
+    learned_global_rms = learned_delta.square().mean().sqrt()
+    random_global_rms = random_delta.flatten(1).square().mean(1).sqrt()
+    response_match_scale = learned_global_rms / random_global_rms.clamp_min(
+        torch.finfo(random_global_rms.dtype).tiny
+    )
+    response_matched_random_delta = random_delta * response_match_scale[:, None, None, None, None]
+    response_matched_random_prediction = general[None, :, :, :, :] + response_matched_random_delta
+    response_matched_random_mse = torch.stack(
+        [
+            _per_sample_mse(prediction, stimulus.target)
+            for prediction in response_matched_random_prediction
+        ]
+    )
+    response_matched_random_delta_rms = (
+        response_matched_random_delta.flatten(2).square().mean(2).sqrt()
+    )
     learned_flat = learned_delta.flatten(1)
     random_flat = random_delta.flatten(2)
     cosine = (random_flat * learned_flat[None, :, :]).sum(2) / (
@@ -452,11 +473,26 @@ def _effect_rows(
                         group_by_class=group_by_class,
                     ),
                     "random_repeat": repeat,
+                    "response_match_scale": float(response_match_scale[repeat].cpu()),
                     "random_mse": float(random_mse[repeat, row_index].cpu()),
+                    "response_matched_random_mse": float(
+                        response_matched_random_mse[repeat, row_index].cpu()
+                    ),
                     "random_gain_vs_general": float(
                         (general_mse[row_index] - random_mse[repeat, row_index]).cpu()
                     ),
+                    "response_matched_random_gain_vs_general": float(
+                        (
+                            general_mse[row_index] - response_matched_random_mse[repeat, row_index]
+                        ).cpu()
+                    ),
                     "random_delta_rms": float(random_delta_rms[repeat, row_index].cpu()),
+                    "response_matched_random_delta_rms": float(
+                        response_matched_random_delta_rms[
+                            repeat,
+                            row_index,
+                        ].cpu()
+                    ),
                     "random_delta_cosine_to_learned": float(cosine[repeat, row_index].cpu()),
                     **{
                         f"random_spectral_{name}": float(
@@ -471,6 +507,10 @@ def _effect_rows(
     for row_index in range(manifest.probe.num_rows):
         class_id = int(manifest.probe.labels[row_index])
         random_mse_mean = random_mse[:, row_index].mean()
+        response_matched_random_mse_mean = response_matched_random_mse[
+            :,
+            row_index,
+        ].mean()
         effect_rows.append(
             {
                 **_row_identity(
@@ -484,15 +524,34 @@ def _effect_rows(
                 "general_mse": float(general_mse[row_index].cpu()),
                 "random_mse_mean": float(random_mse_mean.cpu()),
                 "random_mse_std": float(random_mse[:, row_index].std(unbiased=False).cpu()),
+                "response_matched_random_mse_mean": float(response_matched_random_mse_mean.cpu()),
+                "response_matched_random_mse_std": float(
+                    response_matched_random_mse[:, row_index].std(unbiased=False).cpu()
+                ),
                 "learned_gain_vs_general": float(
                     (general_mse[row_index] - learned_mse[row_index]).cpu()
                 ),
                 "random_gain_vs_general": float((general_mse[row_index] - random_mse_mean).cpu()),
+                "response_matched_random_gain_vs_general": float(
+                    (general_mse[row_index] - response_matched_random_mse_mean).cpu()
+                ),
                 "learned_advantage_vs_random": float(
                     (random_mse_mean - learned_mse[row_index]).cpu()
                 ),
+                "learned_advantage_vs_response_matched_random": float(
+                    (response_matched_random_mse_mean - learned_mse[row_index]).cpu()
+                ),
                 "learned_delta_rms": float(learned_delta_rms[row_index].cpu()),
                 "random_delta_rms_mean": float(random_delta_rms[:, row_index].mean().cpu()),
+                "response_matched_random_delta_rms_mean": float(
+                    response_matched_random_delta_rms[
+                        :,
+                        row_index,
+                    ]
+                    .mean()
+                    .cpu()
+                ),
+                "response_match_scale_mean": float(response_match_scale.mean().cpu()),
                 "random_delta_cosine_to_learned_mean": float(cosine[:, row_index].mean().cpu()),
                 **{
                     f"learned_spectral_{name}": float(learned_spectral[name][row_index].cpu())
@@ -539,11 +598,16 @@ def _group_summary_rows(
         "learned_mse",
         "general_mse",
         "random_mse_mean",
+        "response_matched_random_mse_mean",
         "learned_gain_vs_general",
         "random_gain_vs_general",
+        "response_matched_random_gain_vs_general",
         "learned_advantage_vs_random",
+        "learned_advantage_vs_response_matched_random",
         "learned_delta_rms",
         "random_delta_rms_mean",
+        "response_matched_random_delta_rms_mean",
+        "response_match_scale_mean",
         "random_delta_cosine_to_learned_mean",
     )
     timesteps = (-1, *sorted({int(row["timestep"]) for row in rows}))
@@ -575,6 +639,7 @@ def _group_summary_rows(
             for metric in (
                 "learned_gain_vs_general",
                 "learned_advantage_vs_random",
+                "learned_advantage_vs_response_matched_random",
             ):
                 interval = _cluster_bootstrap_interval(
                     selected,
@@ -615,6 +680,14 @@ def _class_summary_rows(
                 "learned_advantage_vs_random_mean": float(
                     np.mean([float(row["learned_advantage_vs_random"]) for row in selected])
                 ),
+                "learned_advantage_vs_response_matched_random_mean": float(
+                    np.mean(
+                        [
+                            float(row["learned_advantage_vs_response_matched_random"])
+                            for row in selected
+                        ]
+                    )
+                ),
             }
         )
     return result
@@ -637,6 +710,7 @@ def _tail_selectivity_rows(
         for metric in (
             "learned_gain_vs_general",
             "learned_advantage_vs_random",
+            "learned_advantage_vs_response_matched_random",
         ):
             interval = _cluster_bootstrap_group_difference(
                 timestep_rows,

@@ -170,13 +170,34 @@ def test_intervention_probe_emits_paired_tail_controls_and_restores_model() -> N
     assert len(random_rows) == 2 * 2 * 6
     assert len(group_rows) == 3 * 4
     assert len(class_rows) == 3
-    assert len(summary["tail_selectivity"]) == 3 * 2
+    assert len(summary["tail_selectivity"]) == 3 * 3
     assert summary["zero_validation_max_abs"] < 1e-6
     assert summary["max_random_spectrum_relative_error"] < 1e-5
     assert summary["restoration_verified"] is True
     assert intervention_manifest["restoration_verified"] is True
     assert {row["frequency_group"] for row in effect_rows} == {"many", "medium", "few"}
     assert {row["random_repeat"] for row in random_rows} == {0, 1}
+    for timestep in (2, 6):
+        learned_rms = np.sqrt(
+            np.mean(
+                [
+                    row["learned_delta_rms"] ** 2
+                    for row in effect_rows
+                    if row["timestep"] == timestep
+                ]
+            )
+        )
+        for repeat in (0, 1):
+            matched_rms = np.sqrt(
+                np.mean(
+                    [
+                        row["response_matched_random_delta_rms"] ** 2
+                        for row in random_rows
+                        if row["timestep"] == timestep and row["random_repeat"] == repeat
+                    ]
+                )
+            )
+            assert np.isclose(learned_rms, matched_rms, rtol=1e-5)
     json.dumps(summary, allow_nan=False)
     json.dumps(intervention_manifest, allow_nan=False)
     for name, module in active_lora_modules(model):

@@ -459,8 +459,13 @@ variation, spectrum audits, and bit-exact restoration checks.
 Positive `learned_gain_vs_general` means the trained expert improves the exact
 released training target relative to the general branch. Positive
 `learned_advantage_vs_random` means the learned expert orientation beats
-matched random orientations. These are local causal prediction endpoints, not
-substitutes for sampling FID or requested-class accuracy.
+matched random orientations. Because parameter-spectrum matching need not
+match model-output displacement, the report also rescales each random
+final-output displacement by one target-free timestep/repeat scalar and reports
+`learned_advantage_vs_response_matched_random`. This is a functional
+sensitivity control rather than a realizable weight intervention. These are
+local causal prediction endpoints, not substitutes for sampling FID or
+requested-class accuracy.
 
 Main outputs are:
 
