@@ -1,0 +1,95 @@
+experiment:
+  name: cifar100_lt_ir100_official_released_cm_dynamics_smoke2k
+  seed: 0
+  output_dir: /root/autodl-tmp/runs/imbdiff_cm_dynamics/released_cm_smoke2k
+
+data:
+  name: cifar100_lt
+  root: /root/autodl-tmp/data/cifar100
+  train: true
+  download: false
+  normalize: minus_one_one
+  dequantize: false
+  horizontal_flip: true
+  imbalance_type: exp
+  imbalance_factor: 0.01
+  subset_seed: 0
+
+source: {name: gaussian, dim: 3072}
+coupling: {name: independent, shuffle_target: false}
+path: {name: discrete_ddpm}
+
+model:
+  name: official_imbdiff_cm_unet
+  image_shape: [3, 32, 32]
+  base_channels: 128
+  channel_multipliers: [1, 2, 2, 2]
+  attention_levels: [1]
+  num_res_blocks: 2
+  dropout: 0.1
+  cm:
+    lora_r: 0
+    lora_alpha: 1.0
+    lora_scaling: 0.5
+    lora_r_ratio: 0.1
+    lora_mode: ratio
+    lora_part: [up]
+
+conditioning:
+  enabled: true
+  num_classes: 100
+  dropout_probability: 0.0
+  dropout_mode: batch
+
+diffusion:
+  timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+  variance: fixed_large
+
+objective:
+  name: official_imbdiff
+  method: released_cm
+  image_shape: [3, 32, 32]
+  cfg: true
+  transfer:
+    transfer_x0: true
+    transfer_tr_tau: false
+    transfer_mode: t2h
+    tr_tau: 1.0
+  cm: {w_con: 1.0, w_div: 0.2}
+
+training:
+  optimizer: adam
+  weight_decay: 0.0
+  batch_size: 64
+  steps: 2000
+  lr: 0.0002
+  warmup_steps: 5000
+  gradient_clip: 1.0
+  ema_decay: 0.9999
+  mixed_precision: {enabled: false}
+  channels_last: {enabled: false}
+  compile: {enabled: false}
+  time_sampling: {name: uniform}
+  log_every: 100
+  checkpoint_every: 0
+  early_stopping: {enabled: false}
+  cm_dynamics:
+    enabled: true
+    steps: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1000, 1500, 2000]
+    max_layers: 5
+    component_gradients: true
+    conditioned_gradients: true
+    functional_updates: true
+    output_subdir: cm_dynamics
+
+solvers: {names: [euler]}
+
+sampling:
+  sampler: ddim
+  n_samples: 100
+  sample_batch_size: 100
+  plot_max_points: 100
+  ddim_skip: 20
+  classifier_free_guidance: {enabled: true, paper_omega: 1.5}

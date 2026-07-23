@@ -450,6 +450,8 @@ class OfficialImbDiffObjective:
         self._trainer: nn.Module | None = None
         self._trainer_model: nn.Module | None = None
         self._trainer_device: torch.device | None = None
+        self._capture_training_terms = False
+        self._last_training_terms: OfficialImbDiffCMTerms | None = None
 
     def __call__(
         self,
@@ -480,6 +482,9 @@ class OfficialImbDiffObjective:
                 clean=clean,
                 labels=labels,
                 dropout_mode="independent",
+            )
+            self._last_training_terms = (
+                terms if self._capture_training_terms else None
             )
             loss = terms.loss
         else:
@@ -530,6 +535,24 @@ class OfficialImbDiffObjective:
                 }
             )
         return loss, metrics
+
+    def capture_next_training_terms(self) -> None:
+        """Retain the next faithful CM graph for sparse in-loop diagnostics."""
+
+        if not self.uses_capacity_model:
+            raise ValueError("Training-term capture requires a CM capacity objective.")
+        self._capture_training_terms = True
+        self._last_training_terms = None
+
+    def pop_captured_training_terms(self) -> OfficialImbDiffCMTerms:
+        """Return and clear the graph retained by ``capture_next_training_terms``."""
+
+        terms = self._last_training_terms
+        self._capture_training_terms = False
+        self._last_training_terms = None
+        if terms is None:
+            raise RuntimeError("The requested CM training terms were not captured.")
+        return terms
 
     @property
     def uses_capacity_model(self) -> bool:

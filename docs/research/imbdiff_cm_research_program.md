@@ -1,6 +1,7 @@
 # ImbDiff-CM mechanism and reconstruction research program
 
-**Status:** implementation-ready research specification, drafted 2026-07-23.
+**Status:** knowledge/intervention phases complete; Phase 3 training-dynamics
+instrumentation implemented and awaiting its 2k smoke run, updated 2026-07-23.
 
 This document turns the completed ImbDiff-CM reproduction and checkpoint probe
 into a staged research program. Its purpose is not merely to improve the reported
@@ -1029,6 +1030,10 @@ Compute tier:
   above 30 minutes.
 
 ### Phase 3 — training-dynamics instrumentation
+
+Implementation status: complete. The live-graph observer, output schema,
+validation tests, and 2k/30k configurations are documented in
+[`imbdiff_cm_training_dynamics.md`](imbdiff_cm_training_dynamics.md).
 
 Implementation:
 

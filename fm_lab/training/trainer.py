@@ -486,6 +486,7 @@ def train_flow_matching(
         ),
     )
     ema_model = create_ema_model(model) if ema_decay is not None else None
+    dynamics_observer = None
     psi_optimizer: torch.optim.Optimizer | None = None
     learned_acceleration_schedule: _LearnedAccelerationSchedule | None = None
     if trainable_path:
@@ -537,6 +538,20 @@ def train_flow_matching(
             raise ValueError(
                 f"Resume checkpoint step {start_step - 1} already meets training.steps={steps}."
             )
+
+    if bool((training_config.get("cm_dynamics", {}) or {}).get("enabled", False)):
+        from fm_lab.diagnostics.imbdiff_cm_dynamics import (
+            build_imbdiff_cm_dynamics_observer,
+        )
+
+        dynamics_observer = build_imbdiff_cm_dynamics_observer(
+            training_config=training_config,
+            run_dir=run_dir,
+            model=model,
+            objective=objective,
+            ema_model=ema_model,
+            compile_active=compile_config.active,
+        )
 
     if 0 in checkpoint_steps and not resume_from:
         save_checkpoint(
@@ -626,6 +641,13 @@ def train_flow_matching(
                     )
                     best_state.record = dict(record)
         else:
+            dynamics_state = None
+            observe_dynamics = (
+                dynamics_observer is not None
+                and dynamics_observer.should_observe(step)
+            )
+            if observe_dynamics:
+                objective.capture_next_training_terms()
             if official_batch_iterator is not None:
                 x0, x1, t, class_labels, original_class_labels = next(
                     official_batch_iterator
@@ -652,6 +674,15 @@ def train_flow_matching(
                     compute_diagnostics=should_log,
                     class_labels=class_labels,
                     original_class_labels=original_class_labels,
+                )
+            if observe_dynamics:
+                captured_terms = objective.pop_captured_training_terms()
+                dynamics_state = dynamics_observer.before_backward(
+                    step=step,
+                    model=model,
+                    ema_model=ema_model,
+                    terms=captured_terms,
+                    labels=original_class_labels,
                 )
             if should_record:
                 record = {"step": step, **loss_metrics}
@@ -696,6 +727,12 @@ def train_flow_matching(
                 theta_scheduler.step()
             if ema_model is not None and ema_decay is not None:
                 update_ema_model(ema_model, model, decay=ema_decay)
+            if dynamics_state is not None:
+                dynamics_observer.after_optimizer_step(
+                    dynamics_state,
+                    model=model,
+                    ema_model=ema_model,
+                )
 
         if record is not None:
             history.append(record)
@@ -723,6 +760,11 @@ def train_flow_matching(
                 rng_state=capture_rng_state(),
             )
 
+    dynamics_metadata = (
+        dynamics_observer.finalize(final_step=final_step)
+        if dynamics_observer is not None
+        else {"enabled": False}
+    )
     continuation_state: dict[str, Any] | None = None
     if best_state is not None:
         terminal_state = _capture_training_state(
@@ -779,6 +821,7 @@ def train_flow_matching(
             "channels_last": channels_last.summary(),
             "compile": compile_config.summary(),
         },
+        "cm_dynamics": dynamics_metadata,
     }
     write_json(metrics, run_dir / "metrics.json")
     _write_history(history, run_dir / "diagnostics" / "training_history.csv")

@@ -21,7 +21,7 @@ from fm_lab.training.losses import build_objective
 from fm_lab.training.trainer import train_flow_matching
 
 
-def _tiny_model() -> OfficialImbDiffCMUNet:
+def _tiny_model(*, num_classes: int = 2) -> OfficialImbDiffCMUNet:
     return OfficialImbDiffCMUNet(
         dim=3 * 4 * 4,
         image_shape=(3, 4, 4),
@@ -31,7 +31,7 @@ def _tiny_model() -> OfficialImbDiffCMUNet:
         attention_levels=(),
         num_res_blocks=1,
         dropout=0.0,
-        num_classes=2,
+        num_classes=num_classes,
         rank_ratio=0.1,
         capacity_parts=("up",),
     )
@@ -177,6 +177,7 @@ def test_official_released_cm_matches_transfer_trainer_loss_and_gradients() -> N
     clean = torch.linspace(-1.0, 1.0, 2 * 3 * 4 * 4).reshape(2, -1)
     labels = torch.tensor([0, 1])
     torch.manual_seed(37)
+    objective.capture_next_training_terms()
     adapter_loss, adapter_metrics = objective(
         model=adapter_model,
         path=None,
@@ -186,6 +187,8 @@ def test_official_released_cm_matches_transfer_trainer_loss_and_gradients() -> N
         class_labels=labels,
         original_class_labels=labels,
     )
+    captured_terms = objective.pop_captured_training_terms()
+    assert captured_terms.loss is adapter_loss
     adapter_loss.backward()
 
     torch.manual_seed(37)
@@ -695,6 +698,23 @@ class _TinyTarget:
         }
 
 
+class _TinyTarget3(_TinyTarget):
+    class_counts = (2, 2, 2)
+
+    def sample_with_labels(self, n: int, device=None):
+        images = torch.rand(n, self.dim, device=device) * 2.0 - 1.0
+        labels = torch.arange(n, device=device) % 3
+        return images, labels
+
+    def all_samples_with_labels(self, device=None):
+        images = torch.linspace(-1.0, 1.0, 6 * self.dim).reshape(6, self.dim)
+        labels = torch.tensor([0, 0, 1, 1, 2, 2])
+        if device is not None:
+            images = images.to(device)
+            labels = labels.to(device)
+        return images, labels, torch.arange(6).numpy().astype(str)
+
+
 @pytest.mark.parametrize(
     ("method", "model_name", "transfer_x0", "capacity_branch"),
     [
@@ -768,3 +788,72 @@ def test_official_path_trains_and_samples_through_fm_lab(
     assert metrics["sampling"]["implementation"] == "vendored_official_release"
     assert metrics["sampling"]["capacity_branch"] == capacity_branch
     assert (tmp_path / "samples" / "official_ddim.npy").is_file()
+
+
+def test_official_cm_training_loop_records_live_dynamics(tmp_path) -> None:
+    config = {
+        "experiment": {"seed": 5},
+        "source": {"name": "gaussian", "dim": 3 * 4 * 4},
+        "coupling": {"name": "independent"},
+        "path": {"name": "discrete_ddpm"},
+        "model": {"name": "official_imbdiff_cm_unet"},
+        "conditioning": {
+            "enabled": True,
+            "num_classes": 3,
+            "dropout_probability": 0.0,
+            "dropout_mode": "batch",
+        },
+        "diffusion": {
+            "timesteps": 4,
+            "beta_start": 1e-4,
+            "beta_end": 1e-2,
+            "variance": "fixed_large",
+        },
+        "objective": {
+            "name": "official_imbdiff",
+            "method": "pure_cm",
+            "image_shape": [3, 4, 4],
+            "cfg": False,
+            "transfer": {"transfer_x0": False},
+        },
+        "training": {
+            "optimizer": "adam",
+            "steps": 1,
+            "batch_size": 3,
+            "lr": 1e-4,
+            "warmup_steps": 0,
+            "ema_decay": 0.9,
+            "compile": {"enabled": False},
+            "early_stopping": {"enabled": False},
+            "cm_dynamics": {
+                "enabled": True,
+                "steps": [1],
+                "max_layers": 1,
+            },
+        },
+        "sampling": {
+            "sampler": "ddim",
+            "n_samples": 3,
+            "sample_batch_size": 3,
+            "plot_max_points": 3,
+            "ddim_skip": 2,
+            "classifier_free_guidance": {"enabled": False},
+        },
+    }
+
+    metrics = train_flow_matching(
+        config=config,
+        run_dir=tmp_path,
+        target=_TinyTarget3(),
+        source=_TinySource(),
+        coupling=IndependentCoupling(),
+        path=DiscreteDDPMPath(timesteps=4, beta_end=1e-2),
+        model=_tiny_model(num_classes=3),
+        solvers=[EulerSolver()],
+        device=torch.device("cpu"),
+    )
+
+    assert metrics["cm_dynamics"]["observed_steps"] == [1]
+    assert (tmp_path / "cm_dynamics" / "gradient_components.csv").is_file()
+    assert (tmp_path / "cm_dynamics" / "layer_updates.csv").is_file()
+    assert (tmp_path / "cm_dynamics" / "functional_updates.csv").is_file()
