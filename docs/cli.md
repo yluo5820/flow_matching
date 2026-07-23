@@ -480,6 +480,28 @@ group_summary.csv
 class_summary.csv
 ```
 
+## `fm-lab-imbdiff-cm-sampling-intervention`
+
+Runs learned, general-only, and response-calibrated spectrum-random experts
+from identical balanced CIFAR-100 labels and identical DDIM initial noise. The
+bounded `kid` mode is intended as a screen; use `full` with 100 samples per
+class for the confirmatory FID protocol.
+
+```bash
+fm-lab-imbdiff-cm-sampling-intervention \
+  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
+  --random-effects /root/autodl-tmp/runs/imbdiff_matrix60k/cm_intervention_screen/random_repeat_effects.csv \
+  --real-cache /root/autodl-tmp/runs/imbdiff_matrix60k/evaluation/features/real_cifar100_balanced_train.npz \
+  --inception-weights /root/autodl-tmp/weights/imbdiff/pt_inception-2015-12-05-6726825d.pth \
+  --samples-per-class 20 \
+  --random-repeats 2 \
+  --sample-batch-size 128 \
+  --feature-batch-size 128 \
+  --evaluation kid \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_sampling_intervention_screen
+```
+
 ## `fm-lab-sampling-timesteps`
 
 Generate a Geometry Explorer dataset whose class labels identify sampling timesteps:

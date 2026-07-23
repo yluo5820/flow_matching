@@ -190,7 +190,32 @@ training changes both \(\theta_g\) and \(\theta_e\), while the explicit expert
 branch adds a small learned late-stage adjustment. Because local target-MSE
 effects are small and can accumulate differently through sampling, the next
 justified experiment is an end-to-end matched sampling intervention measuring
-requested-class accuracy and groupwise generative quality. It should compare
-learned, general-only, and spectrum-random experts, and treat
-response-normalized output scaling only as a non-realizable sensitivity
-analysis.
+groupwise generative quality. It compares learned, general-only, and
+spectrum-random experts under identical class labels, initial noise, DDIM
+schedule, and classifier-free guidance.
+
+The existing TensorFlow-FID-compatible Inception model predicts 1,008 ImageNet
+labels, not CIFAR-100 labels. It therefore cannot provide requested-class
+accuracy. The bounded screen instead uses:
+
+- exact paired image-space displacement and its radial spectrum;
+- overall and Many/Medium/Few KID, whose finite-sample behavior is preferable
+  to FID for the initial 20-samples-per-class screen;
+- a follow-up 100-samples-per-class FID run only if the screen shows a useful
+  signal.
+
+For each random repeat, the screen averages the target-free response-match
+scalars from the prior local probe over its three timesteps, then multiplies
+all randomized expert \(B\) factors by that one scalar before sampling. Unlike
+the earlier post-hoc output rescaling, this is a realizable fixed-weight
+intervention throughout the trajectory. It preserves the randomized
+subspace/singular-spectrum shape but calibrates its global amplitude.
+
+The end-to-end interpretation gate is:
+
+- learned better than general: the explicit learned expert improves generation;
+- learned better than calibrated random: its learned orientation matters beyond
+  response magnitude;
+- a larger Few than Many gain: evidence for tail-selective allocation;
+- similar gains across frequency groups: a generic correction or regularizer,
+  not a tail-specific knowledge store.

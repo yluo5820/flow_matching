@@ -47,6 +47,14 @@ def active_lora_modules(model: nn.Module) -> tuple[tuple[str, nn.Module], ...]:
     return modules
 
 
+def intervention_repeat_seed(seed: int, repeat: int) -> int:
+    """Return the stable expert-rotation seed used for one intervention repeat."""
+
+    if int(repeat) < 0:
+        raise ValueError("Intervention repeat must be non-negative.")
+    return _stable_seed(seed, "repeat", int(repeat))
+
+
 @contextmanager
 def reversible_expert_intervention(
     model: nn.Module,
@@ -227,7 +235,7 @@ def probe_imbdiff_cm_intervention(
             }
             random_manifests: list[dict[str, Any]] = []
             for repeat in range(int(random_repeats)):
-                repeat_seed = _stable_seed(seed, "repeat", repeat)
+                repeat_seed = intervention_repeat_seed(seed, repeat)
                 with reversible_expert_intervention(
                     model,
                     mode="spectrum_random",
