@@ -22,9 +22,7 @@ def fid_score(generated: np.ndarray, real: np.ndarray, *, eps: float = 1e-6) -> 
         covariance_mean = linalg.sqrtm(sigma_generated @ sigma_real)
     if not np.isfinite(covariance_mean).all():
         offset = np.eye(sigma_generated.shape[0]) * eps
-        covariance_mean = linalg.sqrtm(
-            (sigma_generated + offset) @ (sigma_real + offset)
-        )
+        covariance_mean = linalg.sqrtm((sigma_generated + offset) @ (sigma_real + offset))
     if np.iscomplexobj(covariance_mean):
         if not np.allclose(np.diag(covariance_mean).imag, 0.0, atol=1e-3):
             maximum = float(np.max(np.abs(covariance_mean.imag)))
@@ -47,21 +45,47 @@ def kid_score(
     max_subset_size: int = 1000,
     seed: int = 0,
 ) -> float:
+    """Return the mean polynomial-kernel MMD over fixed random subsets."""
+
+    return float(
+        np.mean(
+            kid_subset_scores(
+                generated,
+                real,
+                num_subsets=num_subsets,
+                max_subset_size=max_subset_size,
+                seed=seed,
+            )
+        )
+    )
+
+
+def kid_subset_scores(
+    generated: np.ndarray,
+    real: np.ndarray,
+    *,
+    num_subsets: int = 100,
+    max_subset_size: int = 1000,
+    seed: int = 0,
+) -> np.ndarray:
+    """Return each KID subset estimate for paired Monte Carlo contrasts."""
+
     generated, real = _feature_pair(generated, real, minimum=2)
     if num_subsets < 1 or max_subset_size < 2:
         raise ValueError("KID subset settings must be positive and include at least two samples.")
     subset_size = min(len(generated), len(real), max_subset_size)
     rng = np.random.default_rng(seed)
     dimension = generated.shape[1]
-    total = 0.0
+    scores = []
     for _ in range(num_subsets):
         x = generated[rng.choice(len(generated), subset_size, replace=False)]
         y = real[rng.choice(len(real), subset_size, replace=False)]
         within = (x @ x.T / dimension + 1.0) ** 3 + (y @ y.T / dimension + 1.0) ** 3
         cross = (x @ y.T / dimension + 1.0) ** 3
-        total += (within.sum() - np.diag(within).sum()) / (subset_size - 1)
-        total -= 2.0 * cross.sum() / subset_size
-    return float(total / num_subsets / subset_size)
+        value = (within.sum() - np.diag(within).sum()) / (subset_size - 1)
+        value -= 2.0 * cross.sum() / subset_size
+        scores.append(value / subset_size)
+    return np.asarray(scores, dtype=np.float64)
 
 
 def generative_recall(

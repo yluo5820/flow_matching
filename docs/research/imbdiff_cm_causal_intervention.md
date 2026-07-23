@@ -201,6 +201,8 @@ accuracy. The bounded screen instead uses:
 - exact paired image-space displacement and its radial spectrum;
 - overall and Many/Medium/Few KID, whose finite-sample behavior is preferable
   to FID for the initial 20-samples-per-class screen;
+- paired Monte Carlo contrasts over the exact KID subset draws (reported as
+  estimator uncertainty, not training-run uncertainty);
 - a follow-up 100-samples-per-class FID run only if the screen shows a useful
   signal.
 

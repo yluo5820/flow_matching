@@ -23,7 +23,7 @@ from fm_lab.evaluation.cache import FeatureCache, load_feature_cache, save_featu
 from fm_lab.evaluation.features import extract_inception_features
 from fm_lab.evaluation.groups import frequency_ranked_groups
 from fm_lab.evaluation.inception import ReferenceInceptionV3
-from fm_lab.evaluation.metrics import fid_score, kid_score
+from fm_lab.evaluation.metrics import fid_score, kid_subset_scores
 from fm_lab.experiments.factory import build_target, resolve_device
 from fm_lab.utils.checkpoints import load_checkpoint
 from fm_lab.utils.seeding import seed_everything
@@ -320,15 +320,17 @@ def _condition_metrics(
     seed: int,
     compute_fid: bool,
 ) -> dict[str, Any]:
+    overall_kid = kid_subset_scores(
+        generated.features,
+        real.features,
+        num_subsets=kid_subsets,
+        max_subset_size=kid_subset_size,
+        seed=seed,
+    )
     result: dict[str, Any] = {
         "num_samples": int(len(generated.features)),
-        "kid": kid_score(
-            generated.features,
-            real.features,
-            num_subsets=kid_subsets,
-            max_subset_size=kid_subset_size,
-            seed=seed,
-        ),
+        "kid": float(overall_kid.mean()),
+        "kid_subset_estimates": overall_kid.tolist(),
         "groups": {},
     }
     if compute_fid:
@@ -336,14 +338,16 @@ def _condition_metrics(
     for group_index, group_name in enumerate(("many", "medium", "few")):
         generated_mask = np.isin(generated.labels, groups[group_name])
         real_mask = np.isin(real.labels, groups[group_name])
+        group_kid = kid_subset_scores(
+            generated.features[generated_mask],
+            real.features[real_mask],
+            num_subsets=kid_subsets,
+            max_subset_size=kid_subset_size,
+            seed=seed + group_index + 1,
+        )
         group_metrics = {
-            "kid": kid_score(
-                generated.features[generated_mask],
-                real.features[real_mask],
-                num_subsets=kid_subsets,
-                max_subset_size=kid_subset_size,
-                seed=seed + group_index + 1,
-            )
+            "kid": float(group_kid.mean()),
+            "kid_subset_estimates": group_kid.tolist(),
         }
         if compute_fid:
             group_metrics["fid"] = fid_score(

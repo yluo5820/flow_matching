@@ -353,6 +353,7 @@ def quality_contrasts(
                     - result["groups"]["many"][metric]["learned_advantage_vs_random_mean"]
                 ),
             }
+    result["paired_kid_subset_uncertainty"] = _paired_kid_uncertainty(condition_metrics)
     return result
 
 
@@ -490,6 +491,80 @@ def _lower_is_better_contrast(
         "random_mean": random_mean,
         "learned_gain_vs_general": float(general - learned),
         "learned_advantage_vs_random_mean": float(random_mean - learned),
+    }
+
+
+def _paired_kid_uncertainty(
+    condition_metrics: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    learned = condition_metrics["learned"]
+    general = condition_metrics["general"]
+    random_names = sorted(name for name in condition_metrics if name.startswith("random_"))
+    result = {
+        "interpretation": (
+            "These intervals describe Monte Carlo variation across the fixed KID subset "
+            "draws, paired by subset seed. They are not confidence intervals over training "
+            "replicates, checkpoints, or random expert orientations."
+        ),
+        "overall": {},
+        "groups": {},
+    }
+    if "kid_subset_estimates" in learned and "kid_subset_estimates" in general:
+        result["overall"] = _kid_subset_contrast(
+            learned["kid_subset_estimates"],
+            general["kid_subset_estimates"],
+            [condition_metrics[name]["kid_subset_estimates"] for name in random_names],
+        )
+    for group_name in ("many", "medium", "few"):
+        learned_group = learned.get("groups", {}).get(group_name, {})
+        general_group = general.get("groups", {}).get(group_name, {})
+        if (
+            "kid_subset_estimates" not in learned_group
+            or "kid_subset_estimates" not in general_group
+        ):
+            continue
+        result["groups"][group_name] = _kid_subset_contrast(
+            learned_group["kid_subset_estimates"],
+            general_group["kid_subset_estimates"],
+            [
+                condition_metrics[name]["groups"][group_name]["kid_subset_estimates"]
+                for name in random_names
+            ],
+        )
+    return result
+
+
+def _kid_subset_contrast(
+    learned: Sequence[float],
+    general: Sequence[float],
+    random: Sequence[Sequence[float]],
+) -> dict[str, Any]:
+    learned_values = np.asarray(learned, dtype=np.float64)
+    general_values = np.asarray(general, dtype=np.float64)
+    random_values = np.asarray(random, dtype=np.float64)
+    if (
+        learned_values.ndim != 1
+        or general_values.shape != learned_values.shape
+        or random_values.ndim != 2
+        or random_values.shape[1:] != learned_values.shape
+    ):
+        raise ValueError("Paired KID subset estimates must have aligned shapes.")
+    return {
+        "learned_gain_vs_general": _difference_summary(general_values - learned_values),
+        "learned_advantage_vs_random_mean": _difference_summary(
+            random_values.mean(0) - learned_values
+        ),
+    }
+
+
+def _difference_summary(values: np.ndarray) -> dict[str, float]:
+    return {
+        "mean": float(values.mean()),
+        "std": float(values.std()),
+        "low": float(np.quantile(values, 0.025)),
+        "high": float(np.quantile(values, 0.975)),
+        "fraction_positive": float(np.mean(values > 0.0)),
+        "num_subset_draws": int(len(values)),
     }
 
 

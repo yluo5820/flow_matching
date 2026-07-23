@@ -181,37 +181,46 @@ def test_response_scale_loader_deduplicates_probe_rows(tmp_path: Path) -> None:
 
 
 def test_quality_contrasts_report_tail_selectivity() -> None:
+    subset_offsets = [-0.1, 0.0, 0.1]
+
+    def estimates(value):
+        return [value + offset for offset in subset_offsets]
+
     metrics = {
         "learned": {
             "kid": 1.0,
+            "kid_subset_estimates": estimates(1.0),
             "groups": {
-                "many": {"kid": 1.0},
-                "medium": {"kid": 1.0},
-                "few": {"kid": 1.0},
+                "many": {"kid": 1.0, "kid_subset_estimates": estimates(1.0)},
+                "medium": {"kid": 1.0, "kid_subset_estimates": estimates(1.0)},
+                "few": {"kid": 1.0, "kid_subset_estimates": estimates(1.0)},
             },
         },
         "general": {
             "kid": 1.4,
+            "kid_subset_estimates": estimates(1.4),
             "groups": {
-                "many": {"kid": 1.1},
-                "medium": {"kid": 1.3},
-                "few": {"kid": 1.8},
+                "many": {"kid": 1.1, "kid_subset_estimates": estimates(1.1)},
+                "medium": {"kid": 1.3, "kid_subset_estimates": estimates(1.3)},
+                "few": {"kid": 1.8, "kid_subset_estimates": estimates(1.8)},
             },
         },
         "random_00": {
             "kid": 1.6,
+            "kid_subset_estimates": estimates(1.6),
             "groups": {
-                "many": {"kid": 1.2},
-                "medium": {"kid": 1.5},
-                "few": {"kid": 2.0},
+                "many": {"kid": 1.2, "kid_subset_estimates": estimates(1.2)},
+                "medium": {"kid": 1.5, "kid_subset_estimates": estimates(1.5)},
+                "few": {"kid": 2.0, "kid_subset_estimates": estimates(2.0)},
             },
         },
         "random_01": {
             "kid": 1.8,
+            "kid_subset_estimates": estimates(1.8),
             "groups": {
-                "many": {"kid": 1.4},
-                "medium": {"kid": 1.7},
-                "few": {"kid": 2.2},
+                "many": {"kid": 1.4, "kid_subset_estimates": estimates(1.4)},
+                "medium": {"kid": 1.7, "kid_subset_estimates": estimates(1.7)},
+                "few": {"kid": 2.2, "kid_subset_estimates": estimates(2.2)},
             },
         },
     }
@@ -223,3 +232,6 @@ def test_quality_contrasts_report_tail_selectivity() -> None:
         contrasts["tail_selectivity"]["kid"]["learned_gain_vs_general_few_minus_many"],
         0.7,
     )
+    uncertainty = contrasts["paired_kid_subset_uncertainty"]["overall"]
+    assert np.isclose(uncertainty["learned_gain_vs_general"]["mean"], 0.4)
+    assert uncertainty["learned_gain_vs_general"]["fraction_positive"] == 1.0

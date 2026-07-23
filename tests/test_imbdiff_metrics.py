@@ -10,6 +10,7 @@ from fm_lab.evaluation.metrics import (
     generative_recall,
     inception_score,
     kid_score,
+    kid_subset_scores,
     summarize,
 )
 
@@ -38,6 +39,29 @@ def test_kid_is_seeded_and_requires_two_samples() -> None:
     assert first == second
     with pytest.raises(ValueError, match="at least two"):
         kid_score(generated[:1], real)
+
+
+def test_kid_score_is_mean_of_exposed_subset_estimates() -> None:
+    rng = np.random.default_rng(9)
+    real = rng.normal(size=(20, 5))
+    generated = rng.normal(size=(20, 5))
+
+    subsets = kid_subset_scores(
+        generated,
+        real,
+        num_subsets=5,
+        max_subset_size=10,
+        seed=11,
+    )
+
+    assert subsets.shape == (5,)
+    assert kid_score(
+        generated,
+        real,
+        num_subsets=5,
+        max_subset_size=10,
+        seed=11,
+    ) == pytest.approx(float(subsets.mean()))
 
 
 def test_generative_recall_is_one_for_an_identical_manifold() -> None:
