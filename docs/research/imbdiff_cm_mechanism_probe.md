@@ -161,14 +161,14 @@ real; this result narrows what can explain it to cumulative regularization,
 optimization of the shared branch, or a small correction whose rollout effect
 is not captured by one-step MSE.
 
-The multi-seed replication satisfies the planned robustness check. The most
-direct next intervention is now an exposure-balanced signed coefficient:
-center the expected CM coefficient under the actual training distribution,
-then rescale its expected absolute magnitude to match the released loss. This
-tests the mechanism without reverse labels or shuffled class frequencies and
-is more targeted than another unrestricted weight sweep. The roughly 200-fold
-squared-distance effect is stable enough that further held-out-only probing is
-unlikely to change the mechanistic decision.
+The multi-seed replication satisfies the planned robustness check. The roughly
+200-fold squared-distance effect is stable enough that further repetitions of
+the same held-out output probe are unlikely to change the mechanistic decision.
+The next work must instead observe intermediate expert responses, actual
+training-stream optimizer dynamics, coefficient controls, and matched-capacity
+alternatives. Those questions, their rejection criteria, and the staged
+implementation plan are specified in the
+[CM mechanism and reconstruction research program](imbdiff_cm_research_program.md).
 
 ## Server commands
 

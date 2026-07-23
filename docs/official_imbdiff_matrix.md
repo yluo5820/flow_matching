@@ -160,10 +160,14 @@ within-matrix statement that the CM allocation loss is already effective at
 60k; it does not establish converged method rankings or uncertainty across
 training seeds.
 
-The next stage is the checkpoint-based
-[CM mechanism probe](research/imbdiff_cm_mechanism_probe.md), which tests
-whether the learned expert branch actually receives frequency-dependent
-head/tail specialization and whether that correction is spectrally selective.
+The completed checkpoint-based
+[CM mechanism probe](research/imbdiff_cm_mechanism_probe.md) found strong
+branch contraction but no reliable tail-specialized local correction in its
+preregistered functional sense. The follow-up
+[CM mechanism and reconstruction research program](research/imbdiff_cm_research_program.md)
+specifies the intermediate-activation, training-dynamics, coefficient,
+matched-capacity, and efficiency experiments needed to distinguish knowledge
+allocation from generic regularization.
 
 ## References
 
