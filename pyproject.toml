@@ -62,6 +62,7 @@ fm-lab-sample-checkpoint = "fm_lab.experiments.run_sample_checkpoint:main"
 fm-lab-sampling-timesteps = "fm_lab.geometry_explorer.sampling_timesteps:main"
 fm-lab-imbdiff-eval = "fm_lab.experiments.run_imbdiff_eval:main"
 fm-lab-imbdiff-cm-probe = "fm_lab.experiments.run_imbdiff_cm_probe:main"
+fm-lab-imbdiff-cm-dropout-probe = "fm_lab.experiments.run_imbdiff_cm_dropout_probe:main"
 fm-lab-train = "fm_lab.experiments.run_train:main"
 fm-lab-synthetic-long-tail = "fm_lab.experiments.run_synthetic_long_tail_geometry:main"
 

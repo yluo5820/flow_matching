@@ -37,6 +37,22 @@ def _tiny_model() -> OfficialImbDiffCMUNet:
     )
 
 
+def _tiny_dropout_model() -> OfficialImbDiffCMUNet:
+    return OfficialImbDiffCMUNet(
+        dim=3 * 4 * 4,
+        image_shape=(3, 4, 4),
+        timesteps=8,
+        base_channels=32,
+        channel_multipliers=(1,),
+        attention_levels=(),
+        num_res_blocks=1,
+        dropout=0.5,
+        num_classes=2,
+        rank_ratio=0.1,
+        capacity_parts=("up",),
+    )
+
+
 def _tiny_standard_model() -> OfficialImbDiffUNet:
     return OfficialImbDiffUNet(
         dim=3 * 4 * 4,
@@ -118,6 +134,183 @@ def test_official_pure_cm_matches_released_trainer_loss_and_gradients() -> None:
         if adapter_parameter.grad is not None:
             assert direct_parameter.grad is not None
             assert torch.equal(adapter_parameter.grad, direct_parameter.grad)
+
+
+def test_official_released_cm_matches_transfer_trainer_loss_and_gradients() -> None:
+    adapter_model = _tiny_model()
+    direct_model = copy.deepcopy(adapter_model)
+    counts = (3, 1)
+    objective = OfficialImbDiffObjective(
+        class_counts=counts,
+        method="released_cm",
+        timesteps=8,
+        beta_start=1e-4,
+        beta_end=1e-2,
+        cfg=False,
+        transfer_x0=True,
+        transfer_mode="full",
+        consistency_weight=1.0,
+        diversity_weight=0.2,
+        image_shape=(3, 4, 4),
+    )
+    objective._trainer_for(adapter_model, torch.device("cpu"))
+    probabilities = torch.tensor(counts, dtype=torch.float32)
+    probabilities = probabilities / probabilities.sum()
+    components = load_official_imbdiff_cm_components()
+    direct_trainer = components.cm_trainer(
+        model=direct_model,
+        beta_1=1e-4,
+        beta_T=1e-2,
+        T=8,
+        dataset=None,
+        num_class=2,
+        cfg=False,
+        weight=probabilities.unsqueeze(0),
+        transfer_x0=True,
+        transfer_tr_tau=False,
+        transfer_mode="full",
+        label_weight_tr=probabilities.unsqueeze(1) @ probabilities.unsqueeze(0),
+        w_con=1.0,
+        w_div=0.2,
+    )
+
+    clean = torch.linspace(-1.0, 1.0, 2 * 3 * 4 * 4).reshape(2, -1)
+    labels = torch.tensor([0, 1])
+    torch.manual_seed(37)
+    adapter_loss, adapter_metrics = objective(
+        model=adapter_model,
+        path=None,
+        x0=torch.zeros_like(clean),
+        x1=clean,
+        t=torch.zeros(2),
+        class_labels=labels,
+        original_class_labels=labels,
+    )
+    adapter_loss.backward()
+
+    torch.manual_seed(37)
+    direct_loss = direct_trainer(clean.reshape(2, 3, 4, 4), labels)
+    direct_loss.backward()
+
+    assert torch.equal(adapter_loss, direct_loss)
+    assert adapter_metrics["cm_branch_distance"] >= 0.0
+    assert adapter_metrics["cm_unconditional_batch"] == 0.0
+    for (adapter_name, adapter_parameter), (direct_name, direct_parameter) in zip(
+        adapter_model.named_parameters(),
+        direct_model.named_parameters(),
+        strict=True,
+    ):
+        assert adapter_name == direct_name
+        assert (adapter_parameter.grad is None) == (direct_parameter.grad is None)
+        if adapter_parameter.grad is not None:
+            assert direct_parameter.grad is not None
+            assert torch.equal(adapter_parameter.grad, direct_parameter.grad)
+
+
+def test_cm_dropout_pairing_separates_capacity_from_mask_noise() -> None:
+    model = _tiny_dropout_model().train()
+    objective = OfficialImbDiffObjective(
+        class_counts=(3, 1),
+        method="pure_cm",
+        timesteps=8,
+        beta_start=1e-4,
+        beta_end=1e-2,
+        cfg=False,
+        transfer_x0=False,
+        image_shape=(3, 4, 4),
+    )
+    clean = torch.linspace(-1.0, 1.0, 2 * 3 * 4 * 4).reshape(2, 3, 4, 4)
+    labels = torch.tensor([0, 1])
+    timesteps = torch.tensor([2, 5])
+    noise = torch.randn(clean.shape, generator=torch.Generator().manual_seed(7))
+
+    torch.manual_seed(101)
+    independent = objective.probe_terms(
+        model=model,
+        clean=clean,
+        labels=labels,
+        timesteps=timesteps,
+        noise=noise,
+        dropout_mode="independent",
+        capacity_on_enabled=False,
+        capacity_off_enabled=False,
+    )
+    torch.manual_seed(101)
+    paired = objective.probe_terms(
+        model=model,
+        clean=clean,
+        labels=labels,
+        timesteps=timesteps,
+        noise=noise,
+        dropout_mode="paired",
+        capacity_on_enabled=False,
+        capacity_off_enabled=False,
+    )
+    disabled = objective.probe_terms(
+        model=model,
+        clean=clean,
+        labels=labels,
+        timesteps=timesteps,
+        noise=noise,
+        dropout_mode="disabled",
+        capacity_on_enabled=False,
+        capacity_off_enabled=False,
+    )
+
+    assert float(independent.distance_per_sample.detach().mean()) > 0.0
+    torch.testing.assert_close(
+        paired.distance_per_sample,
+        torch.zeros_like(paired.distance_per_sample),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        disabled.distance_per_sample,
+        torch.zeros_like(disabled.distance_per_sample),
+        rtol=0,
+        atol=0,
+    )
+    assert model.training
+
+
+def test_cm_paired_dropout_preserves_nonzero_expert_response() -> None:
+    model = _tiny_dropout_model().train()
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            if name.endswith(".lora_B"):
+                parameter.fill_(0.01)
+    objective = OfficialImbDiffObjective(
+        class_counts=(3, 1),
+        method="pure_cm",
+        timesteps=8,
+        cfg=False,
+        transfer_x0=False,
+        image_shape=(3, 4, 4),
+    )
+    clean = torch.randn(2, 3, 4, 4)
+    labels = torch.tensor([0, 1])
+    timesteps = torch.tensor([2, 5])
+    noise = torch.randn_like(clean)
+
+    torch.manual_seed(103)
+    terms = objective.probe_terms(
+        model=model,
+        clean=clean,
+        labels=labels,
+        timesteps=timesteps,
+        noise=noise,
+        dropout_mode="paired",
+    )
+
+    assert terms.dropout_mode == "paired"
+    assert float(terms.distance_per_sample.detach().mean()) > 0.0
+    assert terms.loss.grad_fn is not None
+    gradients = torch.autograd.grad(
+        terms.loss,
+        tuple(parameter for parameter in model.parameters() if parameter.requires_grad),
+        allow_unused=True,
+    )
+    assert any(gradient is not None for gradient in gradients)
 
 
 def test_official_ddpm_matches_released_standard_trainer_loss_and_gradients() -> None:

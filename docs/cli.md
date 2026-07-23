@@ -48,6 +48,7 @@ When adding or changing a CLI:
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
 | `fm-lab-imbdiff-cm-probe` | Probe learned CM capacity allocation. | Official CM run directories and checkpoints | Paired functional, Fourier, and gradient-routing reports |
+| `fm-lab-imbdiff-cm-dropout-probe` | Separate expert and dropout contributions to the CM branch distance. | One official CM checkpoint | Independent/paired/disabled-dropout distances and gradient comparisons |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
 | `fm-lab-fashion-geometry-frequency` | Run the gated Fashion-MNIST geometry-by-frequency bridge. | Frozen Stage-0 or Stage-1 YAML | geometry gate, all-class cyclic configs, budget gate, evaluations, response analysis |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
@@ -312,6 +313,38 @@ end-to-end smoke. The full probe writes `manifest.json`, `summary.json`,
 `functional_rows.csv`, `gradient_summary.csv`, per-checkpoint JSON reports,
 and a compact `report.md`. Existing output manifests are reused and checked by
 SHA-256 so checkpoint comparisons remain paired.
+
+## `fm-lab-imbdiff-cm-dropout-probe`
+
+Run a fixed-checkpoint training-mode diagnostic of the two CM forward passes.
+The released condition uses independent dropout masks; the controls replay one
+mask across both passes, disable dropout, or disable expert capacity in both
+independent-mask passes. This command does not retrain or modify the checkpoint.
+
+```bash
+fm-lab-imbdiff-cm-dropout-probe \
+  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
+  --timesteps 100,500,900 \
+  --classes auto \
+  --classes-per-group 2 \
+  --samples-per-class 1 \
+  --dropout-repeats 10 \
+  --weights ema \
+  --channels-last on \
+  --device cuda \
+  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_dropout_probe
+```
+
+`--classes auto` chooses a deterministic frequency-stratified subset from the
+Many, Medium, and Few thirds. Pass `--classes all` or explicit comma-separated
+class IDs for a broader diagnostic. `--skip-gradients` omits the one-repeat
+branch-distance gradient comparison for a faster functional smoke.
+
+Outputs are `manifest.json`, `summary.json`, `functional_rows.csv`, optional
+`gradient_summary.csv`, and `report.md`. Ratios of dropout-only, paired, and
+disabled distances to the released independent-mask distance are descriptive:
+squared distances contain cross terms and are not an additive causal variance
+decomposition.
 
 ## `fm-lab-sampling-timesteps`
 

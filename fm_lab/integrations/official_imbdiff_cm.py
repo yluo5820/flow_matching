@@ -34,18 +34,33 @@ class OfficialImbDiffCMComponents:
 
 
 @dataclass(frozen=True)
-class OfficialImbDiffCMProbeTerms:
-    """Differentiable released-CM terms for a fixed noisy batch."""
+class OfficialImbDiffCMTerms:
+    """Graph-connected CM terms from one exact pair of model evaluations."""
 
     noisy: torch.Tensor
     target: torch.Tensor
+    timesteps: torch.Tensor
+    conditioned_labels: torch.Tensor | None
     capacity_on: torch.Tensor
     capacity_off: torch.Tensor
     base_per_sample: torch.Tensor
     distance_per_sample: torch.Tensor
+    coefficient_per_sample: torch.Tensor
     consistency_per_sample: torch.Tensor
     diversity_per_sample: torch.Tensor
     total_per_sample: torch.Tensor
+    loss: torch.Tensor
+    dropout_mode: str
+    capacity_on_enabled: bool
+    capacity_off_enabled: bool
+    unconditional_batch: bool
+
+
+# Backward-compatible diagnostic name used by the completed checkpoint probe.
+OfficialImbDiffCMProbeTerms = OfficialImbDiffCMTerms
+
+
+_CM_DROPOUT_MODES = frozenset({"independent", "paired", "disabled"})
 
 
 @lru_cache(maxsize=1)
@@ -448,7 +463,7 @@ class OfficialImbDiffObjective:
         class_labels: torch.Tensor | None = None,
         original_class_labels: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        del path, x0, t, compute_diagnostics, class_labels
+        del path, x0, t, class_labels
         if original_class_labels is None:
             raise ValueError("Official ImbDiff requires original class labels.")
         model_uses_capacity = bool(getattr(model, "is_official_imbdiff_cm", False))
@@ -459,28 +474,62 @@ class OfficialImbDiffObjective:
         labels = original_class_labels.to(device=clean.device, dtype=torch.long)
         if self.method == "cbdm":
             return self._cbdm_loss(model=model, clean=clean, labels=labels)
-        trainer = self._trainer_for(model, clean.device)
-        released_loss = trainer(
-            clean,
-            labels,
-            augm=None,
-            uncond_flag_out=False,
-        )
-        if isinstance(released_loss, tuple):
-            if len(released_loss) != 2:
-                raise TypeError("The released standard trainer returned an invalid tuple.")
-            denoising, auxiliary = released_loss
-            loss = denoising.mean() + auxiliary
+        if self.uses_capacity_model:
+            terms = self.training_terms(
+                model=model,
+                clean=clean,
+                labels=labels,
+                dropout_mode="independent",
+            )
+            loss = terms.loss
         else:
-            loss = released_loss
+            trainer = self._trainer_for(model, clean.device)
+            released_loss = trainer(
+                clean,
+                labels,
+                augm=None,
+                uncond_flag_out=False,
+            )
+            if isinstance(released_loss, tuple):
+                if len(released_loss) != 2:
+                    raise TypeError(
+                        "The released standard trainer returned an invalid tuple."
+                    )
+                denoising, auxiliary = released_loss
+                loss = denoising.mean() + auxiliary
+            else:
+                loss = released_loss
         if not isinstance(loss, torch.Tensor) or loss.ndim != 0:
             raise TypeError("The official trainer must resolve to one scalar loss tensor.")
         value = float(loss.detach().cpu())
-        return loss, {
+        metrics = {
             "official_imbdiff_loss": value,
             f"official_imbdiff_{self.method}_loss": value,
             "loss": value,
         }
+        if self.uses_capacity_model and compute_diagnostics:
+            metrics.update(
+                {
+                    "cm_base_loss": float(terms.base_per_sample.detach().mean().cpu()),
+                    "cm_auxiliary_loss": float(
+                        (
+                            terms.consistency_per_sample * self.consistency_weight
+                            + terms.diversity_per_sample * self.diversity_weight
+                        )
+                        .detach()
+                        .mean()
+                        .cpu()
+                    ),
+                    "cm_branch_distance": float(
+                        terms.distance_per_sample.detach().mean().cpu()
+                    ),
+                    "cm_coefficient_mean": float(
+                        terms.coefficient_per_sample.detach().mean().cpu()
+                    ),
+                    "cm_unconditional_batch": float(terms.unconditional_batch),
+                }
+            )
+        return loss, metrics
 
     @property
     def uses_capacity_model(self) -> bool:
@@ -489,6 +538,78 @@ class OfficialImbDiffObjective:
     @property
     def sampler_family(self) -> str:
         return "cm" if self.uses_capacity_model else "standard"
+
+    def training_terms(
+        self,
+        *,
+        model: nn.Module,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+        dropout_mode: str = "independent",
+    ) -> OfficialImbDiffCMTerms:
+        """Sample and expose the exact graph-connected released-CM training terms.
+
+        ``dropout_mode='independent'`` preserves the authors' two sequential
+        forward calls and is the only mode used by the faithful objective.
+        ``paired`` replays the first model RNG state for the general pass, while
+        ``disabled`` temporarily evaluates both predictions with dropout off.
+        """
+
+        self._validate_cm_term_request(model, clean, labels)
+        trainer = self._trainer_for(model, clean.device)
+        batch_size = clean.shape[0]
+
+        # Preserve Algorithm 1's stochastic operation order exactly.
+        timesteps = torch.randint(
+            self.timesteps,
+            size=(batch_size,),
+            device=clean.device,
+        )
+        noise = torch.randn_like(clean)
+        signal, sigma = self._expanded_diffusion_coefficients(
+            timesteps,
+            clean,
+        )
+        noisy = signal * clean + sigma * noise
+
+        conditioned_labels: torch.Tensor | None = labels
+        unconditional_batch = False
+        if self.cfg and bool(torch.rand(1)[0] < 0.1):
+            conditioned_labels = None
+            unconditional_batch = True
+
+        capacity_on, capacity_off = self._cm_prediction_pair(
+            model=model,
+            noisy=noisy,
+            timesteps=timesteps,
+            conditioned_labels=conditioned_labels,
+            dropout_mode=dropout_mode,
+            capacity_on_enabled=True,
+            capacity_off_enabled=False,
+        )
+        target = self._cm_target(
+            trainer=trainer,
+            noisy=noisy,
+            clean=clean,
+            labels=labels,
+            timesteps=timesteps,
+            noise=noise,
+            signal=signal,
+        )
+        return self._assemble_cm_terms(
+            trainer=trainer,
+            noisy=noisy,
+            target=target,
+            labels=labels,
+            timesteps=timesteps,
+            conditioned_labels=conditioned_labels,
+            capacity_on=capacity_on,
+            capacity_off=capacity_off,
+            dropout_mode=dropout_mode,
+            capacity_on_enabled=True,
+            capacity_off_enabled=False,
+            unconditional_batch=unconditional_batch,
+        )
 
     def probe_terms(
         self,
@@ -499,7 +620,10 @@ class OfficialImbDiffObjective:
         timesteps: torch.Tensor,
         noise: torch.Tensor,
         transfer_seed: int | None = None,
-    ) -> OfficialImbDiffCMProbeTerms:
+        dropout_mode: str = "disabled",
+        capacity_on_enabled: bool = True,
+        capacity_off_enabled: bool = False,
+    ) -> OfficialImbDiffCMTerms:
         """Expose the exact CM decomposition without sampling hidden randomness.
 
         The caller fixes the examples, discrete timesteps, and Gaussian noise.
@@ -508,15 +632,7 @@ class OfficialImbDiffObjective:
         of the method, ``transfer_seed`` fixes the release's multinomial draw.
         """
 
-        if not self.uses_capacity_model:
-            raise ValueError("CM probe terms require an official capacity model method.")
-        if not bool(getattr(model, "is_official_imbdiff_cm", False)):
-            raise ValueError("CM probe terms require the official CM U-Net.")
-        if clean.ndim != 4 or tuple(clean.shape[1:]) != self.image_shape:
-            raise ValueError(
-                "CM probe clean images must be NCHW with shape "
-                f"{self.image_shape}."
-            )
+        self._validate_cm_term_request(model, clean, labels)
         if noise.shape != clean.shape:
             raise ValueError("CM probe noise must match the clean image tensor.")
         batch_size = clean.shape[0]
@@ -527,86 +643,255 @@ class OfficialImbDiffObjective:
         if bool((timesteps < 0).any()) or bool((timesteps >= self.timesteps).any()):
             raise ValueError("CM probe timesteps are outside the diffusion schedule.")
         noise = noise.to(device=clean.device, dtype=clean.dtype)
-        coefficient_shape = (batch_size,) + (1,) * (clean.ndim - 1)
-        signal = self._sqrt_alpha_bars.to(device=clean.device, dtype=clean.dtype)[
-            timesteps
-        ].reshape(coefficient_shape)
+        signal, sigma = self._expanded_diffusion_coefficients(timesteps, clean)
+        noisy = signal * clean + sigma * noise
+
+        capacity_on, capacity_off = self._cm_prediction_pair(
+            model=model,
+            noisy=noisy,
+            timesteps=timesteps,
+            conditioned_labels=labels,
+            dropout_mode=dropout_mode,
+            capacity_on_enabled=bool(capacity_on_enabled),
+            capacity_off_enabled=bool(capacity_off_enabled),
+        )
+        trainer = self._trainer_for(model, clean.device)
+        target = self._cm_target(
+            trainer=trainer,
+            noisy=noisy,
+            clean=clean,
+            labels=labels,
+            timesteps=timesteps,
+            noise=noise,
+            signal=signal,
+            transfer_seed=transfer_seed,
+        )
+        return self._assemble_cm_terms(
+            trainer=trainer,
+            noisy=noisy,
+            target=target,
+            labels=labels,
+            timesteps=timesteps,
+            conditioned_labels=labels,
+            capacity_on=capacity_on,
+            capacity_off=capacity_off,
+            dropout_mode=dropout_mode,
+            capacity_on_enabled=bool(capacity_on_enabled),
+            capacity_off_enabled=bool(capacity_off_enabled),
+            unconditional_batch=False,
+        )
+
+    def _validate_cm_term_request(
+        self,
+        model: nn.Module,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> None:
+        if not self.uses_capacity_model:
+            raise ValueError("CM terms require an official capacity model method.")
+        if not bool(getattr(model, "is_official_imbdiff_cm", False)):
+            raise ValueError("CM terms require the official CM U-Net.")
+        if clean.ndim != 4 or tuple(clean.shape[1:]) != self.image_shape:
+            raise ValueError(
+                "CM clean images must be NCHW with shape "
+                f"{self.image_shape}."
+            )
+        if labels.shape != (clean.shape[0],):
+            raise ValueError("CM labels must match the batch size.")
+
+    def _expanded_diffusion_coefficients(
+        self,
+        timesteps: torch.Tensor,
+        clean: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        coefficient_shape = (clean.shape[0],) + (1,) * (clean.ndim - 1)
+        signal = self._sqrt_alpha_bars.to(
+            device=clean.device,
+            dtype=clean.dtype,
+        )[timesteps].reshape(coefficient_shape)
         sigma = self._sqrt_one_minus_alpha_bars.to(
             device=clean.device,
             dtype=clean.dtype,
         )[timesteps].reshape(coefficient_shape)
-        noisy = signal * clean + sigma * noise
+        return signal, sigma
 
-        capacity_on = model(noisy, timesteps, y=labels, augm=None, use_cm=True)
-        capacity_off = model(noisy, timesteps, y=labels, augm=None, use_cm=False)
-        target = noise
-        if self.transfer_x0:
-            trainer = self._trainer_for(model, clean.device)
-            sigma_t = torch.sqrt(torch.clamp(signal.reciprocal().square() - 1.0, min=0.0))
-            cx_t = clean + sigma_t * noise
-            devices: list[int] = []
-            if clean.device.type == "cuda":
-                devices = [
-                    clean.device.index
-                    if clean.device.index is not None
-                    else torch.cuda.current_device()
-                ]
-            with torch.random.fork_rng(devices=devices):
-                if transfer_seed is not None:
-                    torch.manual_seed(int(transfer_seed))
-                if self.transfer_tr_tau:
-                    target = trainer.do_transfer_x0_with_y(
-                        noisy,
-                        cx_t,
-                        clean,
-                        timesteps,
-                        labels,
-                        trainer.label_weight_tr,
-                    )
-                else:
-                    target, _ = trainer.do_transfer_x0(
-                        noisy,
-                        cx_t,
-                        clean,
-                        timesteps,
-                        labels,
-                        return_transfer_label=True,
-                    )
+    def _cm_prediction_pair(
+        self,
+        *,
+        model: nn.Module,
+        noisy: torch.Tensor,
+        timesteps: torch.Tensor,
+        conditioned_labels: torch.Tensor | None,
+        dropout_mode: str,
+        capacity_on_enabled: bool,
+        capacity_off_enabled: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mode = str(dropout_mode).lower()
+        if mode not in _CM_DROPOUT_MODES:
+            raise ValueError(
+                "CM dropout_mode must be independent, paired, or disabled."
+            )
 
-        base_per_sample = (capacity_on - target).square().flatten(1).mean(1)
-        distance_per_sample = (
-            (capacity_off - capacity_on).square().flatten(1).mean(1)
+        def predict(use_capacity: bool) -> torch.Tensor:
+            return model(
+                noisy,
+                timesteps,
+                y=conditioned_labels,
+                augm=None,
+                use_cm=bool(use_capacity),
+            )
+
+        if mode == "disabled":
+            was_training = model.training
+            model.eval()
+            try:
+                return predict(capacity_on_enabled), predict(capacity_off_enabled)
+            finally:
+                model.train(was_training)
+
+        if mode == "independent":
+            return predict(capacity_on_enabled), predict(capacity_off_enabled)
+
+        devices = _rng_cuda_devices(noisy)
+        cpu_state = torch.random.get_rng_state()
+        cuda_state = (
+            torch.cuda.get_rng_state(devices[0])
+            if devices
+            else None
         )
-        probabilities = torch.tensor(
-            self.class_counts,
-            device=clean.device,
-            dtype=capacity_on.dtype,
+        capacity_on = predict(capacity_on_enabled)
+        # Enter the fork after the first pass so leaving it restores the RNG
+        # stream to the state produced by that pass. Inside, replay the state
+        # that existed immediately before the first pass.
+        with torch.random.fork_rng(devices=devices):
+            torch.random.set_rng_state(cpu_state)
+            if devices and cuda_state is not None:
+                torch.cuda.set_rng_state(cuda_state, device=devices[0])
+            capacity_off = predict(capacity_off_enabled)
+        return capacity_on, capacity_off
+
+    def _cm_target(
+        self,
+        *,
+        trainer: nn.Module,
+        noisy: torch.Tensor,
+        clean: torch.Tensor,
+        labels: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise: torch.Tensor,
+        signal: torch.Tensor,
+        transfer_seed: int | None = None,
+    ) -> torch.Tensor:
+        if not self.transfer_x0:
+            return noise
+
+        sigma_t = torch.sqrt(
+            torch.clamp(signal.reciprocal().square() - 1.0, min=0.0)
         )
-        probabilities = probabilities / probabilities.sum()
-        inverse_probabilities = probabilities.reciprocal()
-        inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
+        cx_t = clean + sigma_t * noise
+
+        def transfer() -> torch.Tensor:
+            if self.transfer_tr_tau:
+                return trainer.do_transfer_x0_with_y(
+                    noisy,
+                    cx_t,
+                    clean,
+                    timesteps,
+                    labels,
+                    trainer.label_weight_tr,
+                )
+            target, _ = trainer.do_transfer_x0(
+                noisy,
+                cx_t,
+                clean,
+                timesteps,
+                labels,
+                return_transfer_label=True,
+            )
+            return target
+
+        if transfer_seed is None:
+            return transfer()
+        devices = _rng_cuda_devices(clean)
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(int(transfer_seed))
+            return transfer()
+
+    def _assemble_cm_terms(
+        self,
+        *,
+        trainer: nn.Module,
+        noisy: torch.Tensor,
+        target: torch.Tensor,
+        labels: torch.Tensor,
+        timesteps: torch.Tensor,
+        conditioned_labels: torch.Tensor | None,
+        capacity_on: torch.Tensor,
+        capacity_off: torch.Tensor,
+        dropout_mode: str,
+        capacity_on_enabled: bool,
+        capacity_off_enabled: bool,
+        unconditional_batch: bool,
+    ) -> OfficialImbDiffCMTerms:
+        base_elements = F.mse_loss(capacity_on, target, reduction="none")
+        base_per_sample = base_elements.flatten(1).mean(1)
+        distance_per_sample = F.mse_loss(
+            capacity_off.view(capacity_off.shape[0], -1),
+            capacity_on.view(capacity_on.shape[0], -1),
+            reduction="none",
+        ).mean(dim=1)
+
+        probabilities = trainer.weight.to(labels.device)
+        inverse_probabilities = trainer.inverse_weight.to(labels.device)
+        consistency_scale = probabilities[labels]
+        diversity_scale = inverse_probabilities[labels]
         class_scale = float(len(self.class_counts))
         consistency_per_sample = (
-            class_scale * probabilities[labels] * distance_per_sample
+            class_scale * consistency_scale * distance_per_sample
         )
         diversity_per_sample = (
-            -class_scale * inverse_probabilities[labels] * distance_per_sample
+            -class_scale * diversity_scale * distance_per_sample
+        )
+        coefficient_per_sample = class_scale * (
+            consistency_scale * self.consistency_weight
+            - diversity_scale * self.diversity_weight
         )
         total_per_sample = (
-            base_per_sample
-            + self.consistency_weight * consistency_per_sample
-            + self.diversity_weight * diversity_per_sample
+            base_per_sample + coefficient_per_sample * distance_per_sample
         )
-        return OfficialImbDiffCMProbeTerms(
+
+        # Match the release's reduction order for exact scalar and gradient
+        # compatibility; total_per_sample is the row-resolved diagnostic view.
+        base_loss = base_elements.mean()
+        auxiliary_loss = (
+            (
+                distance_per_sample
+                * (
+                    consistency_scale * self.consistency_weight
+                    - diversity_scale * self.diversity_weight
+                )
+            ).mean()
+            * class_scale
+        )
+        loss = base_loss + auxiliary_loss
+        return OfficialImbDiffCMTerms(
             noisy=noisy,
             target=target,
+            timesteps=timesteps,
+            conditioned_labels=conditioned_labels,
             capacity_on=capacity_on,
             capacity_off=capacity_off,
             base_per_sample=base_per_sample,
             distance_per_sample=distance_per_sample,
+            coefficient_per_sample=coefficient_per_sample,
             consistency_per_sample=consistency_per_sample,
             diversity_per_sample=diversity_per_sample,
             total_per_sample=total_per_sample,
+            loss=loss,
+            dropout_mode=str(dropout_mode).lower(),
+            capacity_on_enabled=bool(capacity_on_enabled),
+            capacity_off_enabled=bool(capacity_off_enabled),
+            unconditional_batch=bool(unconditional_batch),
         )
 
     def _cbdm_loss(
@@ -745,6 +1030,16 @@ class OfficialImbDiffCMObjective(OfficialImbDiffObjective):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(method="released_cm", **kwargs)
+
+
+def _rng_cuda_devices(reference: torch.Tensor) -> list[int]:
+    if reference.device.type != "cuda":
+        return []
+    return [
+        reference.device.index
+        if reference.device.index is not None
+        else torch.cuda.current_device()
+    ]
 
 
 @torch.no_grad()

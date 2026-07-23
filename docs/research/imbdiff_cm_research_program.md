@@ -934,6 +934,11 @@ Compute: none.
 
 ### Phase 1 — paired-dropout diagnostic
 
+**Implementation status (2026-07-23):** structured graph-connected CM terms,
+the faithful independent-mask path, paired/disabled controls, a checkpoint CLI,
+and unit controls are implemented. The real 60k checkpoint diagnostic remains
+to be run before Phase 2 begins.
+
 Implementation:
 
 - add deterministic RNG replay for the two CM forwards;
