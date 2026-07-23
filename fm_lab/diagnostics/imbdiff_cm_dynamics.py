@@ -738,6 +738,11 @@ def _gradient_group_rows(
                 "stratum": stratum,
                 "capacity_group": group_name,
                 "loss_contribution": float(loss_value),
+                "conditional_mean_loss": (
+                    float(loss_value) / batch_fraction
+                    if batch_fraction is not None and batch_fraction > 0.0
+                    else None
+                ),
                 "batch_count": batch_count,
                 "batch_fraction": batch_fraction,
                 "gradient_norm": norm,
@@ -745,6 +750,20 @@ def _gradient_group_rows(
                     norm / math.sqrt(active_counts[group_name])
                     if active_counts[group_name]
                     else 0.0
+                ),
+                "conditional_mean_gradient_norm": (
+                    norm / batch_fraction
+                    if batch_fraction is not None and batch_fraction > 0.0
+                    else None
+                ),
+                "conditional_mean_gradient_rms": (
+                    norm / math.sqrt(active_counts[group_name]) / batch_fraction
+                    if (
+                        batch_fraction is not None
+                        and batch_fraction > 0.0
+                        and active_counts[group_name]
+                    )
+                    else None
                 ),
                 "group_num_parameters": parameter_counts[group_name],
                 "active_gradient_numel": active_counts[group_name],

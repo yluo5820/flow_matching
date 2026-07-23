@@ -197,6 +197,11 @@ def test_dynamics_observer_preserves_adam_step_and_writes_measurements(tmp_path)
         "middle",
         "early_high_noise",
     }
+    assert all(
+        float(row["conditional_mean_gradient_norm"])
+        >= float(row["gradient_norm"])
+        for row in conditioned_rows
+    )
 
     with (output / "layer_updates.csv").open(newline="") as handle:
         layer_row = next(csv.DictReader(handle))

@@ -1,6 +1,7 @@
 # ImbDiff-CM live training-dynamics experiment
 
-**Status:** instrumentation implemented; 2k smoke run pending.
+**Status:** instrumentation and 2k CUDA smoke validated; 30k mechanism run
+prepared.
 
 ## Scientific question
 
@@ -73,7 +74,10 @@ direction, and pairwise component-gradient cosine/conflict.
 The total per-sample objective is masked on the live graph and divided by the
 original batch size. The resulting gradients are literal additive
 contributions to that optimizer batch, not gradients from replayed balanced
-batches.
+batches. Each row stores both this exposure-weighted contribution and the
+corresponding group-mean gradient obtained by dividing by its observed batch
+fraction. The former describes what the optimizer actually receives; the
+latter helps compare per-example pressure across unequal-frequency groups.
 
 They are recorded for:
 
@@ -196,5 +200,8 @@ configs/cifar100_lt/autodl_dynamics/
   cifar100_lt_ir100_official_released_cm_dynamics_30k.yaml
 ```
 
-It observes 17 steps concentrated early and then spread through 30,000. Only
-the 2k smoke should be run before inspecting overhead and numerical validity.
+It observes nine logarithmically spaced initialization steps through 256,
+followed by every 500 steps through 30,000 (69 observations total). This denser
+late schedule is necessary because a batch from CIFAR-100-LT IR100 can contain
+zero Few examples; isolated observations cannot support stable tail-routing
+claims. The 2k smoke has already validated overhead and numerical correctness.
