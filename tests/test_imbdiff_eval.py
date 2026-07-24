@@ -49,7 +49,7 @@ def test_evaluation_report_contains_all_metrics_and_extensions() -> None:
     assert report["metrics"]["fid"]["mean"] == 0.0
     assert report["metrics"]["recall"]["mean"] == 1.0
     assert report["groups"] == {"many": [0], "medium": [1], "few": [2]}
-    assert report["provenance"]["fid_kid_compatibility"] == "ImbDiff-CM reference"
+    assert report["provenance"]["fid_kid_compatibility"] == "TensorFlow FID reference"
     assert report["provenance"]["extended_metrics"] == [
         "recall",
         "inception_score",

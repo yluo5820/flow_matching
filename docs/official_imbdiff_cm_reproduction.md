@@ -1,5 +1,9 @@
 # Official ImbDiff-CM reproduction
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 This path runs the authors' released implementation as a pinned git submodule
 instead of using this repository's continuous-flow adaptation.
 

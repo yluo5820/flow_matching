@@ -1,5 +1,9 @@
 # ImbDiff-CM mechanism and reconstruction research program
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 **Status:** knowledge/intervention phases complete; Phase 3 training-dynamics
 instrumentation implemented and awaiting its 2k smoke run, updated 2026-07-23.
 

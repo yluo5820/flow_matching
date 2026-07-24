@@ -1,5 +1,9 @@
 # ImbDiff-CM matched causal expert intervention
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 **Status:** completed on the released-CM 60k seed-0 checkpoint,
 2026-07-23.
 

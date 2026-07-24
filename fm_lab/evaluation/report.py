@@ -219,7 +219,7 @@ def evaluate_feature_caches(
         "provenance": {
             "evaluator": "fm_lab.imbdiff",
             "evaluator_version": 1,
-            "fid_kid_compatibility": "ImbDiff-CM reference",
+            "fid_kid_compatibility": "TensorFlow FID reference",
             "extended_metrics": [
                 name
                 for name, enabled in (

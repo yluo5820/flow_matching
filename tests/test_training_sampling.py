@@ -716,17 +716,11 @@ def test_training_contract_rejects_resolved_class_count_change() -> None:
             ]
         ),
         _resume_contract_config(modifiers=[{"name": "oc", "transfer_mode": "t2h"}]),
-        _resume_contract_config(
-            modifiers=[
-                {"name": "oc", "transfer_mode": "t2h"},
-                {"name": "cm", "consistency_weight": 1.0, "diversity_weight": 0.2},
-            ]
-        ),
         _resume_contract_config(min_denom=0.01),
         _resume_contract_config(path_tag="b"),
         _resume_contract_config(imbalance_factor=0.02),
     ],
-    ids=["cbdm", "oc", "cm", "min-denom", "path", "data"],
+    ids=["cbdm", "oc", "min-denom", "path", "data"],
 )
 def test_training_contract_rejects_semantic_resume_changes(
     active_config: dict[str, object],
@@ -1273,7 +1267,7 @@ def test_sample_and_plot_warns_for_linear_source_output_endpoint(tmp_path) -> No
     )
 
 
-def test_cm_sampling_defaults_to_official_capacity_off_branch(tmp_path) -> None:
+def test_adapter_sampling_defaults_to_model_branch(tmp_path) -> None:
     config = _sampling_config(seed=114)
     config["conditioning"] = {"enabled": True, "num_classes": 2}
     config["objective"] = {
@@ -1281,7 +1275,6 @@ def test_cm_sampling_defaults_to_official_capacity_off_branch(tmp_path) -> None:
         "model_output": "target",
         "loss_space": "velocity",
         "min_denom": 0.05,
-        "modifiers": [{"name": "cm"}],
     }
 
     summary = sample_and_plot(
@@ -1296,15 +1289,11 @@ def test_cm_sampling_defaults_to_official_capacity_off_branch(tmp_path) -> None:
     )
 
     generated = np.load(tmp_path / "samples" / "euler_nfe3.npy")
-    assert np.allclose(generated, 1.0)
-    assert summary["capacity_branch"] == {
-        "configured": "auto",
-        "resolved": "base",
-        "use_capacity": False,
-    }
+    assert np.allclose(generated, 3.0)
+    assert "capacity_branch" not in summary
 
 
-def test_cm_sampling_capacity_branch_override_can_sample_full_branch(tmp_path) -> None:
+def test_adapter_sampling_capacity_branch_override_can_sample_full_branch(tmp_path) -> None:
     config = _sampling_config(seed=115)
     config["conditioning"] = {"enabled": True, "num_classes": 2}
     config["sampling"]["capacity_branch"] = "full"
@@ -1313,7 +1302,6 @@ def test_cm_sampling_capacity_branch_override_can_sample_full_branch(tmp_path) -
         "model_output": "target",
         "loss_space": "velocity",
         "min_denom": 0.05,
-        "modifiers": [{"name": "cm"}],
     }
 
     summary = sample_and_plot(

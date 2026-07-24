@@ -50,11 +50,11 @@ _CIFAR_SPECS = {
 
 @dataclass
 class ImbalancedCIFARImages:
-    """CIFAR-10/100 with the exponential LT split used by ImbDiff-CM.
+    """CIFAR-10/100 with a deterministic exponential long-tail split.
 
     For class index ``c``, the retained training count is
     ``int(n_max * imbalance_factor ** (c / (num_classes - 1)))``. Class subsets
-    are selected with NumPy's legacy seeded shuffle to match the reference code.
+    are selected with NumPy's legacy seeded shuffle for reproducibility.
     """
 
     dataset: str

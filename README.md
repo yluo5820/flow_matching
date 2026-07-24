@@ -66,7 +66,6 @@ support this interface.
 - [CLI lookup](docs/cli.md): maintained reference for every `fm-lab-*` command.
 - [Reading outputs and diagnostics](docs/diagnostics.md): how to interpret plots, CSVs, and summary metrics.
 - [CUDA server setup](docs/server_cuda_setup.md): Miniconda environment and GPU smoke-test commands.
-- [Official ImbDiff-CM reproduction](docs/official_imbdiff_cm_reproduction.md): pinned upstream DDPM implementation and AutoDL screen commands.
 
 Run path-law ambiguity diagnostics without training:
 
@@ -101,18 +100,15 @@ Evaluate a completed local MNIST image run:
 .conda/fm_lab/bin/fm-lab-mnist-eval --run-dir runs/mnist_image_unet_ot --solver auto --nfe 64 --device auto
 ```
 
-Run the four controlled continuous Fashion-MNIST IR100 experiments plus the
+Run the three controlled continuous Fashion-MNIST IR100 experiments plus the
 full balanced-data baseline. Refresh the editable install first so the current
 console scripts are available:
 
-All five predict the clean target and optimize velocity loss with JiT-style
+All four predict the clean target and optimize velocity loss with JiT-style
 logit-normal time sampling `(-0.8, 0.8)`. Prediction and supervision use the
 same `0.05` denominator floor. Generation remains the controlled Euler/NFE-64
 protocol used by the evaluator. These short runs intentionally disable EMA and
-sample the selected raw checkpoint at CFG scale 1.0. CM runs directly on the
-long-tail baseline, compares capacity branches in clean-target space, and does
-not compose with OC. The default low-rank capacity branch covers the decoder;
-other U-Net sections remain selectable for controlled capacity studies.
+sample the selected raw checkpoint at CFG scale 1.0.
 
 ```bash
 .conda/fm_lab/bin/python -m pip install -e .
@@ -128,10 +124,6 @@ other U-Net sections remain selectable for controlled capacity studies.
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_oc.yaml \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc \
-  --device auto
-.conda/fm_lab/bin/fm-lab-train \
-  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
-  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
   --device auto
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml \
@@ -164,13 +156,6 @@ fresh controlled run. Evaluate the resulting Euler/NFE-64 artifacts with:
   --generation-method x_vloss_oc --sampler euler --nfe 64 \
   --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
-.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
-  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/euler_nfe64.npy \
-  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
-  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
-  --generation-method x_vloss_cm --sampler euler --nfe 64 \
-  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 --download \
-  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_balanced/x_vloss/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \

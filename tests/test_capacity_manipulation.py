@@ -8,11 +8,9 @@ from fm_lab.models.capacity import (
     apply_capacity_conv,
     use_capacity_from_context,
 )
-from fm_lab.paths import LinearPath
-from fm_lab.training.losses import build_objective
 
 
-def _cm_model_config() -> dict:
+def _capacity_model_config() -> dict:
     return {
         "model": {
             "name": "ddpm_unet",
@@ -33,7 +31,7 @@ def _cm_model_config() -> dict:
     }
 
 
-def _cm_image_model_config(*, parts: list[str] | None = None) -> dict:
+def _capacity_image_model_config(*, parts: list[str] | None = None) -> dict:
     return {
         "model": {
             "name": "image_unet",
@@ -85,8 +83,8 @@ def test_capacity_config_rejects_unknown_model_parts() -> None:
         )
 
 
-def test_image_unet_factory_places_cm_capacity_only_in_up_blocks() -> None:
-    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8)
+def test_image_unet_factory_places_capacity_only_in_up_blocks() -> None:
+    model = build_model(_capacity_image_model_config(), dim=3 * 8 * 8)
     adapter_names = [
         name
         for name, module in model.named_modules()
@@ -119,7 +117,7 @@ def test_image_unet_factory_places_cm_capacity_only_in_up_blocks() -> None:
 
 def test_image_unet_full_capacity_covers_every_model_section() -> None:
     parts = ["conditioning", "head", "down", "middle", "up", "tail"]
-    model = build_model(_cm_image_model_config(parts=parts), dim=3 * 8 * 8)
+    model = build_model(_capacity_image_model_config(parts=parts), dim=3 * 8 * 8)
     adapter_names = {
         name
         for name, module in model.named_modules()
@@ -145,13 +143,13 @@ def test_image_unet_full_capacity_covers_every_model_section() -> None:
 
 def test_image_unet_full_capacity_preserves_same_seed_shared_parameters() -> None:
     parts = ["conditioning", "head", "down", "middle", "up", "tail"]
-    baseline_config = _cm_image_model_config()
+    baseline_config = _capacity_image_model_config()
     baseline_config["model"]["capacity"]["enabled"] = False
 
     torch.manual_seed(23)
     baseline = build_model(baseline_config, dim=3 * 8 * 8)
     torch.manual_seed(23)
-    capacity = build_model(_cm_image_model_config(parts=parts), dim=3 * 8 * 8)
+    capacity = build_model(_capacity_image_model_config(parts=parts), dim=3 * 8 * 8)
 
     capacity_state = capacity.state_dict()
     shared_capacity_state = {
@@ -170,7 +168,7 @@ def test_image_unet_full_capacity_preserves_same_seed_shared_parameters() -> Non
 
 def test_image_unet_capacity_switch_preserves_base_branch() -> None:
     torch.manual_seed(4)
-    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8).eval()
+    model = build_model(_capacity_image_model_config(), dim=3 * 8 * 8).eval()
     with torch.no_grad():
         model.output_block[-1].weight.normal_(std=0.02)
         model.output_block[-1].bias.zero_()
@@ -195,40 +193,6 @@ def test_image_unet_capacity_switch_preserves_base_branch() -> None:
     assert torch.equal(initial_full, initial_base)
     assert not torch.equal(changed_full, initial_full)
     assert torch.equal(unchanged_base, initial_base)
-
-
-def test_cm_objective_accepts_capacity_enabled_image_unet() -> None:
-    model = build_model(_cm_image_model_config(), dim=3 * 8 * 8)
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "model_output": "velocity",
-            "loss_space": "velocity",
-            "modifiers": [
-                {
-                    "name": "cm",
-                    "consistency_weight": 1.0,
-                    "diversity_weight": 0.2,
-                    "comparison_space": "target",
-                },
-            ],
-        },
-        class_counts=[100, 50, 25, 12, 6, 3, 2, 1, 1, 1],
-    )
-    labels = torch.tensor([0, 9])
-
-    loss, metrics = objective(
-        model=model,
-        path=LinearPath(),
-        x0=torch.randn(2, 3 * 8 * 8),
-        x1=torch.randn(2, 3 * 8 * 8),
-        t=torch.tensor([0.1, 0.9]),
-        class_labels=labels,
-        original_class_labels=labels,
-    )
-
-    assert torch.isfinite(loss)
-    assert "cm.loss" in metrics
 
 
 def test_low_rank_conv_ratio_sets_rank_and_starts_as_base_convolution() -> None:
@@ -289,7 +253,7 @@ def test_capacity_adapter_initialization_preserves_global_rng_for_base_layers() 
     assert torch.equal(capacity_second.bias, baseline_second.bias)
 
 
-def test_low_rank_conv_switch_matches_released_unscaled_lora_update() -> None:
+def test_low_rank_conv_switch_applies_adapter_scale() -> None:
     layer = models.SwitchableLowRankConv2d(
         1,
         1,
@@ -305,7 +269,7 @@ def test_low_rank_conv_switch_matches_released_unscaled_lora_update() -> None:
     inputs = torch.ones(1, 1, 2, 2)
 
     assert torch.equal(layer(inputs, use_adapter=False), torch.zeros_like(inputs))
-    assert torch.equal(layer(inputs, use_adapter=True), torch.full_like(inputs, 6.0))
+    assert torch.equal(layer(inputs, use_adapter=True), torch.full_like(inputs, 3.0))
 
 
 def test_low_rank_conv_switch_controls_adapter_gradients() -> None:
@@ -322,8 +286,8 @@ def test_low_rank_conv_switch_controls_adapter_gradients() -> None:
     assert disabled.adapter_b.grad is None
 
 
-def test_cm_factory_places_low_rank_capacity_only_in_selected_unet_parts() -> None:
-    model = build_model(_cm_model_config(), dim=3 * 8 * 8)
+def test_ddpm_factory_places_low_rank_capacity_only_in_selected_unet_parts() -> None:
+    model = build_model(_capacity_model_config(), dim=3 * 8 * 8)
     adapter_names = [
         name
         for name, module in model.named_modules()
@@ -342,9 +306,9 @@ def test_cm_factory_places_low_rank_capacity_only_in_selected_unet_parts() -> No
     }
 
 
-def test_cm_unet_context_switches_reserved_capacity_without_changing_base_branch() -> None:
+def test_ddpm_unet_context_switches_adapter_without_changing_base_branch() -> None:
     torch.manual_seed(4)
-    model = build_model(_cm_model_config(), dim=3 * 8 * 8).eval()
+    model = build_model(_capacity_model_config(), dim=3 * 8 * 8).eval()
     with torch.no_grad():
         model.output_conv.weight.normal_(std=0.02)
         model.output_conv.bias.zero_()

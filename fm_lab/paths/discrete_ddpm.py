@@ -11,10 +11,9 @@ import torch
 class DiscreteDDPMPath:
     """Record that interpolation is owned by a discrete diffusion objective.
 
-    Unlike continuous ``FlowPath`` implementations, the released ImbDiff-CM
-    trainer samples integer timesteps and constructs ``x_t`` internally.  The
-    methods below fail closed if a continuous solver accidentally tries to use
-    this marker.
+    Unlike continuous ``FlowPath`` implementations, a discrete trainer samples
+    integer timesteps and constructs ``x_t`` internally. The methods below fail
+    closed if a continuous solver accidentally tries to use this marker.
     """
 
     timesteps: int = 1000

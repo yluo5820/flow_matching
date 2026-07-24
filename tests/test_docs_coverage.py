@@ -39,9 +39,8 @@ def test_continuous_fashion_mnist_suite_is_documented_in_readme_and_cli() -> Non
         "fashion_mnist_lt_ir100_x_vloss",
         "fashion_mnist_lt_ir100_x_vloss_cbdm",
         "fashion_mnist_lt_ir100_x_vloss_oc",
-        "fashion_mnist_lt_ir100_x_vloss_cm",
     ]
-    generation_methods = ["x_vloss", "x_vloss_cbdm", "x_vloss_oc", "x_vloss_cm"]
+    generation_methods = ["x_vloss", "x_vloss_cbdm", "x_vloss_oc"]
 
     for path in (Path("README.md"), Path("docs/cli.md")):
         docs = path.read_text(encoding="utf-8")

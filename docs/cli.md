@@ -47,9 +47,6 @@ When adding or changing a CLI:
 | `fm-lab-sample-checkpoint` | Resample a trained checkpoint without retraining. | Completed run/checkpoint | samples, trajectories, sample/trajectory plots |
 | `fm-lab-sampling-timesteps` | Register sampler timesteps as Geometry Explorer classes. | Completed run/checkpoint | timestep-labeled dataset variant and optional view |
 | `fm-lab-imbdiff-eval` | Evaluate class-imbalanced CIFAR generation. | Generated/real Inception caches or generated arrays | FID, KID, Recall, IS, classwise and frequency-group reports |
-| `fm-lab-imbdiff-cm-probe` | Probe learned CM capacity allocation. | Official CM run directories and checkpoints | Paired functional, Fourier, and gradient-routing reports |
-| `fm-lab-imbdiff-cm-dropout-probe` | Separate expert and dropout contributions to the CM branch distance. | One official CM checkpoint | Independent/paired/disabled-dropout distances and gradient comparisons |
-| `fm-lab-imbdiff-cm-knowledge-probe` | Test what class, superclass, frequency, and spectral information is present in local CM expert responses. | One official CM checkpoint | Layerwise response atlas, cross-fit linear probes, null controls, and class-subspace graph |
 | `fm-lab-fashion-mnist-lt-eval` | Evaluate balanced conditional Fashion-MNIST generation. | Generated/real classifier caches or generated arrays | Fashion-FID, KID, Recall, IS, classwise and head/middle/tail reports |
 | `fm-lab-fashion-geometry-frequency` | Run the gated Fashion-MNIST geometry-by-frequency bridge. | Frozen Stage-0 or Stage-1 YAML | geometry gate, all-class cyclic configs, budget gate, evaluations, response analysis |
 | `fm-lab-synthetic-long-tail` | Run the gated synthetic long-tail geometry experiment. | Frozen experiment YAML | pools, gates, run ledger, evaluations, effect summary, living report |
@@ -116,7 +113,7 @@ fails closed when renderer, oracle, metric-control, or pilot gates are absent or
 ## `fm-lab-long-tail-geometry-stage0`
 
 Run this gate before scheduling any counterfactual frequency-mapping experiment. It
-rejects CM, objective modifiers, capacity adapters, early stopping, unpaired probes,
+rejects objective modifiers, capacity adapters, early stopping, unpaired probes,
 inexact checkpoint replay, inaccurate gradient sketches, and failed synthetic controls.
 
 ```bash
@@ -165,12 +162,10 @@ but evaluates against the untouched official Fashion-MNIST test split. Its
 canonical protocol requests 1,000 generated samples per class, so all ten
 conditional distributions contribute equally to the global metrics.
 
-Refresh the editable install, then train and sample the four controlled
-continuous IR100 variants and the full balanced-data baseline. All five predict
-the clean target while optimizing velocity loss; three IR100 variants add CBDM,
-OC, or CM respectively. CM is independent of OC and compares its capacity-on
-and capacity-off branches in clean-target space. Its default low-rank branch
-covers the decoder, while other U-Net sections remain selectable. They use
+Refresh the editable install, then train and sample the three controlled
+continuous IR100 variants and the full balanced-data baseline. All four predict
+the clean target while optimizing velocity loss; two IR100 variants add CBDM
+or OC respectively. They use
 JiT-style logit-normal time sampling `(-0.8, 0.8)` and apply the same `0.05`
 denominator floor to prediction and supervision. Evaluation retains the
 controlled Euler/NFE-64 generation protocol. These short runs intentionally
@@ -190,10 +185,6 @@ disable EMA and use the selected raw checkpoint with CFG scale 1.0.
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_oc.yaml \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc \
-  --device auto
-.conda/fm_lab/bin/fm-lab-train \
-  --config configs/fashion_mnist_lt/fashion_mnist_lt_ir100_x_vloss_cm.yaml \
-  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm \
   --device auto
 .conda/fm_lab/bin/fm-lab-train \
   --config configs/fashion_mnist_lt/fashion_mnist_balanced_x_vloss.yaml \
@@ -231,14 +222,6 @@ generative recall, per-class scores, and frequency-group scores for each run:
   --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
   --data-root data/fashion_mnist --download \
   --output-dir runs/fashion_mnist_lt_ir100/x_vloss_oc/evaluation
-.conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
-  --generated-samples runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/euler_nfe64.npy \
-  --generated-labels runs/fashion_mnist_lt_ir100/x_vloss_cm/samples/generated_labels.npy \
-  --generative-checkpoint runs/fashion_mnist_lt_ir100/x_vloss_cm/checkpoint.pt \
-  --generation-method x_vloss_cm --sampler euler --nfe 64 \
-  --guidance-scale 1.0 --generative-weights raw --generation-seed 0 \
-  --data-root data/fashion_mnist --download \
-  --output-dir runs/fashion_mnist_lt_ir100/x_vloss_cm/evaluation
 .conda/fm_lab/bin/fm-lab-fashion-mnist-lt-eval \
   --generated-samples runs/fashion_mnist_balanced/x_vloss/samples/euler_nfe64.npy \
   --generated-labels runs/fashion_mnist_balanced/x_vloss/samples/generated_labels.npy \
@@ -286,242 +269,6 @@ For a fast multi-method screen, `--skip-recall --skip-classwise-fid` omits the
 two expensive diagnostics while retaining overall FID/KID, Inception Score,
 and pooled Many/Medium/Few FID. The default remains the complete report.
 
-## `fm-lab-imbdiff-cm-probe`
-
-Probe existing official ImbDiff-CM checkpoints without retraining. Held-out
-CIFAR rows, Gaussian noise, discrete timesteps, and OC transfer draws are fixed
-in a reusable manifest. The command compares capacity-on and capacity-off
-predictions and separately measures gradients from the denoising, consistency,
-and diversity terms into general and LoRA parameters.
-
-```bash
-fm-lab-imbdiff-cm-probe \
-  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/oc_capacity_only \
-  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm \
-  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/pure_cm \
-  --checkpoint-steps 20000,40000,60000 \
-  --timesteps 50,250,500,750,950 \
-  --samples-per-class 1 \
-  --weights ema \
-  --mixed-precision auto \
-  --channels-last on \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_mechanism_probe
-```
-
-Use `--functional-only --checkpoint-steps 60000 --timesteps 500` for a quick
-end-to-end smoke. The full probe writes `manifest.json`, `summary.json`,
-`functional_rows.csv`, `gradient_summary.csv`, per-checkpoint JSON reports,
-and a compact `report.md`. Existing output manifests are reused and checked by
-SHA-256 so checkpoint comparisons remain paired.
-
-## `fm-lab-imbdiff-cm-dropout-probe`
-
-Run a fixed-checkpoint training-mode diagnostic of the two CM forward passes.
-The released condition uses independent dropout masks; the controls replay one
-mask across both passes, disable dropout, or disable expert capacity in both
-independent-mask passes. This command does not retrain or modify the checkpoint.
-
-```bash
-fm-lab-imbdiff-cm-dropout-probe \
-  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
-  --timesteps 100,500,900 \
-  --classes auto \
-  --classes-per-group 2 \
-  --samples-per-class 1 \
-  --dropout-repeats 10 \
-  --weights ema \
-  --channels-last on \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_dropout_probe
-```
-
-`--classes auto` chooses a deterministic frequency-stratified subset from the
-Many, Medium, and Few thirds. Pass `--classes all` or explicit comma-separated
-class IDs for a broader diagnostic. `--skip-gradients` omits the one-repeat
-branch-distance gradient comparison for a faster functional smoke.
-
-Outputs are `manifest.json`, `summary.json`, `functional_rows.csv`, optional
-`gradient_summary.csv`, and `report.md`. Ratios of dropout-only, paired, and
-disabled distances to the released independent-mask distance are descriptive:
-squared distances contain cross terms and are not an additive causal variance
-decomposition.
-
-## `fm-lab-imbdiff-cm-knowledge-probe`
-
-Run the K1/K2 expert-knowledge diagnostic after the dropout control has been
-validated. The model is held in evaluation mode, so the recorded local response
-
-```text
-e_l = Conv2d(input_activation, B_l @ A_l)
-```
-
-is not contaminated by different dropout masks. Every adapted convolution is
-checked against the corresponding full-minus-general preactivation. Compact
-normalized sketches retain channel, spatial, low-pass, and high-pass response
-structure without saving dense intermediate feature maps.
-
-A six-class smoke run is:
-
-```bash
-fm-lab-imbdiff-cm-knowledge-probe \
-  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
-  --timesteps 100,500,900 \
-  --classes auto \
-  --classes-per-group 2 \
-  --samples-per-class 2 \
-  --max-layers 4 \
-  --permutation-repeats 3 \
-  --weights ema \
-  --channels-last on \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_smoke
-```
-
-The primary all-class K1/K2 run is:
-
-```bash
-fm-lab-imbdiff-cm-knowledge-probe \
-  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
-  --timesteps 100,500,900 \
-  --classes all \
-  --samples-per-class 4 \
-  --batch-size 25 \
-  --sketch-dim 32 \
-  --permutation-repeats 10 \
-  --subspace-rank 3 \
-  --subspace-permutation-repeats 200 \
-  --weights ema \
-  --channels-last on \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2
-```
-
-The two cross-fit folds contain different held-out CIFAR-100 images from every
-fine class. Linear probes predict fine class, coarse superclass, and
-Many/Medium/Few group from full, low-pass, and high-pass expert sketches.
-Every learned expert result is paired with the same input activation, the
-general preactivation, and a fixed random low-rank adapter with identical
-factor rank and the learned `lora_B @ lora_A` product's complete singular
-spectrum, while randomizing its left and right singular subspaces. Its response
-RMS is matched before sketching. All output-side controls use the same
-deterministic sketch projection. K2 builds separate class-conditioned
-subspaces for the learned expert and all three controls and writes a
-superclass-label permutation null. `summary.json` records the stable ranks and
-maximum spectrum-matching error for every adapted layer.
-
-Main outputs are:
-
-```text
-manifest.json
-summary.json
-report.md
-response_descriptors.csv
-response_atlas.npz
-linear_probes.csv
-controlled_linear_probes.csv
-subspace_summary.csv
-subspace_pairs.npz
-```
-
-Linear separability and subspace overlap are descriptive evidence of encoded
-structure, not causal evidence that the model uses a direction during sampling.
-Only stable directions should be promoted to the matched K4 interventions.
-
-## `fm-lab-imbdiff-cm-intervention-probe`
-
-Run the first K4 causal screen on the exact held-out rows and random draws from
-the spectrum-controlled K1/K2 atlas:
-
-```bash
-fm-lab-imbdiff-cm-intervention-probe \
-  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
-  --manifest /root/autodl-tmp/runs/imbdiff_matrix60k/cm_knowledge_k1_k2_spectrum_controlled/manifest.json \
-  --batch-size 64 \
-  --random-repeats 4 \
-  --bootstrap-repeats 2000 \
-  --mixed-precision auto \
-  --weights ema \
-  --channels-last on \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_intervention_screen
-```
-
-The conditions are the unchanged learned expert, `use_cm=False`, and four
-whole-model random expert rotations. Every random rotation preserves every
-adapted layer's complete `lora_B @ lora_A` singular spectrum while changing
-its singular subspaces. The probe reuses identical held-out images, labels,
-noise, timesteps, and released endpoint-transfer targets. It reports paired
-prediction-MSE effects by class and Many/Medium/Few group, class-clustered
-bootstrap intervals, Few-minus-Many contrasts, response spectra, random-repeat
-variation, spectrum audits, and bit-exact restoration checks.
-
-Positive `learned_gain_vs_general` means the trained expert improves the exact
-released training target relative to the general branch. Positive
-`learned_advantage_vs_random` means the learned expert orientation beats
-matched random orientations. Because parameter-spectrum matching need not
-match model-output displacement, the report also rescales each random
-final-output displacement by one target-free timestep/repeat scalar and reports
-`learned_advantage_vs_response_matched_random`. This is a functional
-sensitivity control rather than a realizable weight intervention. These are
-local causal prediction endpoints, not substitutes for sampling FID or
-requested-class accuracy.
-
-Main outputs are:
-
-```text
-knowledge_manifest.json
-intervention_manifest.json
-summary.json
-report.md
-paired_effects.csv
-random_repeat_effects.csv
-group_summary.csv
-class_summary.csv
-```
-
-## `fm-lab-imbdiff-cm-sampling-intervention`
-
-Runs learned, general-only, and response-calibrated spectrum-random experts
-from identical balanced CIFAR-100 labels and identical DDIM initial noise. The
-bounded `kid` mode is intended as a screen; use `full` with 100 samples per
-class for the confirmatory FID protocol. By default, an independent
-one-sample-per-class pilot adjusts the local-probe random scales so each fixed
-random expert also matches the learned expert's full-trajectory endpoint RMS.
-Use `--endpoint-calibration-samples-per-class 0` only for the uncorrected
-local-scale sensitivity run.
-
-```bash
-fm-lab-imbdiff-cm-sampling-intervention \
-  --checkpoint /root/autodl-tmp/runs/imbdiff_matrix60k/released_cm/checkpoint.pt \
-  --random-effects /root/autodl-tmp/runs/imbdiff_matrix60k/cm_intervention_screen/random_repeat_effects.csv \
-  --real-cache /root/autodl-tmp/runs/imbdiff_matrix60k/evaluation/features/real_cifar100_balanced_train.npz \
-  --inception-weights /root/autodl-tmp/weights/imbdiff/pt_inception-2015-12-05-6726825d.pth \
-  --samples-per-class 20 \
-  --random-repeats 2 \
-  --sample-batch-size 128 \
-  --feature-batch-size 128 \
-  --evaluation kid \
-  --device cuda \
-  --output-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_sampling_intervention_screen
-```
-
-## `fm-lab-imbdiff-cm-sampling-visualization`
-
-Creates a paired `general only | full - general | full parameters` grid from a
-matched sampling intervention. Classes are selected at fixed frequency
-quantiles within Many and Few, and the example for each class is the sample
-nearest its class-median residual RMS. The signed RGB residual maps zero to
-neutral gray using one shared robust scale over the entire run.
-
-```bash
-fm-lab-imbdiff-cm-sampling-visualization \
-  --run-dir /root/autodl-tmp/runs/imbdiff_matrix60k/cm_sampling_intervention_screen_r4_endpoint_matched \
-  --data-root /root/autodl-tmp/data/cifar100 \
-  --groups many,few \
-  --classes-per-group 3 \
-  --samples-per-class 1
-```
 
 ## `fm-lab-sampling-timesteps`
 

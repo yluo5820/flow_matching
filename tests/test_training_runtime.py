@@ -29,6 +29,21 @@ def test_linear_warmup_reaches_base_learning_rate() -> None:
     assert optimizer.param_groups[0]["lr"] == 1.0
 
 
+def test_zero_start_warmup_begins_at_zero() -> None:
+    model = nn.Linear(2, 1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1.0)
+    scheduler = build_warmup_scheduler(
+        optimizer,
+        warmup_steps=2,
+        convention="zero_start",
+    )
+
+    assert optimizer.param_groups[0]["lr"] == 0.0
+    optimizer.step()
+    scheduler.step()
+    assert optimizer.param_groups[0]["lr"] == 0.5
+
+
 def test_ema_update_tracks_parameters_and_copies_buffers() -> None:
     model = nn.BatchNorm1d(2)
     ema = create_ema_model(model)

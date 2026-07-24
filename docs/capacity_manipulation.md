@@ -1,5 +1,9 @@
 # Capacity Manipulation Reproduction
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 The repository now keeps two deliberately separate implementations of Capacity
 Manipulation (CM):
 

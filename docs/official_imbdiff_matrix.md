@@ -1,5 +1,9 @@
 # Official discrete ImbDiff comparison matrix
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 This matrix is a reduced-budget, controlled CIFAR-100-LT IR100 comparison. It
 uses the standard and capacity U-Nets vendored from ImbDiff-CM, the release's
 discrete VP/DDPM schedule and DDIM samplers, and a shared 60,000-update protocol.

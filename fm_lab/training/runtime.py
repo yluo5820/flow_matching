@@ -24,19 +24,18 @@ def build_warmup_scheduler(
     optimizer: torch.optim.Optimizer,
     *,
     warmup_steps: int,
-    convention: str = "fm_lab",
+    convention: str = "standard",
 ) -> torch.optim.lr_scheduler.LambdaLR | None:
     if warmup_steps < 0:
         raise ValueError("training.warmup_steps must be non-negative.")
     if warmup_steps == 0:
         return None
     normalized = str(convention).lower()
-    if normalized not in {"fm_lab", "official_imbdiff_cm"}:
+    if normalized not in {"standard", "zero_start"}:
         raise ValueError(
-            "training warmup convention must be 'fm_lab' or 'official_imbdiff_cm'."
+            "training warmup convention must be 'standard' or 'zero_start'."
         )
-    if normalized == "official_imbdiff_cm":
-        # Exact LambdaLR used by tools/train.py in the released repository.
+    if normalized == "zero_start":
         return torch.optim.lr_scheduler.LambdaLR(
             optimizer,
             lr_lambda=lambda step: min(step, warmup_steps) / warmup_steps,

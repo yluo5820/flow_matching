@@ -5,7 +5,6 @@ from torch import nn
 from fm_lab.paths import LinearPath
 from fm_lab.training.long_tail import (
     CBDMModifier,
-    CMModifier,
     ContinuousEndpointTransferModifier,
     ContinuousObjectiveModifier,
     OCModifier,
@@ -58,33 +57,6 @@ class RecordingTensorPrediction(nn.Module):
         return self.value.to(device=x.device, dtype=x.dtype).reshape_as(x)
 
 
-class CapacityTablePrediction(nn.Module):
-    is_class_conditional = True
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.default_predictions = nn.Parameter(torch.ones(2, 1))
-        self.full_predictions = nn.Parameter(torch.tensor([[1.0], [1.0]]))
-        self.base_predictions = nn.Parameter(torch.tensor([[3.0], [3.0]]))
-        self.seen_capacity: list[bool | None] = []
-
-    def capacity_metadata(self) -> dict[str, object]:
-        return {"enabled": True}
-
-    def forward(self, x: torch.Tensor, t: torch.Tensor, context=None) -> torch.Tensor:
-        del t
-        labels = context["class_labels"]
-        use_capacity = context.get("use_capacity")
-        self.seen_capacity.append(use_capacity)
-        if use_capacity is True:
-            predictions = self.full_predictions
-        elif use_capacity is False:
-            predictions = self.base_predictions
-        else:
-            predictions = self.default_predictions
-        return predictions[labels].reshape_as(x)
-
-
 @pytest.mark.parametrize(
     ("distribution", "expected"),
     [
@@ -130,170 +102,8 @@ def test_continuous_modifier_builder_validates_names_and_class_counts() -> None:
             [{"name": "cbdm"}, {"name": "cbdm"}],
             [1, 1],
         )
-    with pytest.raises(ValueError, match="cbdm, oc, and cm"):
+    with pytest.raises(ValueError, match="cbdm and oc"):
         build_continuous_modifiers([{"name": "other"}], [1, 1])
-
-
-def test_cm_builds_without_oc_modifier() -> None:
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "model_output": "target",
-            "loss_space": "velocity",
-            "modifiers": [{"name": "cm", "comparison_space": "target"}],
-        },
-        class_counts=[100, 10],
-    )
-
-    assert len(objective.modifiers) == 1
-    assert isinstance(objective.modifiers[0], CMModifier)
-
-
-def test_cm_requires_capacity_enabled_model_on_first_objective_call() -> None:
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "modifiers": [{"name": "cm"}],
-        },
-        class_counts=[100, 10],
-    )
-
-    with pytest.raises(ValueError, match="capacity manipulation enabled"):
-        objective(
-            model=RecordingPrediction(0.0),
-            path=LinearPath(),
-            x0=torch.zeros(2, 1),
-            x1=torch.ones(2, 1),
-            t=torch.tensor([0.25, 0.75]),
-            class_labels=torch.tensor([0, 1]),
-            original_class_labels=torch.tensor([0, 1]),
-        )
-
-
-@pytest.mark.parametrize(
-    ("consistency_weight", "diversity_weight", "metric_name", "expected_metric"),
-    [
-        (1.0, 0.0, "cm.consistency", 4.0),
-        (0.0, 1.0, "cm.diversity", -4.0),
-    ],
-)
-def test_cm_converts_branches_to_comparison_space_and_reaches_both_gradients(
-    consistency_weight: float,
-    diversity_weight: float,
-    metric_name: str,
-    expected_metric: float,
-) -> None:
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "model_output": "target",
-            "loss_space": "velocity",
-            "modifiers": [
-                {
-                    "name": "cm",
-                    "consistency_weight": consistency_weight,
-                    "diversity_weight": diversity_weight,
-                    "comparison_space": "target",
-                },
-            ],
-        },
-        class_counts=[100, 10],
-    )
-    model = CapacityTablePrediction()
-
-    loss, metrics = objective(
-        model=model,
-        path=LinearPath(),
-        x0=torch.zeros(2, 1),
-        x1=torch.ones(2, 1),
-        t=torch.tensor([0.5, 0.5]),
-        class_labels=torch.tensor([0, 1]),
-        original_class_labels=torch.tensor([0, 1]),
-    )
-    loss.backward()
-
-    assert model.seen_capacity == [True, False]
-    assert metrics[metric_name] == pytest.approx(expected_metric)
-    assert metrics["cm.loss"] == pytest.approx(expected_metric)
-    assert metrics["cm.distance.mean"] == pytest.approx(4.0)
-    assert metrics["cm.distance.max"] == pytest.approx(4.0)
-    assert metrics["cm.distance.many"] == pytest.approx(4.0)
-    assert metrics["cm.distance.medium"] == pytest.approx(4.0)
-    assert metrics["cm.distance.few"] == pytest.approx(0.0)
-    assert model.full_predictions.grad is not None
-    assert torch.count_nonzero(model.full_predictions.grad) == 2
-    assert model.base_predictions.grad is not None
-    assert torch.count_nonzero(model.base_predictions.grad) == 2
-
-
-def test_cm_distance_metrics_use_frequency_ranked_class_groups() -> None:
-    modifier = CMModifier(class_counts=[100, 80, 60, 40, 20, 10])
-    metrics = modifier.group_distance_metrics(
-        distance=torch.tensor([1.0, 4.0, 9.0, 16.0, 25.0, 36.0]),
-        labels=torch.arange(6),
-    )
-
-    assert metrics["cm.distance.many"] == pytest.approx(2.5)
-    assert metrics["cm.distance.medium"] == pytest.approx(12.5)
-    assert metrics["cm.distance.few"] == pytest.approx(30.5)
-
-
-def test_cm_per_class_distance_metrics_report_observed_counts() -> None:
-    modifier = CMModifier(class_counts=[100, 10, 1])
-    metrics = modifier.group_distance_metrics(
-        distance=torch.tensor([1.0, 3.0, 5.0]),
-        labels=torch.tensor([0, 0, 1]),
-    )
-
-    assert metrics["cm.distance.class_0"] == pytest.approx(2.0)
-    assert metrics["cm.count.class_0"] == 2.0
-    assert metrics["cm.distance.class_1"] == pytest.approx(5.0)
-    assert metrics["cm.count.class_1"] == 1.0
-    assert metrics["cm.distance.class_2"] == 0.0
-    assert metrics["cm.count.class_2"] == 0.0
-
-
-def test_cm_reports_loss_relative_to_base_objective() -> None:
-    objective = build_objective(
-        {
-            "name": "flow_matching",
-            "model_output": "target",
-            "loss_space": "velocity",
-            "modifiers": [
-                {
-                    "name": "cm",
-                    "consistency_weight": 1.0,
-                    "diversity_weight": 0.0,
-                    "comparison_space": "target",
-                }
-            ],
-        },
-        class_counts=[1, 1],
-    )
-
-    _, metrics = objective(
-        model=CapacityTablePrediction(),
-        path=LinearPath(),
-        x0=torch.zeros(2, 1),
-        x1=torch.zeros(2, 1),
-        t=torch.full((2,), 0.5),
-        class_labels=torch.tensor([0, 1]),
-        original_class_labels=torch.tensor([0, 1]),
-    )
-
-    assert metrics["base.loss"] == pytest.approx(4.0)
-    assert metrics["cm.loss"] == pytest.approx(4.0)
-    assert metrics["cm.loss_to_base_ratio"] == pytest.approx(1.0)
-
-
-def test_cm_defaults_match_released_core_weighting() -> None:
-    modifier = CMModifier(class_counts=[100, 10])
-
-    assert modifier.consistency_weight == 1.0
-    assert modifier.diversity_weight == 0.2
-    assert modifier.comparison_space == "target"
-    assert "diversity_mode" not in modifier.metadata()
-    assert "diversity_margin" not in modifier.metadata()
 
 
 def test_oc_cut_t_uses_noisy_source_to_clean_target_direction() -> None:

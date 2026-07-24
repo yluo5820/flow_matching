@@ -10,14 +10,9 @@ from typing import Any, Protocol
 import torch
 from torch.nn import functional as F
 
-from fm_lab.integrations.official_imbdiff_cm import (
-    OfficialImbDiffCMObjective,
-    OfficialImbDiffObjective,
-)
 from fm_lab.paths.base import ConvertibleFlowPath, FlowPath
 from fm_lab.paths.prediction import PredictionKind, normalize_prediction_kind
 from fm_lab.training.long_tail import (
-    CMModifier,
     ContinuousEndpointTransferModifier,
     ContinuousModifier,
     ContinuousObjectiveContext,
@@ -251,13 +246,11 @@ class FlowMatchingObjective:
         }
         velocity_model = velocity_model_for_objective(model, path, self)
         if include_flow_matching:
-            cm_enabled = any(isinstance(modifier, CMModifier) for modifier in self.modifiers)
             prediction = model_prediction(
                 model,
                 xt,
                 t,
                 class_labels=class_labels,
-                use_capacity=True if cm_enabled else None,
             )
             state = None
             if (
@@ -719,92 +712,12 @@ def kernel_vstar_straightness_loss(
 def build_objective(
     config: dict[str, Any] | None = None,
     *,
-    diffusion_config: dict[str, Any] | None = None,
     class_counts: Sequence[int] | None = None,
 ) -> TrainingObjective:
     """Build a training objective from config."""
 
     config = {} if config is None else config
     name = str(config.get("name", "flow_matching")).lower()
-    serialized_official_methods = {
-        "official_imbdiff_ddpm": "ddpm",
-        "official_imbdiff_cbdm": "cbdm",
-        "official_imbdiff_oc": "oc",
-        "official_imbdiff_released_cm": "released_cm",
-        "official_imbdiff_pure_cm": "pure_cm",
-        "official_imbdiff_oc_capacity_only": "oc_capacity_only",
-    }
-    serialized_method = serialized_official_methods.get(name)
-    if serialized_method is not None:
-        configured_method = str(config.get("method", serialized_method)).lower()
-        configured_method = configured_method.replace("-", "_")
-        method_aliases = {
-            "baseline": "ddpm",
-            "cm": "released_cm",
-            "cm_released": "released_cm",
-            "pure": "pure_cm",
-            "cm_pure": "pure_cm",
-            "capacity_only": "oc_capacity_only",
-            "oc_capacity": "oc_capacity_only",
-        }
-        configured_method = method_aliases.get(configured_method, configured_method)
-        if configured_method != serialized_method:
-            raise ValueError(
-                "Serialized official ImbDiff objective name disagrees with "
-                f"objective.method: {name!r} versus {configured_method!r}."
-            )
-        config = dict(config)
-        config["name"] = "official_imbdiff"
-        config["method"] = serialized_method
-        name = "official_imbdiff"
-    if name in {
-        "official_imbdiff",
-        "imbdiff_official",
-        "official_imbdiff_cm",
-        "imbdiff_cm_official",
-        "official_cm",
-    }:
-        if class_counts is None:
-            raise ValueError("Official ImbDiff requires class_counts.")
-        diffusion_config = {} if diffusion_config is None else diffusion_config
-        transfer_config = config.get("transfer", {}) or {}
-        cm_config = config.get("cm", {}) or {}
-        cbdm_config = config.get("cbdm", {}) or {}
-        if name in {"official_imbdiff_cm", "imbdiff_cm_official", "official_cm"}:
-            return OfficialImbDiffCMObjective(
-                class_counts=class_counts,
-                timesteps=int(diffusion_config.get("timesteps", 1000)),
-                beta_start=float(diffusion_config.get("beta_start", 1e-4)),
-                beta_end=float(diffusion_config.get("beta_end", 2e-2)),
-                cfg=bool(config.get("cfg", True)),
-                transfer_x0=transfer_config.get("transfer_x0"),
-                transfer_tr_tau=bool(transfer_config.get("transfer_tr_tau", False)),
-                transfer_mode=str(transfer_config.get("transfer_mode", "t2h")),
-                transfer_tau=float(transfer_config.get("tr_tau", 1.0)),
-                consistency_weight=float(cm_config.get("w_con", 1.0)),
-                diversity_weight=float(cm_config.get("w_div", 0.2)),
-                image_shape=tuple(config.get("image_shape", [3, 32, 32])),
-            )
-        return OfficialImbDiffObjective(
-            class_counts=class_counts,
-            method=str(config.get("method", "ddpm")),
-            timesteps=int(diffusion_config.get("timesteps", 1000)),
-            beta_start=float(diffusion_config.get("beta_start", 1e-4)),
-            beta_end=float(diffusion_config.get("beta_end", 2e-2)),
-            cfg=bool(config.get("cfg", True)),
-            transfer_x0=transfer_config.get("transfer_x0"),
-            transfer_tr_tau=bool(transfer_config.get("transfer_tr_tau", False)),
-            transfer_mode=str(transfer_config.get("transfer_mode", "t2h")),
-            transfer_tau=float(transfer_config.get("tr_tau", 1.0)),
-            consistency_weight=float(cm_config.get("w_con", 1.0)),
-            diversity_weight=float(cm_config.get("w_div", 0.2)),
-            cbdm_target_distribution=str(
-                cbdm_config.get("target_distribution", "train")
-            ),
-            cbdm_tau=float(cbdm_config.get("tau", 0.001)),
-            cbdm_gamma=float(cbdm_config.get("gamma", 0.25)),
-            image_shape=tuple(config.get("image_shape", [3, 32, 32])),
-        )
     diffusion_prediction_aliases = {
         "diffusion_epsilon": "epsilon",
         "epsilon_prediction": "epsilon",

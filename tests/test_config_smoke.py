@@ -212,7 +212,6 @@ FASHION_MNIST_CONTINUOUS_CONFIGS = (
     "fashion_mnist_lt_ir100_x_vloss.yaml",
     "fashion_mnist_lt_ir100_x_vloss_cbdm.yaml",
     "fashion_mnist_lt_ir100_x_vloss_oc.yaml",
-    "fashion_mnist_lt_ir100_x_vloss_cm.yaml",
 )
 
 
@@ -265,8 +264,6 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     assert "ema_decay" not in configs[0]["training"]
     assert configs[0]["sampling"]["classifier_free_guidance"]["scale"] == 1.0
     assert "gradient_clip" not in configs[0]["training"]
-    assert configs[3]["training"]["gradient_clip"] == 1.0
-    assert configs[3]["training"]["early_stopping"]["monitor"] == "base.loss"
     assert configs[0]["objective"] == {
         "name": "flow_matching",
         "model_output": "target",
@@ -286,17 +283,6 @@ def test_continuous_fashion_mnist_configs_share_controlled_fields() -> None:
     assert configs[2]["objective"]["modifiers"] == [
         {"name": "oc", "transfer_mode": "t2h", "cut_t": None, "min_denom": 0.05}
     ]
-    assert configs[3]["objective"]["modifiers"] == [
-        {
-            "name": "cm",
-            "consistency_weight": 1.0,
-            "diversity_weight": 0.2,
-            "comparison_space": "target",
-        },
-    ]
-    assert configs[3]["model"]["capacity"]["parts"] == ["up"]
-
-
 def test_continuous_fashion_mnist_configs_build_all_components(monkeypatch) -> None:
     monkeypatch.setattr(LongTailedFashionMNIST, "_load", lambda self: None)
 
@@ -343,53 +329,6 @@ def test_balanced_fashion_mnist_x_vloss_changes_only_dataset_and_identity() -> N
         assert balanced[field] == long_tail[field]
 
 
-def test_discrete_imbdiff_training_configs_are_removed() -> None:
-    assert not list(Path("configs/imbdiff").rglob("*.yaml"))
-
-
-def test_official_imbdiff_60k_matrix_is_controlled_and_complete() -> None:
-    paths = sorted(Path("configs/cifar100_lt/autodl_matrix60k").glob("*.yaml"))
-    assert len(paths) == 6
-    configs = [load_config(path) for path in paths]
-    by_method = {config["objective"]["method"]: config for config in configs}
-    assert set(by_method) == {
-        "ddpm",
-        "cbdm",
-        "oc",
-        "released_cm",
-        "pure_cm",
-        "oc_capacity_only",
-    }
-
-    reference = by_method["ddpm"]
-    for method, config in by_method.items():
-        assert config["data"] == reference["data"]
-        assert config["source"] == reference["source"]
-        assert config["coupling"] == reference["coupling"]
-        assert config["path"] == reference["path"]
-        assert config["conditioning"] == reference["conditioning"]
-        assert config["diffusion"] == reference["diffusion"]
-        assert config["training"] == reference["training"]
-        assert config["sampling"] == reference["sampling"]
-        assert config["training"]["steps"] == 60_000
-        assert config["training"]["checkpoint_every"] == 20_000
-        objective = build_objective(
-            config["objective"],
-            diffusion_config=config["diffusion"],
-            class_counts=(100, 10),
-        )
-        assert objective.method == method
-
-    for method in {"ddpm", "cbdm", "oc"}:
-        assert by_method[method]["model"]["name"] == "official_imbdiff_unet"
-    for method in {"released_cm", "pure_cm", "oc_capacity_only"}:
-        assert by_method[method]["model"]["name"] == "official_imbdiff_cm_unet"
-    assert by_method["oc_capacity_only"]["objective"]["cm"] == {
-        "w_con": 0.0,
-        "w_div": 0.0,
-    }
-
-
 def test_shipped_training_configs_use_canonical_objective_schema() -> None:
     forbidden_keys = {"diffusion", "prediction_type", "ddim_skip", "eta", "cut_time"}
 
@@ -402,10 +341,7 @@ def test_shipped_training_configs_use_canonical_objective_schema() -> None:
             or "tail" in str(data.get("variant_id", ""))
         )
         objective = config.get("objective", {})
-        is_official_discrete_reproduction = str(
-            objective.get("name", "")
-        ).startswith("official_imbdiff")
-        if is_active_long_tail and not is_official_discrete_reproduction:
+        if is_active_long_tail:
             assert not (forbidden_keys & _nested_keys(config)), config_path
         assert "x_prediction" not in objective, config_path
 

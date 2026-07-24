@@ -1,4 +1,4 @@
-"""Switchable low-rank capacity reserved for minority-class expertise."""
+"""Switchable low-rank adapters for controlled capacity interventions."""
 
 from __future__ import annotations
 
@@ -12,14 +12,12 @@ from torch import nn
 
 
 class SwitchableLowRankConv2d(nn.Conv2d):
-    """Convolution with the switchable LoRA branch used by ImbDiff-CM.
+    """Convolution with a switchable flattened-kernel low-rank adapter.
 
-    The released ImbDiff-CM implementation factorizes a ``k x k`` convolution
-    update as ``(out_channels * k, rank * k) @ (rank * k, in_channels * k)``
-    before reshaping it back to the convolution kernel.  It also stores a
-    scaling value from config but does not multiply the update by that value in
-    ``forward``.  We preserve that behavior here so CM experiments differ from
-    the official repo only where the continuous-flow objective requires it.
+    A ``k x k`` kernel update is factorized as
+    ``(out_channels * k, rank * k) @ (rank * k, in_channels * k)`` and reshaped
+    back to the convolution kernel. The adapter starts as an exact no-op and
+    can be enabled or disabled independently of the base convolution.
     """
 
     def __init__(
@@ -51,7 +49,7 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             raise ValueError("adapter_scale must be non-negative.")
         height, width = self.kernel_size
         if self.groups != 1:
-            raise ValueError("CM low-rank convolution requires ungrouped kernels.")
+            raise ValueError("Low-rank convolution requires ungrouped kernels.")
         if rank_ratio > 0:
             rank = _rank_from_ratio(
                 rank_ratio,
@@ -83,7 +81,7 @@ class SwitchableLowRankConv2d(nn.Conv2d):
             assert self.adapter_a is not None
             assert self.adapter_b is not None
             update = (self.adapter_b @ self.adapter_a).reshape_as(weight)
-            weight = weight + update
+            weight = weight + self.adapter_scale * update
         return F.conv2d(
             inputs,
             weight,

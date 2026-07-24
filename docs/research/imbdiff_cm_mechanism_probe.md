@@ -1,5 +1,9 @@
 # ImbDiff-CM mechanism probe
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 **Status:** completed on the 60k seed-0 matrix on 2026-07-22.
 
 The 60k comparison establishes that the released CM loss is effective in our

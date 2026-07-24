@@ -175,148 +175,6 @@ class CBDMModifier:
         }
 
 
-@dataclass
-class CMModifier:
-    """Capacity-on/off consistency and diversity at continuous time."""
-
-    class_counts: Sequence[int]
-    consistency_weight: float = 1.0
-    diversity_weight: float = 0.2
-    comparison_space: str = "target"
-    name: str = "cm"
-
-    def __post_init__(self) -> None:
-        self.class_counts = tuple(int(value) for value in self.class_counts)
-        if not self.class_counts or any(value <= 0 for value in self.class_counts):
-            raise ValueError("CM class_counts must all be positive.")
-        self.consistency_weight = float(self.consistency_weight)
-        self.diversity_weight = float(self.diversity_weight)
-        if (
-            not math.isfinite(self.consistency_weight)
-            or not math.isfinite(self.diversity_weight)
-            or self.consistency_weight < 0
-            or self.diversity_weight < 0
-        ):
-            raise ValueError(
-                "CM consistency and diversity weights must be finite and non-negative."
-            )
-        self.comparison_space = normalize_prediction_kind(self.comparison_space).value
-        counts = torch.tensor(self.class_counts, dtype=torch.float64)
-        probabilities = counts / counts.sum()
-        inverse_probabilities = probabilities.reciprocal()
-        inverse_probabilities = inverse_probabilities / inverse_probabilities.sum()
-        self.class_probabilities = probabilities.to(dtype=torch.float32)
-        self.inverse_class_probabilities = inverse_probabilities.to(dtype=torch.float32)
-        ranked_classes = sorted(
-            range(len(self.class_counts)),
-            key=lambda class_id: (-self.class_counts[class_id], class_id),
-        )
-        base_size, remainder = divmod(len(ranked_classes), 3)
-        group_sizes = [base_size + int(index < remainder) for index in range(3)]
-        group_names = ("many", "medium", "few")
-        self.class_groups: dict[str, tuple[int, ...]] = {}
-        offset = 0
-        for group_name, group_size in zip(group_names, group_sizes, strict=True):
-            self.class_groups[group_name] = tuple(ranked_classes[offset : offset + group_size])
-            offset += group_size
-
-    @staticmethod
-    def _validate_capacity_model(model: torch.nn.Module) -> None:
-        metadata = getattr(model, "capacity_metadata", None)
-        if not callable(metadata) or not bool(metadata().get("enabled", False)):
-            raise ValueError("CM requires a model with capacity manipulation enabled.")
-
-    def group_distance_metrics(
-        self,
-        *,
-        distance: torch.Tensor,
-        labels: torch.Tensor,
-    ) -> dict[str, float]:
-        """Summarize the capacity gap over frequency-ranked class groups."""
-
-        metrics: dict[str, float] = {}
-        for group_name, class_ids in self.class_groups.items():
-            mask = torch.zeros_like(labels, dtype=torch.bool)
-            for class_id in class_ids:
-                mask |= labels == class_id
-            group_distance = distance[mask]
-            value = group_distance.mean() if len(group_distance) else distance.new_tensor(0.0)
-            metrics[f"cm.distance.{group_name}"] = float(value.detach().cpu())
-        for class_id in range(len(self.class_counts)):
-            class_distance = distance[labels == class_id]
-            value = class_distance.mean() if len(class_distance) else distance.new_tensor(0.0)
-            metrics[f"cm.distance.class_{class_id}"] = float(value.detach().cpu())
-            metrics[f"cm.count.class_{class_id}"] = float(len(class_distance))
-        return metrics
-
-    def __call__(
-        self,
-        context: ContinuousObjectiveContext,
-    ) -> tuple[torch.Tensor, dict[str, Any]]:
-        self._validate_capacity_model(context.model)
-        if context.class_labels is None:
-            raise ValueError("CM requires class labels for conditional predictions.")
-        if context.original_class_labels is None:
-            raise ValueError("CM requires original class labels before CFG dropout.")
-
-        base_output = model_prediction(
-            context.model,
-            context.xt,
-            context.t,
-            class_labels=context.class_labels,
-            use_capacity=False,
-        )
-        full_value = context.base_prediction.convert(self.comparison_space)
-        base_value = context.state.prediction(
-            base_output,
-            context.base_prediction.kind,
-        ).convert(self.comparison_space)
-        distance = (full_value - base_value).square().flatten(1).mean(1)
-        probabilities = self.class_probabilities.to(
-            device=distance.device,
-            dtype=distance.dtype,
-        )
-        inverse_probabilities = self.inverse_class_probabilities.to(
-            device=distance.device,
-            dtype=distance.dtype,
-        )
-        labels = context.original_class_labels
-        num_classes = len(self.class_counts)
-        consistency = (
-            num_classes * (probabilities[labels] * self.consistency_weight * distance).mean()
-        )
-        diversity = (
-            -num_classes * (inverse_probabilities[labels] * self.diversity_weight * distance).mean()
-        )
-        loss = consistency + diversity
-        metrics = {
-            "cm.consistency": float(consistency.detach().cpu()),
-            "cm.diversity": float(diversity.detach().cpu()),
-            "cm.loss": float(loss.detach().cpu()),
-            "cm.distance.mean": float(distance.mean().detach().cpu()),
-            "cm.distance.max": float(distance.max().detach().cpu()),
-        }
-        base_loss = context.base_loss_per_sample.detach().mean()
-        ratio_denom = base_loss.clamp_min(torch.finfo(base_loss.dtype).eps)
-        metrics["cm.loss_to_base_ratio"] = float((loss.detach() / ratio_denom).cpu())
-        metrics.update(self.group_distance_metrics(distance=distance, labels=labels))
-        return loss, metrics
-
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "consistency_weight": self.consistency_weight,
-            "diversity_weight": self.diversity_weight,
-            "comparison_space": self.comparison_space,
-            "class_probabilities": self.class_probabilities.tolist(),
-            "inverse_class_probabilities": self.inverse_class_probabilities.tolist(),
-            "class_counts": list(self.class_counts),
-            "class_groups": {
-                name: list(class_ids) for name, class_ids in self.class_groups.items()
-            },
-        }
-
-
 @dataclass(frozen=True)
 class TransferredTargets:
     """Source/target supervision selected by an endpoint-transfer modifier."""
@@ -426,10 +284,10 @@ class OCModifier:
     ) -> TransferredTargets:
         """Select target supervision while preserving the already-sampled ``x_t``.
 
-        The released ImbDiff-CM OC target transfer keeps the noisy point fixed and
-        replaces the clean endpoint, then recomputes the corresponding noise
-        target.  Under the linear continuous path, the exact analogue is to
-        transfer the clean target endpoint and solve
+        Endpoint-transfer objectives keep the noisy point fixed, replace the
+        clean endpoint, and recompute the corresponding noise target. Under the
+        linear continuous path, the exact construction transfers the clean
+        target endpoint and solves
 
             x_t = (1 - t) * source + t * transferred_target
 
@@ -518,9 +376,9 @@ def build_continuous_modifiers(
         if name in seen:
             raise ValueError(f"Duplicate continuous modifier: {name}")
         seen.add(name)
-        if name not in {"cbdm", "oc", "cm"}:
+        if name not in {"cbdm", "oc"}:
             raise ValueError(
-                f"Unsupported continuous modifier: {name}. Supported values are cbdm, oc, and cm."
+                f"Unsupported continuous modifier: {name}. Supported values are cbdm and oc."
             )
         normalized_configs.append((name, config))
 
@@ -558,12 +416,4 @@ def build_continuous_modifiers(
                 )
             )
             continue
-        modifiers.append(
-            CMModifier(
-                class_counts=normalized_counts,
-                consistency_weight=float(config.get("consistency_weight", 1.0)),
-                diversity_weight=float(config.get("diversity_weight", 0.2)),
-                comparison_space=str(config.get("comparison_space", "target")),
-            )
-        )
     return tuple(modifiers)

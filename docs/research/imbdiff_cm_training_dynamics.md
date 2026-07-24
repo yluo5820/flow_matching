@@ -1,5 +1,9 @@
 # ImbDiff-CM live training-dynamics experiment
 
+> **Archived:** the CM-specific implementation was removed on 2026-07-24. This
+> document preserves the completed research record; its commands are not active.
+
+
 **Status:** instrumentation and 2k CUDA smoke validated; 30k mechanism run
 prepared.
 
